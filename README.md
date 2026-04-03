@@ -5,11 +5,55 @@ Supports single-node and HA (3/5-node) Raft clusters in airgap or internet-conne
 
 ## Requirements
 
+### Platform
+
 - RHEL 8 or 9 (or compatible EL distribution)
-- Ansible 2.10+
-- `ansible.posix` collection (for firewalld module)
+
+### Ansible
+
+- ansible-core >= **2.17.0** (required by `community.hashi_vault` collection)
+- Python >= **3.10** (required by ansible-core 2.17+)
+
+### Collections
+
+Install via `ansible-galaxy collection install -r requirements.yml`:
+
+| Collection | Min Version | Purpose |
+|------------|-------------|---------|
+| `ansible.posix` | 1.6.0 | `firewalld` module for port management |
+| `community.hashi_vault` | 7.0.0 | Vault initialization and post-install configuration |
+
+### Python Libraries
+
+Install via `pip install --require-hashes -r requirements.txt`:
+
+| Library | Version | Purpose |
+|---------|---------|---------|
+| `hvac` | 2.4.0 | HashiCorp Vault API client (required by `community.hashi_vault`) |
+
+Python dependencies are managed via `pip-compile` with SHA-256 hash pinning
+for supply chain integrity (NIST 800-53 SI-7). To regenerate after updating
+`requirements.in`:
+
+```bash
+pip-compile --generate-hashes requirements.in
+```
+
+### Execution Environment (AAP)
+
+For Ansible Automation Platform 2.6+, ensure your Execution Environment includes:
+
+- The collections listed in `requirements.yml`
+- The Python packages listed in `requirements.txt`
+- System packages listed in `bindep.txt`
+
+The role provides `meta/argument_specs.yml` for AAP Job Template survey
+auto-generation and input validation.
+
+### Other
+
 - TLS certificates for the Vault listener (provided externally or via this role)
-- For airgap: a local RPM mirror hosting the HashiCorp Vault package and GPG key
+- For airgap: a local RPM mirror (e.g., Red Hat Satellite content view) hosting the HashiCorp Vault package and GPG key
 
 ## Role Variables
 
@@ -48,6 +92,9 @@ Supports single-node and HA (3/5-node) Raft clusters in airgap or internet-conne
 | `vault_tls_key_file` | `/opt/vault/tls/tls.key` | Path to TLS private key on target |
 | `vault_tls_ca_file` | `/opt/vault/tls/ca.crt` | Path to CA certificate on target |
 | `vault_tls_min_version` | `tls12` | Minimum TLS version |
+| `vault_tls_cipher_suites` | `[]` | TLS 1.2 cipher suites (empty = OS/FIPS defaults) |
+| `vault_tls_require_client_cert` | `false` | Require mutual TLS client certs |
+| `vault_tls_disable_client_certs` | `false` | Disable client cert handling entirely |
 
 ### Cluster / HA
 
@@ -77,6 +124,8 @@ Supports single-node and HA (3/5-node) Raft clusters in airgap or internet-conne
 | `vault_stig_audit_backup_retention_days` | `7` | Audit backup retention |
 | `vault_stig_aide_check_enabled` | `true` | Deploy AIDE integrity check timer |
 | `vault_auto_unseal_enabled` | `false` | Deploy auto-unseal service |
+| `vault_key_shares` | `5` | Shamir key shares for initialization |
+| `vault_key_threshold` | `3` | Shamir keys required to unseal |
 | `vault_rsyslog_enabled` | `false` | Enable remote syslog forwarding |
 | `vault_rsyslog_host` | `""` | Remote syslog target |
 | `vault_rsyslog_port` | `514` | Remote syslog port |
@@ -90,7 +139,8 @@ Supports single-node and HA (3/5-node) Raft clusters in airgap or internet-conne
 
 ## Dependencies
 
-None.
+See `requirements.yml` for Ansible collection dependencies and `requirements.txt`
+for Python library dependencies. No other Ansible role dependencies.
 
 ## Example Playbook
 
@@ -142,9 +192,11 @@ None.
 
 This role implements controls from:
 
-- **DISA STIG**: Application Security and Development STIG
-- **NIST SP 800-53 Rev 5**: AC-6, AU-4, AU-6, SC-7, SC-8, SC-23, SC-28, SI-7
-- **FIPS 140-3**: TLS 1.2+ enforcement, approved cryptographic algorithms
+- **DISA STIG**: Application Security and Development STIG, RHEL 9 STIG
+- **NIST SP 800-53 Rev 5**: AC-6, AU-4, AU-6, SC-7, SC-8, SC-13, SC-23, SC-28, SI-7
+- **CNSSI 1253**: Moderate-Moderate-Moderate dimensional baselines
+- **CNSA 1.0** (CNSSP-15 / APSC-DV-002010): ECDSA P-384, RSA-3072+, SHA-384, AES-256-GCM
+- **FIPS 140-3**: TLS 1.2+ enforcement, FIPS-validated cryptographic modules
 
 ## License
 
