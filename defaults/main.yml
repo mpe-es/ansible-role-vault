@@ -1,0 +1,186 @@
+---
+###############################################################################
+# Filename: defaults/main.yml
+# Role: ansible-role-vault
+# Summary: Default variables for HashiCorp Vault installation and STIG
+#   compliance. Override these in playbooks or inventory to customize behavior.
+# Last Updated: 03 Apr 2026
+# Classification: UNCLASSIFIED
+###############################################################################
+
+###############################################################################
+# RPM Repository Configuration
+# Override these for airgap environments pointing to a local mirror.
+# NIST 800-53: SI-7 (Software, Firmware, and Information Integrity)
+###############################################################################
+# Whether the role should create /etc/yum.repos.d/hashicorp.repo
+vault_manage_repo: true
+
+# HashiCorp RPM repository base URL
+# Internet-connected default; override with local mirror for airgap
+vault_repo_url: "https://rpm.releases.hashicorp.com/RHEL/$releasever/$basearch/stable"
+
+# HashiCorp GPG key URL for RPM signature verification
+# Internet-connected default; override with local mirror for airgap
+vault_repo_gpg_key: "https://rpm.releases.hashicorp.com/gpg"
+
+# Enable GPG checking on the repository (always true for STIG compliance)
+vault_repo_gpgcheck: true
+
+###############################################################################
+# Vault Package Configuration
+###############################################################################
+# Vault package version to install. Use 'latest' for newest available or
+# pin to a specific version (e.g., '1.18.3-1') for reproducibility.
+# In airgap environments, this must match what is available in the local repo.
+vault_package_version: "latest"
+
+# Vault package state for ansible.builtin.dnf
+# Options: 'present' (install if missing), 'latest' (upgrade to newest)
+vault_package_state: "present"
+
+###############################################################################
+# Vault Server Configuration
+# These map directly to vault.hcl configuration parameters.
+###############################################################################
+# Enable the Vault web UI
+vault_ui_enabled: true
+
+# Disable memory lock (mlock)
+# SECURITY: false = mlock ENABLED (prevents secrets from being swapped to disk)
+# Set to true only if the system does not support mlock (e.g., some containers)
+vault_disable_mlock: false
+
+# Disable performance standby mode
+# Recommended true in STIG environments for predictable behavior
+vault_disable_performance_standby: true
+
+# Vault log level: trace, debug, info, warn, error
+# STIG compliance requires at minimum 'info' for audit trail
+vault_log_level: "info"
+
+###############################################################################
+# Listener Configuration
+# NIST 800-53: SC-8 (Transmission Confidentiality and Integrity)
+# NIST 800-53: SC-23 (Session Authenticity)
+# APSC-DV-002010: CNSA 1.0 cryptographic requirements
+###############################################################################
+# Address and port for Vault API listener
+vault_listener_address: "0.0.0.0"
+vault_listener_port: 8200
+
+# TLS configuration
+vault_tls_cert_file: "/opt/vault/tls/tls.crt"
+vault_tls_key_file: "/opt/vault/tls/tls.key"
+vault_tls_ca_file: "/opt/vault/tls/ca.crt"
+
+# Minimum TLS version (STIG requires TLS 1.2 minimum)
+# FIPS 140-3: Use 'tls12' or 'tls13'
+# CNSA 1.0: TLS 1.2 with approved cipher suites, or TLS 1.3
+vault_tls_min_version: "tls12"
+
+# TLS cipher suites (only applies to TLS 1.2; TLS 1.3 uses fixed suites)
+# CNSA 1.0 approved: AES-256-GCM with SHA-384, ECDHE with P-384
+# Leave empty to use Vault/Go defaults (which are FIPS-compliant when
+# FIPS mode is enabled at the OS level). Override only if you need to
+# restrict to a specific CNSA 1.0 subset.
+vault_tls_cipher_suites: []
+
+# Client certificate verification
+# true = require and verify client certificates (mutual TLS)
+# false = allow but do not require client certificates
+vault_tls_require_client_cert: false
+vault_tls_disable_client_certs: false
+
+###############################################################################
+# Raft Storage Configuration
+# HashiCorp recommended storage backend for all deployments.
+# NIST 800-53: SC-28 (Protection of Information at Rest)
+###############################################################################
+# Raft node ID (typically the hostname; set per-host in inventory)
+vault_raft_node_id: "{{ inventory_hostname_short }}"
+
+###############################################################################
+# Cluster / HA Configuration
+# Single-node: leave vault_cluster_members empty or undefined
+# HA cluster: provide a list of cluster member FQDNs or IPs
+###############################################################################
+# API address advertised to clients
+# Format: https://<fqdn_or_ip>:8200
+vault_api_addr: "https://{{ ansible_fqdn }}:{{ vault_listener_port }}"
+
+# Cluster address for Raft replication between nodes
+vault_cluster_addr: "https://{{ ansible_fqdn }}:8201"
+
+# Load balancer or leader address for HA retry_join
+# Set this for HA clusters; leave empty/null for single-node
+vault_cluster_leader_addr: ""
+
+###############################################################################
+# Firewall Configuration
+# NIST 800-53: SC-7 (Boundary Protection)
+###############################################################################
+# Whether the role should configure firewalld rules
+vault_manage_firewall: true
+
+# Ports to open in firewalld
+vault_firewall_ports:
+  - "8200/tcp"   # Vault API
+  - "8201/tcp"   # Vault Cluster (Raft replication)
+
+###############################################################################
+# TLS Certificate Deployment
+# Set to true if the role should deploy TLS certificates from provided paths.
+# Set to false if certificates are managed externally (e.g., by another role
+# or pre-baked into the image).
+###############################################################################
+vault_manage_tls: false
+
+# Source paths for TLS files (on the Ansible controller)
+# Only used when vault_manage_tls is true
+vault_tls_src_cert: ""
+vault_tls_src_key: ""
+vault_tls_src_ca: ""
+
+###############################################################################
+# STIG Compliance Toggles
+# Enable/disable specific STIG hardening categories.
+# All default to true for maximum compliance posture.
+###############################################################################
+# Deploy logrotate configuration for Vault logs
+vault_stig_logrotate_enabled: true
+
+# Logrotate retention (days) - STIG requires minimum 90 days
+vault_stig_logrotate_days: 90
+
+# Deploy Vault audit backup service and timer
+# RHEL 9 STIG V-205167: Backup audit records
+vault_stig_audit_backup_enabled: true
+
+# Audit backup retention (days)
+vault_stig_audit_backup_retention_days: 7
+
+# Deploy AIDE file integrity check service and timer
+# RHEL 9 STIG V-257842, Application Security STIG V-263644
+vault_stig_aide_check_enabled: true
+
+# Deploy vault-unseal service for automatic unsealing after reboot
+vault_auto_unseal_enabled: false
+
+# Vault initialization parameters (used during initial setup)
+vault_key_shares: 5
+vault_key_threshold: 3
+
+###############################################################################
+# Rsyslog Configuration
+# NIST 800-53: AU-4 (Audit Log Storage Capacity)
+# NIST 800-53: AU-6 (Audit Review, Analysis, and Reporting)
+###############################################################################
+# Enable remote syslog forwarding
+vault_rsyslog_enabled: false
+
+# Remote syslog target (FQDN or IP)
+vault_rsyslog_host: ""
+
+# Remote syslog port
+vault_rsyslog_port: 514

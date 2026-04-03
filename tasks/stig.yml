@@ -1,0 +1,15 @@
+---
+###############################################################################
+# Filename: tasks/stig.yml
+# Role: ansible-role-vault
+# Summary: STIG hardening tasks for HashiCorp Vault
+# Last Updated: 03 Apr 2026
+# Classification: UNCLASSIFIED
+###############################################################################
+# TODO: Implement STIG hardening
+# - Deploy logrotate configuration (vault_stig_logrotate_enabled)
+# - Deploy audit backup service/timer (vault_stig_audit_backup_enabled)
+# - Deploy AIDE integrity check service/timer (vault_stig_aide_check_enabled)
+# - Deploy vault-unseal service (vault_auto_unseal_enabled)
+# - Configure rsyslog forwarding (vault_rsyslog_enabled)
+# - Set STIG-compliant file permissions on all Vault paths

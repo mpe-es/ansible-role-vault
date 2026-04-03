@@ -1,0 +1,30 @@
+---
+###############################################################################
+# Filename: handlers/main.yml
+# Role: ansible-role-vault
+# Summary: Event handlers for HashiCorp Vault service management
+# Last Updated: 03 Apr 2026
+# Classification: UNCLASSIFIED
+###############################################################################
+
+###############################################################################
+# Vault Service Handlers
+###############################################################################
+- name: Restart vault
+  ansible.builtin.systemd:
+    name: vault
+    state: restarted
+    daemon_reload: true
+  listen: Restart vault
+
+- name: Reload vault
+  ansible.builtin.systemd:
+    name: vault
+    state: reloaded
+  listen: Reload vault
+
+- name: Enable vault
+  ansible.builtin.systemd:
+    name: vault
+    enabled: true
+  listen: Enable vault

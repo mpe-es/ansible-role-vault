@@ -1,0 +1,12 @@
+---
+###############################################################################
+# Filename: tasks/install.yml
+# Role: ansible-role-vault
+# Summary: Install HashiCorp Vault RPM package
+# Last Updated: 03 Apr 2026
+# Classification: UNCLASSIFIED
+###############################################################################
+# TODO: Implement package installation
+# - Install vault package via ansible.builtin.dnf
+# - Handle version pinning (vault_package_version)
+# - Verify installation

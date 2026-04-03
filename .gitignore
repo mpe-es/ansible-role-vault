@@ -1,0 +1,52 @@
+# Ansible Role: ansible-role-vault
+# gitignore tailored for community-published Ansible roles
+
+# macOS artifacts
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Claude Code local settings and memory
+.claude/
+CLAUDE.md
+
+# Session memory (remember plugin)
+.remember/
+
+# Ansible-lint local cache
+.ansible/
+
+# Reference STIG files (local analysis only)
+stigs/
+
+# Local documentation drafts (not part of role)
+docs/
+
+# Screenshots
+**/*.png
+**/*.jpg
+
+# Python virtual environments
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Molecule ephemeral data
+molecule/*/ephemeral/
+
+# Sensitive files
+sensitive.txt
+*.key
+*.pem
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Log files
+log/
+*.log

@@ -1,0 +1,10 @@
+# Python dependencies for ansible-role-vault
+# Source file for pip-compile. DO NOT edit requirements.txt directly.
+# Regenerate with: pip-compile --generate-hashes requirements.in
+#
+# Classification: UNCLASSIFIED
+
+# HashiCorp Vault API client - required by community.hashi_vault collection
+# https://pypi.org/project/hvac/
+# Supports Vault v1.4.7+, Python 3.8+
+hvac>=2.0.0

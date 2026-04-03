@@ -1,0 +1,12 @@
+---
+###############################################################################
+# Filename: tasks/service.yml
+# Role: ansible-role-vault
+# Summary: Enable and start the Vault systemd service
+# Last Updated: 03 Apr 2026
+# Classification: UNCLASSIFIED
+###############################################################################
+# TODO: Implement service management
+# - Enable vault service
+# - Start vault service
+# - Verify vault is listening on configured port

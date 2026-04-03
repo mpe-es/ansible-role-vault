@@ -1,0 +1,342 @@
+---
+###############################################################################
+# Filename: meta/argument_specs.yml
+# Role: ansible-role-vault
+# Summary: Role argument specifications for AAP survey generation, input
+#   validation, and ansible-doc rendering. Maps 1:1 with defaults/main.yml.
+# Last Updated: 03 Apr 2026
+# Classification: UNCLASSIFIED
+###############################################################################
+argument_specs:
+  main:
+    short_description: >-
+      Install and configure HashiCorp Vault on RHEL with STIG compliance
+    description:
+      - >-
+        Installs HashiCorp Vault from RPM, configures the server with
+        STIG-compliant settings, and manages the systemd service.
+      - >-
+        Supports single-node and HA (3/5-node) Raft clusters in airgap
+        or internet-connected environments.
+      - >-
+        Requires ansible-core >= 2.17.0 (for community.hashi_vault),
+        Python >= 3.10, and the hvac Python library.
+    author:
+      - Alex Ackerman (@darkhonor)
+
+    options:
+      ################################################################
+      # RPM Repository Configuration
+      ################################################################
+      vault_manage_repo:
+        description:
+          - Whether the role should create /etc/yum.repos.d/hashicorp.repo.
+          - Set to false if the repository is managed externally (e.g., Red Hat Satellite content view).
+        type: bool
+        default: true
+
+      vault_repo_url:
+        description:
+          - HashiCorp RPM repository base URL.
+          - "Internet default: https://rpm.releases.hashicorp.com/RHEL/$releasever/$basearch/stable"
+          - Override with local mirror URL for airgap environments.
+        type: str
+        default: "https://rpm.releases.hashicorp.com/RHEL/$releasever/$basearch/stable"
+
+      vault_repo_gpg_key:
+        description:
+          - URL to the HashiCorp GPG key for RPM signature verification.
+          - Override with local mirror URL for airgap environments.
+        type: str
+        default: "https://rpm.releases.hashicorp.com/gpg"
+
+      vault_repo_gpgcheck:
+        description:
+          - Enable GPG checking on the repository.
+          - Must be true for STIG compliance (NIST 800-53 SI-7).
+        type: bool
+        default: true
+
+      ################################################################
+      # Package Configuration
+      ################################################################
+      vault_package_version:
+        description:
+          - Vault package version to install.
+          - Use 'latest' for newest available or pin to a specific version (e.g., '1.18.3-1').
+          - In airgap environments, this must match what is available in the local repo.
+        type: str
+        default: "latest"
+
+      vault_package_state:
+        description:
+          - Desired package state passed to ansible.builtin.dnf.
+        type: str
+        default: "present"
+        choices:
+          - present
+          - latest
+
+      ################################################################
+      # Vault Server Configuration
+      ################################################################
+      vault_ui_enabled:
+        description:
+          - Enable the Vault web UI.
+        type: bool
+        default: true
+
+      vault_disable_mlock:
+        description:
+          - Disable memory lock (mlock).
+          - "SECURITY: false means mlock is ENABLED, preventing secrets from being swapped to disk."
+          - Only set to true if the system does not support mlock (e.g., some containers).
+        type: bool
+        default: false
+
+      vault_disable_performance_standby:
+        description:
+          - Disable performance standby mode.
+          - Recommended true in STIG environments for predictable behavior.
+        type: bool
+        default: true
+
+      vault_log_level:
+        description:
+          - Vault server log level.
+          - STIG compliance requires at minimum 'info' for audit trail.
+        type: str
+        default: "info"
+        choices:
+          - trace
+          - debug
+          - info
+          - warn
+          - error
+
+      ################################################################
+      # Listener Configuration
+      ################################################################
+      vault_listener_address:
+        description:
+          - Bind address for the Vault API listener.
+        type: str
+        default: "0.0.0.0"
+
+      vault_listener_port:
+        description:
+          - Port for the Vault API listener.
+        type: int
+        default: 8200
+
+      vault_tls_cert_file:
+        description:
+          - Path to the TLS certificate file on the target host.
+        type: path
+        default: "/opt/vault/tls/tls.crt"
+
+      vault_tls_key_file:
+        description:
+          - Path to the TLS private key file on the target host.
+        type: path
+        default: "/opt/vault/tls/tls.key"
+
+      vault_tls_ca_file:
+        description:
+          - Path to the CA certificate file on the target host.
+        type: path
+        default: "/opt/vault/tls/ca.crt"
+
+      vault_tls_min_version:
+        description:
+          - Minimum TLS version for the Vault listener.
+          - STIG requires TLS 1.2 minimum. CNSA 1.0 allows TLS 1.2 with approved cipher suites or TLS 1.3.
+        type: str
+        default: "tls12"
+        choices:
+          - tls12
+          - tls13
+
+      vault_tls_cipher_suites:
+        description:
+          - TLS cipher suites to allow (only applies to TLS 1.2).
+          - Leave empty to use Vault/Go defaults, which are FIPS-compliant when FIPS mode is enabled at the OS level.
+          - Override only to restrict to a specific CNSA 1.0 subset.
+        type: list
+        elements: str
+        default: []
+
+      vault_tls_require_client_cert:
+        description:
+          - Require and verify client certificates (mutual TLS).
+        type: bool
+        default: false
+
+      vault_tls_disable_client_certs:
+        description:
+          - Disable client certificate handling entirely.
+          - When false, client certs are allowed but not required.
+        type: bool
+        default: false
+
+      ################################################################
+      # Raft Storage Configuration
+      ################################################################
+      vault_raft_node_id:
+        description:
+          - Raft node identifier. Typically the short hostname.
+          - Must be unique within a cluster. Set per-host in inventory.
+        type: str
+        default: "{{ inventory_hostname_short }}"
+
+      ################################################################
+      # Cluster / HA Configuration
+      ################################################################
+      vault_api_addr:
+        description:
+          - API address advertised to clients.
+          - "Format: https://<fqdn_or_ip>:8200"
+        type: str
+        default: "https://{{ ansible_fqdn }}:{{ vault_listener_port }}"
+
+      vault_cluster_addr:
+        description:
+          - Cluster address for Raft replication between nodes.
+        type: str
+        default: "https://{{ ansible_fqdn }}:8201"
+
+      vault_cluster_leader_addr:
+        description:
+          - Load balancer or leader API address for HA retry_join.
+          - Set this for HA clusters (3 or 5 node). Leave empty for single-node deployments.
+        type: str
+        default: ""
+
+      ################################################################
+      # Firewall Configuration
+      ################################################################
+      vault_manage_firewall:
+        description:
+          - Whether the role should configure firewalld rules.
+          - Requires the ansible.posix collection.
+        type: bool
+        default: true
+
+      vault_firewall_ports:
+        description:
+          - List of ports to open in firewalld.
+        type: list
+        elements: str
+        default:
+          - "8200/tcp"
+          - "8201/tcp"
+
+      ################################################################
+      # TLS Certificate Deployment
+      ################################################################
+      vault_manage_tls:
+        description:
+          - Whether the role should deploy TLS certificates from the Ansible controller.
+          - Set to false if certificates are managed externally.
+        type: bool
+        default: false
+
+      vault_tls_src_cert:
+        description:
+          - Path to the TLS certificate file on the Ansible controller.
+          - Only used when vault_manage_tls is true.
+        type: path
+        default: ""
+
+      vault_tls_src_key:
+        description:
+          - Path to the TLS private key file on the Ansible controller.
+          - Only used when vault_manage_tls is true.
+        type: path
+        default: ""
+
+      vault_tls_src_ca:
+        description:
+          - Path to the CA certificate file on the Ansible controller.
+          - Only used when vault_manage_tls is true.
+        type: path
+        default: ""
+
+      ################################################################
+      # STIG Compliance Toggles
+      ################################################################
+      vault_stig_logrotate_enabled:
+        description:
+          - Deploy logrotate configuration for Vault logs.
+        type: bool
+        default: true
+
+      vault_stig_logrotate_days:
+        description:
+          - Logrotate retention in days.
+          - STIG requires minimum 90 days.
+        type: int
+        default: 90
+
+      vault_stig_audit_backup_enabled:
+        description:
+          - Deploy Vault audit backup systemd service and timer.
+          - Implements RHEL 9 STIG V-205167 (backup audit records).
+        type: bool
+        default: true
+
+      vault_stig_audit_backup_retention_days:
+        description:
+          - Number of days to retain audit backups before cleanup.
+        type: int
+        default: 7
+
+      vault_stig_aide_check_enabled:
+        description:
+          - Deploy AIDE file integrity check systemd service and timer.
+          - Implements RHEL 9 STIG V-257842 and Application Security STIG V-263644.
+        type: bool
+        default: true
+
+      vault_auto_unseal_enabled:
+        description:
+          - Deploy vault-unseal systemd service for automatic unsealing after reboot.
+          - Uses Shamir key shares stored in /etc/vault.d/tokens.env.
+        type: bool
+        default: false
+
+      vault_key_shares:
+        description:
+          - Number of Shamir key shares to generate during Vault initialization.
+        type: int
+        default: 5
+
+      vault_key_threshold:
+        description:
+          - Number of Shamir key shares required to unseal Vault.
+          - Must be less than or equal to vault_key_shares.
+        type: int
+        default: 3
+
+      ################################################################
+      # Rsyslog Configuration
+      ################################################################
+      vault_rsyslog_enabled:
+        description:
+          - Enable remote syslog forwarding for Vault audit logs.
+          - Implements NIST 800-53 AU-4 and AU-6.
+        type: bool
+        default: false
+
+      vault_rsyslog_host:
+        description:
+          - Remote syslog target FQDN or IP address.
+          - Required when vault_rsyslog_enabled is true.
+        type: str
+        default: ""
+
+      vault_rsyslog_port:
+        description:
+          - Remote syslog target port.
+        type: int
+        default: 514

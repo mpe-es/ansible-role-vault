@@ -1,0 +1,23 @@
+---
+###############################################################################
+# Filename: requirements.yml
+# Role: ansible-role-vault
+# Summary: Ansible collection dependencies for this role. Install with:
+#   ansible-galaxy collection install -r requirements.yml
+# For EE builds, ansible-builder reads this automatically.
+# Last Updated: 03 Apr 2026
+# Classification: UNCLASSIFIED
+###############################################################################
+collections:
+  # Firewalld module (ansible.posix.firewalld)
+  # Required for: tasks/firewall.yml
+  # Min ansible-core: 2.16.0
+  - name: ansible.posix
+    version: ">=1.6.0"
+
+  # HashiCorp Vault modules and lookup plugins
+  # Required for: post-install Vault initialization and configuration
+  # (vault_init, vault_write, vault_read, hashi_vault lookup)
+  # Min ansible-core: 2.17.0 (binding constraint for this role)
+  - name: community.hashi_vault
+    version: ">=7.0.0"

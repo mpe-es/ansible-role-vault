@@ -1,0 +1,10 @@
+# System package dependencies for ansible-role-vault
+# Used by ansible-builder when constructing Execution Environments.
+# Format: package-name [platform-list] (version-constraint)
+#
+# Classification: UNCLASSIFIED
+
+# Python 3.10+ required by ansible-core 2.17+
+python3 [platform:centos-8 platform:rhel-8 platform:centos-9 platform:rhel-9]
+python3-devel [platform:centos-8 platform:rhel-8 platform:centos-9 platform:rhel-9]
+python3-pip [platform:centos-8 platform:rhel-8 platform:centos-9 platform:rhel-9]

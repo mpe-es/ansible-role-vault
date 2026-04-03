@@ -1,0 +1,14 @@
+---
+###############################################################################
+# Filename: tasks/system.yml
+# Role: ansible-role-vault
+# Summary: System preparation - directories, permissions, user/group
+# NIST 800-53: AC-6 (Least Privilege)
+# Last Updated: 03 Apr 2026
+# Classification: UNCLASSIFIED
+###############################################################################
+# TODO: Implement system preparation
+# - Ensure vault user/group exist with correct properties
+# - Create required directories (/opt/vault/data, /opt/vault/tls, etc.)
+# - Set STIG-compliant ownership and permissions
+# - Configure SELinux contexts for Vault paths

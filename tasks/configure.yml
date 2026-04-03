@@ -1,0 +1,13 @@
+---
+###############################################################################
+# Filename: tasks/configure.yml
+# Role: ansible-role-vault
+# Summary: Deploy Vault server configuration (vault.hcl)
+# Last Updated: 03 Apr 2026
+# Classification: UNCLASSIFIED
+###############################################################################
+# TODO: Implement Vault configuration deployment
+# - Deploy vault.hcl from template (listener, storage, cluster settings)
+# - Handle single-node vs HA cluster conditional (retry_join block)
+# - Set STIG-compliant file permissions
+# - Notify 'Restart vault' handler on config changes
