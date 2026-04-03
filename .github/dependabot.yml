@@ -1,0 +1,45 @@
+---
+###############################################################################
+# Filename: .github/dependabot.yml
+# Role: ansible-role-vault
+# Summary: Dependabot configuration for automated dependency updates
+# Last Updated: 03 Apr 2026
+# Classification: UNCLASSIFIED
+###############################################################################
+version: 2
+updates:
+  # GitHub Actions (SHA-pinned, Dependabot updates to latest SHAs)
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    commit-message:
+      prefix: "ci"
+    labels:
+      - "dependencies"
+      - "ci"
+    reviewers:
+      - "darkhonor"
+
+  # Python dependencies (pip-compile managed)
+  # Dependabot monitors requirements.in (source) and requirements.txt (compiled)
+  # After merging Dependabot PRs, regenerate hashes locally:
+  #   pip-compile --generate-hashes requirements.in
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    commit-message:
+      prefix: "deps"
+    labels:
+      - "dependencies"
+      - "python"
+    reviewers:
+      - "darkhonor"
+    # Dependabot will update requirements.txt directly; after merge,
+    # re-run pip-compile to regenerate with hashes if needed
+    allow:
+      - dependency-type: "direct"
+      - dependency-type: "indirect"
