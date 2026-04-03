@@ -1,0 +1,14 @@
+---
+###############################################################################
+# Filename: tasks/preflight.yml
+# Role: ansible-role-vault
+# Summary: Pre-flight validation tasks to verify target system requirements
+# Last Updated: 03 Apr 2026
+# Classification: UNCLASSIFIED
+###############################################################################
+# TODO: Implement pre-flight checks
+# - Verify RHEL-based OS (ansible_os_family == 'RedHat')
+# - Verify supported OS version (EL 8 or 9)
+# - Verify FIPS mode status
+# - Verify sufficient disk space for Raft storage
+# - Verify required ports are not already in use

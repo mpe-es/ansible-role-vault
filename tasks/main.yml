@@ -1,0 +1,107 @@
+---
+###############################################################################
+# Filename: tasks/main.yml
+# Role: ansible-role-vault
+# Summary: Main task orchestration for HashiCorp Vault installation and STIG
+#   compliance on RHEL systems. Tasks are split into logical includes.
+# Last Updated: 03 Apr 2026
+# Classification: UNCLASSIFIED
+###############################################################################
+
+###############################################################################
+# Phase 1: Pre-flight Validation
+# Verify target system meets requirements before making changes.
+###############################################################################
+- name: Include pre-flight validation tasks
+  ansible.builtin.include_tasks: preflight.yml
+  tags:
+    - vault
+    - preflight
+
+###############################################################################
+# Phase 2: Repository Configuration
+# Configure HashiCorp RPM repository (or verify local mirror).
+# NIST 800-53: SI-7 (Software, Firmware, and Information Integrity)
+###############################################################################
+- name: Include repository configuration tasks
+  ansible.builtin.include_tasks: repo.yml
+  when: vault_manage_repo | bool
+  tags:
+    - vault
+    - repo
+
+###############################################################################
+# Phase 3: Package Installation
+# Install HashiCorp Vault RPM package.
+###############################################################################
+- name: Include package installation tasks
+  ansible.builtin.include_tasks: install.yml
+  tags:
+    - vault
+    - install
+
+###############################################################################
+# Phase 4: System Preparation
+# Create directories, set permissions, configure system user/group.
+# NIST 800-53: AC-6 (Least Privilege)
+###############################################################################
+- name: Include system preparation tasks
+  ansible.builtin.include_tasks: system.yml
+  tags:
+    - vault
+    - system
+
+###############################################################################
+# Phase 5: TLS Certificate Deployment
+# Deploy TLS certificates for Vault listener and Raft cluster comms.
+# NIST 800-53: SC-8 (Transmission Confidentiality and Integrity)
+###############################################################################
+- name: Include TLS certificate tasks
+  ansible.builtin.include_tasks: tls.yml
+  when: vault_manage_tls | bool
+  tags:
+    - vault
+    - tls
+
+###############################################################################
+# Phase 6: Vault Configuration
+# Deploy vault.hcl with listener, storage, and cluster settings.
+###############################################################################
+- name: Include Vault configuration tasks
+  ansible.builtin.include_tasks: configure.yml
+  tags:
+    - vault
+    - configure
+
+###############################################################################
+# Phase 7: Firewall Configuration
+# Open required ports in firewalld.
+# NIST 800-53: SC-7 (Boundary Protection)
+###############################################################################
+- name: Include firewall configuration tasks
+  ansible.builtin.include_tasks: firewall.yml
+  when: vault_manage_firewall | bool
+  tags:
+    - vault
+    - firewall
+
+###############################################################################
+# Phase 8: STIG Hardening
+# Apply STIG-compliant configurations: audit logging, logrotate, AIDE,
+# file permissions, rsyslog forwarding.
+###############################################################################
+- name: Include STIG hardening tasks
+  ansible.builtin.include_tasks: stig.yml
+  tags:
+    - vault
+    - stig
+
+###############################################################################
+# Phase 9: Service Management
+# Enable and start the Vault service.
+###############################################################################
+- name: Include service management tasks
+  ansible.builtin.include_tasks: service.yml
+  tags:
+    - vault
+    - service

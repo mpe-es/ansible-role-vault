@@ -1,0 +1,70 @@
+---
+###############################################################################
+# Filename: vars/main.yml
+# Role: ansible-role-vault
+# Summary: Internal variables for HashiCorp Vault role. These have higher
+#   precedence than defaults and should NOT be overridden by consumers.
+# Last Updated: 03 Apr 2026
+# Classification: UNCLASSIFIED
+###############################################################################
+
+###############################################################################
+# Package and Service Names
+###############################################################################
+vault_package_name: vault
+vault_service_name: vault
+
+###############################################################################
+# System Paths (HashiCorp RPM standard layout)
+# Verified against vault-1.21.4-1.x86_64 RPM
+###############################################################################
+vault_config_dir: /etc/vault.d
+vault_config_file: /etc/vault.d/vault.hcl
+vault_env_file: /etc/vault.d/vault.env
+vault_data_dir: /opt/vault/data
+vault_tls_dir: /opt/vault/tls
+vault_log_dir: /var/log/vault
+vault_plugin_dir: /opt/vault/plugins
+vault_run_dir: /run/vault
+vault_backup_dir: /opt/vault-backup
+vault_binary: /usr/bin/vault
+vault_service_file: /usr/lib/systemd/system/vault.service
+
+###############################################################################
+# System User and Group
+# Created by RPM post-install (vault:vault, shell=/bin/false)
+###############################################################################
+vault_user: vault
+vault_group: vault
+
+###############################################################################
+# File Permissions (STIG-hardened)
+# RPM defaults are too permissive for STIG compliance:
+#   RPM: /etc/vault.d 0755, vault.hcl 0644 root:root
+#   STIG: /etc/vault.d 0750, vault.hcl 0640 vault:vault
+# NIST 800-53: AC-6 (Least Privilege)
+###############################################################################
+vault_config_dir_mode: '0750'
+vault_config_file_mode: '0640'
+vault_env_file_mode: '0640'
+vault_data_dir_mode: '0750'
+vault_tls_dir_mode: '0750'
+vault_tls_file_mode: '0640'
+vault_log_dir_mode: '0750'
+vault_log_file_mode: '0600'
+vault_backup_dir_mode: '0750'
+
+###############################################################################
+# SELinux Contexts
+# RPM sets /opt/vault/* to unconfined_u:object_r:usr_t — we enforce system_u
+###############################################################################
+vault_selinux_contexts:
+  - path: /opt/vault(/.*)?
+    setype: usr_t
+    seuser: system_u
+  - path: /etc/vault.d(/.*)?
+    setype: etc_t
+    seuser: system_u
+  - path: /var/log/vault(/.*)?
+    setype: var_log_t
+    seuser: system_u

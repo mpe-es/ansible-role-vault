@@ -1,0 +1,14 @@
+---
+###############################################################################
+# Filename: tasks/tls.yml
+# Role: ansible-role-vault
+# Summary: Deploy TLS certificates for Vault listener and Raft cluster
+# NIST 800-53: SC-8 (Transmission Confidentiality and Integrity)
+# Last Updated: 03 Apr 2026
+# Classification: UNCLASSIFIED
+###############################################################################
+# TODO: Implement TLS certificate deployment
+# - Copy TLS cert, key, and CA from controller to target
+# - Set STIG-compliant ownership (vault:vault) and permissions (0640)
+# - Set SELinux context on TLS files
+# - Update CA trust store if CA cert provided

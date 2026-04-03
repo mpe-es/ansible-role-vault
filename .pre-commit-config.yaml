@@ -1,0 +1,44 @@
+---
+###############################################################################
+# Filename: .pre-commit-config.yaml
+# Role: ansible-role-vault
+# Summary: Pre-commit hooks for local linting before push
+# Last Updated: 03 Apr 2026
+# Classification: UNCLASSIFIED
+###############################################################################
+# See https://pre-commit.com for more information
+# See https://pre-commit.com/hooks.html for more hooks
+
+repos:
+  # YAML Linting
+  - repo: https://github.com/adrienverge/yamllint
+    rev: v1.35.1
+    hooks:
+      - id: yamllint
+        args: [-c, .yamllint]
+        types: [yaml]
+
+  # Ansible Linting
+  # Note: ansible-core 2.17+ requires Python 3.10+, so we specify python3.11
+  - repo: https://github.com/ansible/ansible-lint
+    rev: v25.1.0
+    hooks:
+      - id: ansible-lint
+        args: []
+        language_version: python3.11
+        additional_dependencies:
+          - ansible-core==2.17.8
+
+  # General file hygiene
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]
+      - id: end-of-file-fixer
+      - id: check-yaml
+        args: [--unsafe]
+      - id: check-added-large-files
+        args: [--maxkb=500]
+      - id: check-merge-conflict
+      - id: detect-private-key
