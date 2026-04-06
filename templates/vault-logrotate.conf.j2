@@ -1,4 +1,4 @@
-{{ ansible_managed | comment('#', prefix='', postfix='') }}
+# {{ ansible_managed }}
 # NIST 800-53: AU-4 (Audit Log Storage Capacity)
 # DISA STIG: Minimum 90-day retention
 {{ vault_log_dir }}/vault_audit.log {

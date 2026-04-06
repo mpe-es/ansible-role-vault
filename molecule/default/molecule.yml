@@ -19,17 +19,15 @@ platforms:
     pre_build_image: true
     privileged: true
     command: /usr/sbin/init
-    tmpfs:
-      /run: rw
-      /tmp: rw
-    volumes:
-      - /sys/fs/cgroup:/sys/fs/cgroup:ro
 
 provisioner:
   name: ansible
+  connection_options:
+    ansible_become: false
   inventory:
     host_vars:
       vault-rhel9:
+        ansible_user: root
         # Skip phases that require real infrastructure
         vault_manage_repo: false
         vault_manage_firewall: false
