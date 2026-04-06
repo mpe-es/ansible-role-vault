@@ -20,8 +20,8 @@ platforms:
     privileged: true
     cgroupns_mode: host
     tmpfs:
-      - /run
-      - /tmp
+      /run: ""
+      /tmp: ""
     capabilities:
       - SYS_ADMIN
       - AUDIT_WRITE
