@@ -4,10 +4,18 @@
 # Role: ansible-role-vault
 # Summary: Configure HashiCorp RPM repository for Vault installation
 # NIST 800-53: SI-7 (Software, Firmware, and Information Integrity)
-# Last Updated: 03 Apr 2026
 # Classification: UNCLASSIFIED
 ###############################################################################
-# TODO: Implement repository configuration
-# - Deploy /etc/yum.repos.d/hashicorp.repo via template
-# - Import GPG key from vault_repo_gpg_key
-# - Verify GPG key fingerprint
+
+- name: Deploy HashiCorp RPM repository configuration
+  ansible.builtin.template:
+    src: hashicorp.repo.j2
+    dest: /etc/yum.repos.d/hashicorp.repo
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Import HashiCorp GPG key
+  ansible.builtin.rpm_key:
+    key: "{{ vault_repo_gpg_key }}"
+    state: present
