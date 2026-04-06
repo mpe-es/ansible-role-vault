@@ -184,3 +184,75 @@ vault_rsyslog_host: ""
 
 # Remote syslog port
 vault_rsyslog_port: 514
+
+###############################################################################
+# Vault Edition
+# Controls the RPM package name installed.
+# 'vault' = Community (OSS), 'vault-enterprise' = Enterprise
+###############################################################################
+vault_edition: "vault"
+
+###############################################################################
+# TLS Maximum Version
+# NIST 800-53: SC-8 (Transmission Confidentiality and Integrity)
+###############################################################################
+vault_tls_max_version: "tls13"
+
+###############################################################################
+# TLS Certificate Source
+# 'file' = Copy certs from controller (enclave CA, ADCS, RHCS)
+# 'vault_pki' = Generate via Vault PKI engine (requires existing Vault)
+###############################################################################
+vault_tls_source: "file"
+
+# Vault PKI engine settings (only used when vault_tls_source is 'vault_pki')
+vault_pki_mount: ""
+vault_pki_role: ""
+
+###############################################################################
+# Vault Initialization
+# Set to true for greenfield deployments to auto-initialize Vault.
+# Keys are stored in /etc/vault.d/tokens.env (mode 0600, root:root).
+###############################################################################
+vault_initialize: false
+
+###############################################################################
+# HSM / PKCS#11 Seal Configuration (Enterprise Only)
+# NIST 800-53: SC-13 (Cryptographic Protection)
+# FIPS 140-3: Hardware security module for key protection
+###############################################################################
+# Enable PKCS#11 seal stanza in vault.hcl
+vault_hsm_enabled: false
+
+# Install HSM client libraries from Satellite
+vault_configure_hsm_client: false
+
+# HSM client RPM package name (from Satellite mirror)
+vault_hsm_client_package: ""
+
+# PKCS#11 library path on target
+vault_hsm_lib_path: ""
+
+# HSM slot identification (mutually exclusive - use one or the other)
+vault_hsm_slot: ""
+vault_hsm_token_label: ""
+
+# HSM authentication
+vault_hsm_pin: ""
+
+# HSM key configuration
+vault_hsm_key_label: ""
+vault_hsm_hmac_key_label: ""
+
+# Cryptographic mechanisms
+# Common values: 0x1087 (CKM_AES_GCM), 0x1085 (CKM_AES_CBC_PAD)
+vault_hsm_mechanism: ""
+
+# HMAC mechanism (only CKM_SHA256_HMAC / 0x0251 is currently supported)
+vault_hsm_hmac_mechanism: "0x0251"
+
+# Auto-generate keys on HSM during initialization
+vault_hsm_generate_key: false
+
+# Maximum concurrent HSM requests
+vault_hsm_max_parallel: 1
