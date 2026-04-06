@@ -28,3 +28,17 @@
     name: vault
     enabled: true
   listen: Enable vault
+
+###############################################################################
+# Rsyslog Handler
+###############################################################################
+- name: Restart rsyslog
+  ansible.builtin.systemd_service:
+    name: rsyslog
+    state: restarted
+  listen: Restart rsyslog
+
+- name: Reload systemd
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  listen: Reload systemd
