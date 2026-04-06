@@ -4,9 +4,13 @@
 # Role: ansible-role-vault
 # Summary: Configure firewalld rules for Vault ports
 # NIST 800-53: SC-7 (Boundary Protection)
-# Last Updated: 03 Apr 2026
 # Classification: UNCLASSIFIED
 ###############################################################################
-# TODO: Implement firewall configuration
-# - Open ports defined in vault_firewall_ports via ansible.posix.firewalld
-# - Reload firewalld after changes
+
+- name: Open Vault ports in firewalld
+  ansible.posix.firewalld:
+    port: "{{ item }}"
+    permanent: true
+    immediate: true
+    state: enabled
+  loop: "{{ vault_firewall_ports }}"
