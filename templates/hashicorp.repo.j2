@@ -1,0 +1,7 @@
+{{ ansible_managed | comment('#', prefix='', postfix='') }}
+[hashicorp]
+name=HashiCorp Stable - $basearch
+baseurl={{ vault_repo_url }}
+enabled=1
+gpgcheck={{ vault_repo_gpgcheck | int }}
+gpgkey={{ vault_repo_gpg_key }}
