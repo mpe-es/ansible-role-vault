@@ -1,0 +1,18 @@
+---
+###############################################################################
+# Filename: molecule/default/prepare.yml
+# Role: ansible-role-vault
+# Summary: Prepare container with packages missing from UBI9 minimal
+# Classification: UNCLASSIFIED
+###############################################################################
+- name: Prepare
+  hosts: all
+  # Running as root in container - no become needed
+
+  tasks:
+    - name: Install packages needed for role testing
+      ansible.builtin.dnf:
+        name:
+          - python3-libselinux
+          - policycoreutils-python-utils
+        state: present
