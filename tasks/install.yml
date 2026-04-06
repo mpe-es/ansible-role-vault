@@ -2,11 +2,69 @@
 ###############################################################################
 # Filename: tasks/install.yml
 # Role: ansible-role-vault
-# Summary: Install HashiCorp Vault RPM package
-# Last Updated: 03 Apr 2026
+# Summary: Install HashiCorp Vault RPM package and validate installation
 # Classification: UNCLASSIFIED
 ###############################################################################
-# TODO: Implement package installation
-# - Install vault package via ansible.builtin.dnf
-# - Handle version pinning (vault_package_version)
-# - Verify installation
+
+###############################################################################
+# Package Installation
+###############################################################################
+- name: Install Vault package
+  ansible.builtin.dnf:
+    name: "{{ vault_package_name }}{% if vault_package_version != 'latest' %}-{{ vault_package_version }}{% endif %}"
+    state: "{{ vault_package_state }}"
+  notify: Enable vault
+
+###############################################################################
+# HSM Client Installation (optional)
+###############################################################################
+- name: Install HSM client package
+  ansible.builtin.dnf:
+    name: "{{ vault_hsm_client_package }}"
+    state: present
+  when:
+    - vault_configure_hsm_client | bool
+    - vault_hsm_client_package | length > 0
+
+###############################################################################
+# Post-Install Validation
+###############################################################################
+- name: Verify vault user exists
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ vault_user }}"
+
+- name: Verify vault group exists
+  ansible.builtin.getent:
+    database: group
+    key: "{{ vault_group }}"
+
+- name: Verify vault binary is available
+  ansible.builtin.stat:
+    path: "{{ vault_binary }}"
+  register: __vault_binary_stat
+
+- name: Assert vault binary exists
+  ansible.builtin.assert:
+    that:
+      - __vault_binary_stat.stat.exists
+    fail_msg: "Vault binary not found at {{ vault_binary }} after package installation"
+    success_msg: "Vault binary: {{ vault_binary }}"
+
+- name: Check vault systemd unit for CAP_IPC_LOCK
+  ansible.builtin.command:
+    cmd: systemctl show vault.service --property=CapabilityBoundingSet
+  register: __vault_cap_check
+  changed_when: false
+  when: not vault_disable_mlock | bool
+
+- name: Assert CAP_IPC_LOCK is available for mlock
+  ansible.builtin.assert:
+    that:
+      - "'CAP_IPC_LOCK' in __vault_cap_check.stdout"
+    fail_msg: >-
+      vault.service does not have CAP_IPC_LOCK capability.
+      mlock is enabled (vault_disable_mlock=false) but the systemd unit
+      cannot lock memory. Check the vault.service unit file.
+    success_msg: "CAP_IPC_LOCK: present in vault.service"
+  when: not vault_disable_mlock | bool
