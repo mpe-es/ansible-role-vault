@@ -1,0 +1,104 @@
+---
+###############################################################################
+# Filename: molecule/default/converge.yml
+# Role: ansible-role-vault
+# Summary: Converge playbook - tests phases 4-8 in container environment
+# Classification: UNCLASSIFIED
+###############################################################################
+- name: Converge
+  hosts: all
+  become: true
+
+  pre_tasks:
+    ###########################################################################
+    # Mock vault installation (no RPM/Satellite available in container)
+    ###########################################################################
+    - name: Create vault group
+      ansible.builtin.group:
+        name: vault
+        system: true
+
+    - name: Create vault user
+      ansible.builtin.user:
+        name: vault
+        group: vault
+        system: true
+        shell: /bin/false
+        create_home: false
+
+    - name: Create mock vault binary
+      ansible.builtin.copy:
+        content: |
+          #!/bin/bash
+          echo "mock vault binary"
+        dest: /usr/bin/vault
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Create mock vault systemd unit
+      ansible.builtin.copy:
+        content: |
+          [Unit]
+          Description=HashiCorp Vault
+          [Service]
+          ExecStart=/usr/bin/vault server -config=/etc/vault.d/vault.hcl
+          User=vault
+          Group=vault
+          CapabilityBoundingSet=CAP_IPC_LOCK
+          [Install]
+          WantedBy=multi-user.target
+        dest: /usr/lib/systemd/system/vault.service
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Create mock TLS certificates
+      block:
+        - name: Create TLS directory
+          ansible.builtin.file:
+            path: /opt/vault/tls
+            state: directory
+            owner: vault
+            group: vault
+            mode: '0750'
+
+        - name: Create mock cert files
+          ansible.builtin.copy:
+            content: "mock certificate"
+            dest: "{{ item }}"
+            owner: vault
+            group: vault
+            mode: '0640'
+          loop:
+            - /opt/vault/tls/tls.crt
+            - /opt/vault/tls/tls.key
+            - /opt/vault/tls/ca.crt
+
+  tasks:
+    ###########################################################################
+    # Phase 4: System preparation (directories, permissions, SELinux)
+    ###########################################################################
+    - name: Run system.yml (Phase 4)
+      ansible.builtin.include_role:
+        name: "{{ lookup('env', 'MOLECULE_PROJECT_DIRECTORY') }}"
+        tasks_from: system.yml
+
+    ###########################################################################
+    # Phase 6: Vault configuration (vault.hcl and vault.env)
+    ###########################################################################
+    - name: Run configure.yml (Phase 6)
+      ansible.builtin.include_role:
+        name: "{{ lookup('env', 'MOLECULE_PROJECT_DIRECTORY') }}"
+        tasks_from: configure.yml
+
+    ###########################################################################
+    # Phase 8: STIG hardening (logrotate, AIDE, audit backup, unseal)
+    # Skip AIDE init (aide not installed in UBI container)
+    ###########################################################################
+    - name: Run stig.yml (Phase 8)
+      ansible.builtin.include_role:
+        name: "{{ lookup('env', 'MOLECULE_PROJECT_DIRECTORY') }}"
+        tasks_from: stig.yml
+      vars:
+        vault_stig_aide_check_enabled: false

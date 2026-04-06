@@ -1,0 +1,158 @@
+---
+###############################################################################
+# Filename: molecule/default/verify.yml
+# Role: ansible-role-vault
+# Summary: Verification playbook - validates STIG compliance in container
+# Classification: UNCLASSIFIED
+###############################################################################
+- name: Verify
+  hosts: all
+  become: true
+
+  tasks:
+    ###########################################################################
+    # Directory structure and permissions (NIST AC-6)
+    ###########################################################################
+    - name: Verify Vault directories exist with STIG permissions
+      ansible.builtin.stat:
+        path: "{{ item.path }}"
+      register: __verify_dirs
+      loop:
+        - { path: /etc/vault.d, mode: '0750', owner: vault, group: vault }
+        - { path: /opt/vault/data, mode: '0750', owner: vault, group: vault }
+        - { path: /opt/vault/tls, mode: '0750', owner: vault, group: vault }
+        - { path: /var/log/vault, mode: '0750', owner: vault, group: vault }
+        - { path: /opt/vault-backup, mode: '0750', owner: root, group: root }
+      loop_control:
+        label: "{{ item.path }}"
+
+    - name: Assert directory permissions are STIG-compliant
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.isdir
+          - item.stat.mode == item.item.mode
+        fail_msg: >-
+          {{ item.item.path }} has incorrect permissions:
+          exists={{ item.stat.exists }},
+          mode={{ item.stat.mode | default('missing') }},
+          expected={{ item.item.mode }}
+      loop: "{{ __verify_dirs.results }}"
+      loop_control:
+        label: "{{ item.item.path }}"
+
+    ###########################################################################
+    # Vault configuration files
+    ###########################################################################
+    - name: Verify vault.hcl exists with correct permissions
+      ansible.builtin.stat:
+        path: /etc/vault.d/vault.hcl
+      register: __verify_vault_hcl
+
+    - name: Assert vault.hcl permissions
+      ansible.builtin.assert:
+        that:
+          - __verify_vault_hcl.stat.exists
+          - __verify_vault_hcl.stat.mode == '0640'
+          - __verify_vault_hcl.stat.pw_name == 'vault'
+          - __verify_vault_hcl.stat.gr_name == 'vault'
+        fail_msg: "vault.hcl has incorrect permissions or ownership"
+
+    - name: Verify vault.env exists with correct permissions
+      ansible.builtin.stat:
+        path: /etc/vault.d/vault.env
+      register: __verify_vault_env
+
+    - name: Assert vault.env permissions
+      ansible.builtin.assert:
+        that:
+          - __verify_vault_env.stat.exists
+          - __verify_vault_env.stat.mode == '0640'
+          - __verify_vault_env.stat.pw_name == 'vault'
+          - __verify_vault_env.stat.gr_name == 'vault'
+        fail_msg: "vault.env has incorrect permissions or ownership"
+
+    ###########################################################################
+    # vault.hcl content validation
+    ###########################################################################
+    - name: Read vault.hcl content
+      ansible.builtin.slurp:
+        src: /etc/vault.d/vault.hcl
+      register: __verify_vault_hcl_content
+
+    - name: Assert vault.hcl contains required configuration
+      ansible.builtin.assert:
+        that:
+          - "'ui' in (__verify_vault_hcl_content.content | b64decode)"
+          - "'storage \"raft\"' in (__verify_vault_hcl_content.content | b64decode)"
+          - "'listener \"tcp\"' in (__verify_vault_hcl_content.content | b64decode)"
+          - "'tls_min_version' in (__verify_vault_hcl_content.content | b64decode)"
+          - "'tls_max_version' in (__verify_vault_hcl_content.content | b64decode)"
+        fail_msg: "vault.hcl is missing required configuration blocks"
+
+    - name: Assert vault.hcl does NOT contain deprecated parameters
+      ansible.builtin.assert:
+        that:
+          - "'tls_prefer_server_cipher_suites' not in (__verify_vault_hcl_content.content | b64decode)"
+        fail_msg: "vault.hcl contains deprecated tls_prefer_server_cipher_suites"
+
+    ###########################################################################
+    # Logrotate configuration (NIST AU-4)
+    ###########################################################################
+    - name: Verify logrotate config exists
+      ansible.builtin.stat:
+        path: /etc/logrotate.d/vault
+      register: __verify_logrotate
+
+    - name: Assert logrotate config exists
+      ansible.builtin.assert:
+        that:
+          - __verify_logrotate.stat.exists
+
+    - name: Read logrotate config
+      ansible.builtin.slurp:
+        src: /etc/logrotate.d/vault
+      register: __verify_logrotate_content
+
+    - name: Assert logrotate has 90-day minimum retention
+      ansible.builtin.assert:
+        that:
+          - "'rotate 90' in (__verify_logrotate_content.content | b64decode)"
+        fail_msg: "Logrotate does not meet STIG 90-day minimum retention"
+
+    ###########################################################################
+    # Systemd unit files (STIG services)
+    ###########################################################################
+    - name: Verify STIG systemd unit files exist
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: __verify_units
+      loop:
+        - /usr/lib/systemd/system/vault-audit-backup.service
+        - /usr/lib/systemd/system/vault-audit-backup.timer
+      loop_control:
+        label: "{{ item | basename }}"
+
+    - name: Assert STIG systemd units exist
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+        fail_msg: "Missing systemd unit: {{ item.item }}"
+      loop: "{{ __verify_units.results }}"
+      loop_control:
+        label: "{{ item.item | basename }}"
+
+    ###########################################################################
+    # Script files
+    ###########################################################################
+    - name: Verify audit backup script exists with correct permissions
+      ansible.builtin.stat:
+        path: /usr/local/bin/vault-audit-backup.sh
+      register: __verify_backup_script
+
+    - name: Assert audit backup script permissions
+      ansible.builtin.assert:
+        that:
+          - __verify_backup_script.stat.exists
+          - __verify_backup_script.stat.mode == '0750'
+        fail_msg: "vault-audit-backup.sh missing or incorrect permissions"
