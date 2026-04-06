@@ -1,6 +1,7 @@
-#SPDX-License-Identifier: MIT-0
+# SPDX-License-Identifier: MIT-0
 ---
-- hosts: localhost
+- name: Test ansible-role-vault
+  hosts: localhost
   remote_user: root
   roles:
-    - ansible-role-vault
+    - role: "{{ playbook_dir }}/.."

@@ -1,0 +1,5 @@
+# {{ ansible_managed }}
+# NIST 800-53: AU-4 (Audit Log Storage Capacity)
+# NIST 800-53: AU-6 (Audit Review, Analysis, and Reporting)
+# Forward Vault audit logs to remote syslog server
+local1.* @@{{ vault_rsyslog_host }}:{{ vault_rsyslog_port }}

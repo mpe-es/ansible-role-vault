@@ -1,0 +1,207 @@
+---
+###############################################################################
+# Filename: molecule/default/converge.yml
+# Role: ansible-role-vault
+# Summary: Converge playbook - tests template rendering, file deployment,
+#   and STIG hardening in container environment.
+#   Skips: preflight, repo, install, firewall, SELinux (require real infra)
+# Classification: UNCLASSIFIED
+###############################################################################
+- name: Converge
+  hosts: all
+  # Running as root in container - no become needed
+
+  vars:
+    # Import role variables
+    vault_config_dir: /etc/vault.d
+    vault_config_file: /etc/vault.d/vault.hcl
+    vault_env_file: /etc/vault.d/vault.env
+    vault_data_dir: /opt/vault/data
+    vault_tls_dir: /opt/vault/tls
+    vault_log_dir: /var/log/vault
+    vault_backup_dir: /opt/vault-backup
+    vault_binary: /usr/bin/vault
+    vault_user: vault
+    vault_group: vault
+    vault_config_dir_mode: '0750'
+    vault_config_file_mode: '0640'
+    vault_env_file_mode: '0640'
+    vault_data_dir_mode: '0750'
+    vault_tls_dir_mode: '0750'
+    vault_tls_file_mode: '0640'
+    vault_log_dir_mode: '0750'
+    vault_log_file_mode: '0600'
+    vault_backup_dir_mode: '0750'
+    vault_service_name: vault
+    # Role defaults
+    vault_edition: vault
+    vault_ui_enabled: true
+    vault_disable_mlock: false
+    vault_disable_performance_standby: true
+    vault_log_level: info
+    vault_listener_address: "0.0.0.0"
+    vault_listener_port: 8200
+    vault_tls_cert_file: /opt/vault/tls/tls.crt
+    vault_tls_key_file: /opt/vault/tls/tls.key
+    vault_tls_ca_file: /opt/vault/tls/ca.crt
+    vault_tls_min_version: tls12
+    vault_tls_max_version: tls13
+    vault_tls_cipher_suites: []
+    vault_tls_require_client_cert: false
+    vault_tls_disable_client_certs: false
+    vault_raft_node_id: vault-rhel9
+    vault_api_addr: "https://vault-rhel9:8200"
+    vault_cluster_addr: "https://vault-rhel9:8201"
+    vault_cluster_leader_addr: ""
+    vault_manage_tls: false
+    vault_manage_firewall: false
+    vault_manage_repo: false
+    vault_initialize: false
+    vault_hsm_enabled: false
+    vault_stig_logrotate_enabled: true
+    vault_stig_logrotate_days: 90
+    vault_stig_audit_backup_enabled: true
+    vault_stig_audit_backup_retention_days: 7
+    vault_stig_aide_check_enabled: false
+    vault_auto_unseal_enabled: false
+    vault_rsyslog_enabled: false
+
+  pre_tasks:
+    ###########################################################################
+    # Mock vault installation (no RPM/Satellite available in container)
+    ###########################################################################
+    - name: Create vault group
+      ansible.builtin.group:
+        name: vault
+        system: true
+
+    - name: Create vault user
+      ansible.builtin.user:
+        name: vault
+        group: vault
+        system: true
+        shell: /bin/false
+        create_home: false
+
+    - name: Create mock vault binary
+      ansible.builtin.copy:
+        content: |
+          #!/bin/bash
+          echo "mock vault binary"
+        dest: /usr/bin/vault
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Create mock vault systemd unit
+      ansible.builtin.copy:
+        content: |
+          [Unit]
+          Description=HashiCorp Vault
+          [Service]
+          ExecStart=/usr/bin/vault server -config=/etc/vault.d/vault.hcl
+          User=vault
+          Group=vault
+          CapabilityBoundingSet=CAP_IPC_LOCK
+          [Install]
+          WantedBy=multi-user.target
+        dest: /usr/lib/systemd/system/vault.service
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Create mock TLS certificates
+      block:
+        - name: Create TLS directory
+          ansible.builtin.file:
+            path: /opt/vault/tls
+            state: directory
+            owner: vault
+            group: vault
+            mode: '0750'
+
+        - name: Create mock cert files
+          ansible.builtin.copy:
+            content: "mock certificate"
+            dest: "{{ item }}"
+            owner: vault
+            group: vault
+            mode: '0640'
+          loop:
+            - /opt/vault/tls/tls.crt
+            - /opt/vault/tls/tls.key
+            - /opt/vault/tls/ca.crt
+
+  tasks:
+    ###########################################################################
+    # Phase 4: Directory structure (skip SELinux - disabled in container)
+    ###########################################################################
+    - name: Create Vault directories with STIG permissions
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: "{{ item.owner }}"
+        group: "{{ item.group }}"
+        mode: "{{ item.mode }}"
+      loop:
+        - { path: "{{ vault_config_dir }}", owner: "{{ vault_user }}", group: "{{ vault_group }}", mode: "{{ vault_config_dir_mode }}" }
+        - { path: "{{ vault_data_dir }}", owner: "{{ vault_user }}", group: "{{ vault_group }}", mode: "{{ vault_data_dir_mode }}" }
+        - { path: "{{ vault_tls_dir }}", owner: "{{ vault_user }}", group: "{{ vault_group }}", mode: "{{ vault_tls_dir_mode }}" }
+        - { path: "{{ vault_log_dir }}", owner: "{{ vault_user }}", group: "{{ vault_group }}", mode: "{{ vault_log_dir_mode }}" }
+        - { path: "{{ vault_backup_dir }}", owner: root, group: root, mode: "{{ vault_backup_dir_mode }}" }
+      loop_control:
+        label: "{{ item.path }} ({{ item.mode }})"
+
+    ###########################################################################
+    # Phase 6: Vault configuration (template rendering)
+    ###########################################################################
+    - name: Deploy Vault server configuration
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../../templates/vault.hcl.j2"
+        dest: "{{ vault_config_file }}"
+        owner: "{{ vault_user }}"
+        group: "{{ vault_group }}"
+        mode: "{{ vault_config_file_mode }}"
+
+    - name: Deploy Vault environment file
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../../templates/vault.env.j2"
+        dest: "{{ vault_env_file }}"
+        owner: "{{ vault_user }}"
+        group: "{{ vault_group }}"
+        mode: "{{ vault_env_file_mode }}"
+
+    ###########################################################################
+    # Phase 8: STIG hardening (logrotate, audit backup - skip AIDE, rsyslog)
+    ###########################################################################
+    - name: Deploy logrotate configuration for Vault
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../../templates/vault-logrotate.conf.j2"
+        dest: /etc/logrotate.d/vault
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Copy vault-audit-backup.sh script
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../../files/vault-audit-backup.sh"
+        dest: /usr/local/bin/vault-audit-backup.sh
+        owner: root
+        group: root
+        mode: '0750'
+
+    - name: Deploy vault-audit-backup.service
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../../templates/vault-audit-backup.service.j2"
+        dest: /usr/lib/systemd/system/vault-audit-backup.service
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Deploy vault-audit-backup.timer
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../../templates/vault-audit-backup.timer.j2"
+        dest: /usr/lib/systemd/system/vault-audit-backup.timer
+        owner: root
+        group: root
+        mode: '0644'

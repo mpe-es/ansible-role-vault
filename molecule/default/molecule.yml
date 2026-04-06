@@ -1,0 +1,38 @@
+---
+###############################################################################
+# Filename: molecule/default/molecule.yml
+# Role: ansible-role-vault
+# Summary: Default Molecule scenario - container-based testing with Podman
+# Classification: UNCLASSIFIED
+###############################################################################
+dependency:
+  name: galaxy
+  options:
+    requirements-file: requirements.yml
+
+driver:
+  name: podman
+
+platforms:
+  - name: vault-rhel9
+    image: registry.access.redhat.com/ubi9/ubi-init:latest
+    pre_build_image: true
+    privileged: true
+    command: /usr/sbin/init
+
+provisioner:
+  name: ansible
+  connection_options:
+    ansible_become: false
+  inventory:
+    host_vars:
+      vault-rhel9:
+        ansible_user: root
+        # Skip phases that require real infrastructure
+        vault_manage_repo: false
+        vault_manage_firewall: false
+        vault_manage_tls: false
+        vault_initialize: false
+
+verifier:
+  name: ansible

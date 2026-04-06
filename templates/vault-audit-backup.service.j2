@@ -1,0 +1,31 @@
+# {{ ansible_managed }}
+# RHEL 9 STIG V-205167, Application Security STIG V5R3
+[Unit]
+Description=Vault Audit Log Backup Service
+Documentation=man:vault(1)
+After=network.target vault.service auditd.service
+Requires=vault.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/vault-audit-backup.sh
+User=root
+Group=root
+
+# Security hardening
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths={{ vault_backup_dir }} {{ vault_log_dir }}
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=vault-audit-backup
+
+# Timeout (should complete in <60 seconds)
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target

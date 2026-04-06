@@ -2,11 +2,126 @@
 ###############################################################################
 # Filename: tasks/service.yml
 # Role: ansible-role-vault
-# Summary: Enable and start the Vault systemd service
-# Last Updated: 03 Apr 2026
+# Summary: Enable/start Vault service, optional initialization and unseal
 # Classification: UNCLASSIFIED
 ###############################################################################
-# TODO: Implement service management
-# - Enable vault service
-# - Start vault service
-# - Verify vault is listening on configured port
+
+###############################################################################
+# Service Startup
+###############################################################################
+- name: Enable and start Vault service
+  ansible.builtin.systemd_service:
+    name: "{{ vault_service_name }}"
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Wait for Vault to be listening
+  ansible.builtin.wait_for:
+    port: "{{ vault_listener_port }}"
+    host: 127.0.0.1
+    timeout: 30
+    delay: 2
+
+###############################################################################
+# Vault Initialization (optional, for greenfield deployments)
+###############################################################################
+- name: Initialize Vault
+  when: vault_initialize | bool
+  block:
+    - name: Check Vault initialization status
+      ansible.builtin.command:
+        cmd: >-
+          {{ vault_binary }} status -format=json
+      register: __vault_status
+      failed_when: false
+      changed_when: false
+      environment:
+        VAULT_ADDR: "https://127.0.0.1:{{ vault_listener_port }}"
+        VAULT_CACERT: "{{ vault_tls_ca_file }}"
+
+    - name: Parse Vault status
+      ansible.builtin.set_fact:
+        __vault_initialized: "{{ (__vault_status.stdout | from_json).initialized | default(false) }}"
+      when: __vault_status.rc in [0, 1, 2]
+
+    - name: Run vault operator init
+      ansible.builtin.command:
+        cmd: >-
+          {{ vault_binary }} operator init
+          -key-shares={{ vault_key_shares }}
+          -key-threshold={{ vault_key_threshold }}
+          -format=json
+      register: __vault_init_output
+      when:
+        - __vault_initialized is defined
+        - not __vault_initialized | bool
+      environment:
+        VAULT_ADDR: "https://127.0.0.1:{{ vault_listener_port }}"
+        VAULT_CACERT: "{{ vault_tls_ca_file }}"
+      no_log: true
+      changed_when: __vault_init_output.rc == 0
+
+    - name: Store unseal keys and root token
+      ansible.builtin.template:
+        src: tokens.env.j2
+        dest: /etc/vault.d/tokens.env
+        owner: root
+        group: root
+        mode: '0600'
+      when: __vault_init_output is changed
+      no_log: true
+      vars:
+        __vault_init_data: "{{ __vault_init_output.stdout | from_json }}"
+
+    - name: Unseal Vault after initialization (Shamir)
+      ansible.builtin.command:
+        cmd: "{{ vault_binary }} operator unseal {{ item }}"
+      loop: "{{ (__vault_init_output.stdout | from_json).unseal_keys_b64[:vault_key_threshold] }}"
+      when:
+        - __vault_init_output is changed
+        - vault_auto_unseal_enabled | bool
+        - not vault_hsm_enabled | bool
+      environment:
+        VAULT_ADDR: "https://127.0.0.1:{{ vault_listener_port }}"
+        VAULT_CACERT: "{{ vault_tls_ca_file }}"
+      no_log: true
+      changed_when: true
+
+    - name: Enable file audit device
+      ansible.builtin.command:
+        cmd: >-
+          {{ vault_binary }} audit enable file
+          file_path={{ vault_log_dir }}/vault_audit.log
+      when: __vault_init_output is changed
+      environment:
+        VAULT_ADDR: "https://127.0.0.1:{{ vault_listener_port }}"
+        VAULT_CACERT: "{{ vault_tls_ca_file }}"
+        VAULT_TOKEN: "{{ (__vault_init_output.stdout | from_json).root_token }}"
+      no_log: true
+      changed_when: true
+
+    - name: Enable syslog audit device
+      ansible.builtin.command:
+        cmd: >-
+          {{ vault_binary }} audit enable syslog
+          tag=vault facility=LOCAL1
+      when: __vault_init_output is changed
+      environment:
+        VAULT_ADDR: "https://127.0.0.1:{{ vault_listener_port }}"
+        VAULT_CACERT: "{{ vault_tls_ca_file }}"
+        VAULT_TOKEN: "{{ (__vault_init_output.stdout | from_json).root_token }}"
+      no_log: true
+      changed_when: true
+
+###############################################################################
+# Enable auto-unseal service (after init completes)
+###############################################################################
+- name: Enable vault-unseal.service
+  ansible.builtin.systemd_service:
+    name: vault-unseal.service
+    enabled: true
+    daemon_reload: true
+  when:
+    - vault_auto_unseal_enabled | bool
+    - not vault_hsm_enabled | bool
