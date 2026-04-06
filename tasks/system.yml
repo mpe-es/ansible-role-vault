@@ -2,13 +2,63 @@
 ###############################################################################
 # Filename: tasks/system.yml
 # Role: ansible-role-vault
-# Summary: System preparation - directories, permissions, user/group
+# Summary: System preparation - directories, permissions, SELinux contexts
 # NIST 800-53: AC-6 (Least Privilege)
-# Last Updated: 03 Apr 2026
 # Classification: UNCLASSIFIED
 ###############################################################################
-# TODO: Implement system preparation
-# - Ensure vault user/group exist with correct properties
-# - Create required directories (/opt/vault/data, /opt/vault/tls, etc.)
-# - Set STIG-compliant ownership and permissions
-# - Configure SELinux contexts for Vault paths
+
+###############################################################################
+# Directory Structure (STIG-hardened permissions)
+###############################################################################
+- name: Create Vault directories with STIG permissions
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - path: "{{ vault_config_dir }}"
+      owner: "{{ vault_user }}"
+      group: "{{ vault_group }}"
+      mode: "{{ vault_config_dir_mode }}"
+    - path: "{{ vault_data_dir }}"
+      owner: "{{ vault_user }}"
+      group: "{{ vault_group }}"
+      mode: "{{ vault_data_dir_mode }}"
+    - path: "{{ vault_tls_dir }}"
+      owner: "{{ vault_user }}"
+      group: "{{ vault_group }}"
+      mode: "{{ vault_tls_dir_mode }}"
+    - path: "{{ vault_log_dir }}"
+      owner: "{{ vault_user }}"
+      group: "{{ vault_group }}"
+      mode: "{{ vault_log_dir_mode }}"
+    - path: "{{ vault_backup_dir }}"
+      owner: root
+      group: root
+      mode: "{{ vault_backup_dir_mode }}"
+  loop_control:
+    label: "{{ item.path }} ({{ item.mode }})"
+
+###############################################################################
+# SELinux File Contexts
+###############################################################################
+- name: Set SELinux file contexts for Vault paths
+  community.general.sefcontext:
+    target: "{{ item.path }}"
+    setype: "{{ item.setype }}"
+    seuser: "{{ item.seuser }}"
+    state: present
+  loop: "{{ vault_selinux_contexts }}"
+  loop_control:
+    label: "{{ item.path }} -> {{ item.seuser }}:{{ item.setype }}"
+
+- name: Apply SELinux file contexts
+  ansible.builtin.command:
+    cmd: "restorecon -Rv {{ item.path | regex_replace('\\(.*\\)\\?$', '') }}"
+  loop: "{{ vault_selinux_contexts }}"
+  loop_control:
+    label: "{{ item.path }}"
+  register: __vault_restorecon
+  changed_when: __vault_restorecon.stdout | length > 0
