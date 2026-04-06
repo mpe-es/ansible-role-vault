@@ -1,0 +1,15 @@
+{{ ansible_managed | comment('#', prefix='', postfix='') }}
+[Unit]
+Description=Auto-Unseal HashiCorp Vault Service
+After=network.target
+After=vault.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash /usr/local/bin/vault-unseal.sh
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+User={{ vault_user }}
+Group={{ vault_group }}
+
+[Install]
+WantedBy=multi-user.target
