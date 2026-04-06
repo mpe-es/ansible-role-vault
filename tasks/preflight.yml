@@ -2,13 +2,153 @@
 ###############################################################################
 # Filename: tasks/preflight.yml
 # Role: ansible-role-vault
-# Summary: Pre-flight validation tasks to verify target system requirements
-# Last Updated: 03 Apr 2026
+# Summary: Pre-flight validation - verify target meets Vault prerequisites
 # Classification: UNCLASSIFIED
 ###############################################################################
-# TODO: Implement pre-flight checks
-# - Verify RHEL-based OS (ansible_os_family == 'RedHat')
-# - Verify supported OS version (EL 8 or 9)
-# - Verify FIPS mode status
-# - Verify sufficient disk space for Raft storage
-# - Verify required ports are not already in use
+
+###############################################################################
+# OS Family and Version
+###############################################################################
+- name: Verify OS family is RedHat
+  ansible.builtin.assert:
+    that:
+      - ansible_os_family == 'RedHat'
+    fail_msg: >-
+      This role requires a Red Hat Enterprise Linux (or compatible) system.
+      Detected OS family: {{ ansible_os_family }}
+    success_msg: "OS family: {{ ansible_os_family }}"
+
+- name: Verify supported OS major version (EL 8 or 9)
+  ansible.builtin.assert:
+    that:
+      - ansible_distribution_major_version in ['8', '9']
+    fail_msg: >-
+      This role supports RHEL 8 and 9 only.
+      Detected version: {{ ansible_distribution }} {{ ansible_distribution_version }}
+    success_msg: "OS version: {{ ansible_distribution }} {{ ansible_distribution_version }}"
+
+###############################################################################
+# FIPS Mode - NIST 800-53: SC-13 (Cryptographic Protection)
+###############################################################################
+- name: Check FIPS mode status
+  ansible.builtin.slurp:
+    src: /proc/sys/crypto/fips_enabled
+  register: __vault_fips_status
+
+- name: Verify FIPS mode is enabled
+  ansible.builtin.assert:
+    that:
+      - (__vault_fips_status.content | b64decode | trim) == '1'
+    fail_msg: >-
+      FIPS mode is not enabled. Vault in STIG-compliant environments
+      requires FIPS 140-3 validated cryptographic modules.
+      Enable FIPS mode with: fips-mode-setup --enable && reboot
+    success_msg: "FIPS mode: enabled"
+
+###############################################################################
+# SELinux - Must be enforcing
+###############################################################################
+- name: Verify SELinux is enforcing
+  ansible.builtin.assert:
+    that:
+      - ansible_selinux.status == 'enabled'
+      - ansible_selinux.mode == 'enforcing'
+    fail_msg: >-
+      SELinux must be in enforcing mode. Current status: {{ ansible_selinux.status }},
+      mode: {{ ansible_selinux.mode | default('unknown') }}
+    success_msg: "SELinux: enforcing"
+
+###############################################################################
+# Chrony NTP Synchronization
+###############################################################################
+- name: Check chrony synchronization status
+  ansible.builtin.command:
+    cmd: chronyc tracking
+  register: __vault_chrony_status
+  changed_when: false
+
+- name: Verify NTP is synchronized
+  ansible.builtin.assert:
+    that:
+      - "'Leap status     : Normal' in __vault_chrony_status.stdout"
+    fail_msg: >-
+      Chrony NTP is not synchronized. Vault Raft consensus and TLS
+      certificate validation require accurate time.
+      Check chrony configuration: chronyc tracking
+    success_msg: "Chrony NTP: synchronized"
+
+###############################################################################
+# Firewalld - Must be running
+###############################################################################
+- name: Check firewalld service status
+  ansible.builtin.systemd_service:
+    name: firewalld
+  register: __vault_firewalld_status
+
+- name: Verify firewalld is running
+  ansible.builtin.assert:
+    that:
+      - __vault_firewalld_status.status.ActiveState == 'active'
+    fail_msg: >-
+      firewalld is not running. This role manages Vault firewall rules
+      via ansible.posix.firewalld. Start firewalld: systemctl start firewalld
+    success_msg: "firewalld: running"
+
+###############################################################################
+# RHSM Subscription
+###############################################################################
+- name: Check RHSM subscription status
+  ansible.builtin.command:
+    cmd: subscription-manager identity
+  register: __vault_rhsm_status
+  changed_when: false
+  failed_when: false
+
+- name: Verify RHSM subscription is active
+  ansible.builtin.assert:
+    that:
+      - __vault_rhsm_status.rc == 0
+    fail_msg: >-
+      Red Hat Subscription Manager is not registered. The system must
+      have an active subscription for Satellite repository access.
+      Register with: subscription-manager register
+    success_msg: "RHSM: registered"
+
+###############################################################################
+# Port Availability
+###############################################################################
+- name: Check if Vault API port is already in use
+  ansible.builtin.wait_for:
+    port: "{{ vault_listener_port }}"
+    state: stopped
+    timeout: 1
+  register: __vault_port_check
+  failed_when: false
+
+- name: Verify Vault API port is available
+  ansible.builtin.assert:
+    that:
+      - __vault_port_check is not failed
+    fail_msg: >-
+      Port {{ vault_listener_port }} is already in use. Vault cannot bind
+      to an occupied port. Check with: ss -tlnp | grep {{ vault_listener_port }}
+    success_msg: "Port {{ vault_listener_port }}: available"
+  when: __vault_port_check is defined
+
+###############################################################################
+# DNS Resolution (warning only)
+###############################################################################
+- name: Test DNS resolution for inventory hostname
+  ansible.builtin.command:
+    cmd: "getent hosts {{ ansible_fqdn }}"
+  register: __vault_dns_check
+  changed_when: false
+  failed_when: false
+
+- name: Warn if DNS resolution fails
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: DNS resolution failed for {{ ansible_fqdn }}.
+      Vault cluster communication relies on FQDN resolution.
+      Verify DNS configuration or use IP-based addresses.
+  when: __vault_dns_check.rc != 0
