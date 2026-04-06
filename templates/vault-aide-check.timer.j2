@@ -1,0 +1,15 @@
+{{ ansible_managed | comment('#', prefix='', postfix='') }}
+# RHEL 9 STIG V-257842, Application Security STIG V-263644
+[Unit]
+Description=AIDE File Integrity Check Timer (Daily at 03:00 UTC)
+Documentation=man:systemd.timer(5)
+Requires=vault-aide-check.service
+
+[Timer]
+OnCalendar=*-*-* 03:00:00
+OnBootSec=15min
+RandomizedDelaySec=15min
+Persistent=yes
+
+[Install]
+WantedBy=timers.target

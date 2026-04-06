@@ -1,0 +1,30 @@
+{{ ansible_managed | comment('#', prefix='', postfix='') }}
+# RHEL 9 STIG V-257842, Application Security STIG V-263644
+[Unit]
+Description=AIDE File Integrity Check for Vault Server
+Documentation=man:aide(1)
+After=network.target vault.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/aide --check
+User=root
+Group=root
+
+# Security hardening
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadOnlyPaths=/opt/vault {{ vault_config_dir }}
+
+# Logging to journald
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=vault-aide-check
+
+# Timeout (AIDE can take several minutes)
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target
