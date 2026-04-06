@@ -1,0 +1,15 @@
+{{ ansible_managed | comment('#', prefix='', postfix='') }}
+# NIST 800-53: AU-4 (Audit Log Storage Capacity)
+# DISA STIG: Minimum 90-day retention
+{{ vault_log_dir }}/vault_audit.log {
+    daily
+    rotate {{ vault_stig_logrotate_days }}
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0600 {{ vault_user }} {{ vault_group }}
+    postrotate
+        /usr/bin/systemctl reload vault 2>/dev/null || true
+    endscript
+}
