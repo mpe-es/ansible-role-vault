@@ -340,3 +340,155 @@ argument_specs:
           - Remote syslog target port.
         type: int
         default: 514
+
+      ################################################################
+      # Vault Edition
+      ################################################################
+      vault_edition:
+        description:
+          - Vault RPM package name to install.
+          - "'vault' for Community (OSS), 'vault-enterprise' for Enterprise."
+        type: str
+        default: "vault"
+        choices:
+          - vault
+          - vault-enterprise
+
+      ################################################################
+      # TLS Maximum Version
+      ################################################################
+      vault_tls_max_version:
+        description:
+          - Maximum TLS version for the Vault listener.
+        type: str
+        default: "tls13"
+        choices:
+          - tls12
+          - tls13
+
+      ################################################################
+      # TLS Certificate Source
+      ################################################################
+      vault_tls_source:
+        description:
+          - Source for TLS certificates.
+          - "'file' copies from controller; 'vault_pki' generates via Vault PKI engine."
+        type: str
+        default: "file"
+        choices:
+          - file
+          - vault_pki
+
+      vault_pki_mount:
+        description:
+          - Vault PKI secrets engine mount path.
+          - Only used when vault_tls_source is 'vault_pki'.
+        type: str
+        default: ""
+
+      vault_pki_role:
+        description:
+          - Vault PKI issuing role name.
+          - Only used when vault_tls_source is 'vault_pki'.
+        type: str
+        default: ""
+
+      ################################################################
+      # Vault Initialization
+      ################################################################
+      vault_initialize:
+        description:
+          - Run vault operator init on first deploy.
+          - Keys stored in /etc/vault.d/tokens.env (mode 0600, root:root).
+          - "Set to true for greenfield deployments only."
+        type: bool
+        default: false
+
+      ################################################################
+      # HSM / PKCS#11 Configuration (Enterprise Only)
+      ################################################################
+      vault_hsm_enabled:
+        description:
+          - Enable PKCS#11 seal stanza in vault.hcl.
+          - Requires Vault Enterprise.
+        type: bool
+        default: false
+
+      vault_configure_hsm_client:
+        description:
+          - Install HSM client libraries from Satellite mirror.
+        type: bool
+        default: false
+
+      vault_hsm_client_package:
+        description:
+          - HSM client RPM package name available in Satellite.
+        type: str
+        default: ""
+
+      vault_hsm_lib_path:
+        description:
+          - Path to the PKCS#11 shared library on the target.
+        type: path
+        default: ""
+
+      vault_hsm_slot:
+        description:
+          - HSM slot number (decimal string).
+          - Mutually exclusive with vault_hsm_token_label.
+        type: str
+        default: ""
+
+      vault_hsm_token_label:
+        description:
+          - HSM token label.
+          - Mutually exclusive with vault_hsm_slot.
+        type: str
+        default: ""
+
+      vault_hsm_pin:
+        description:
+          - HSM PIN for PKCS#11 login.
+          - Should be provided via AAP credential, not stored in playbook.
+        type: str
+        default: ""
+
+      vault_hsm_key_label:
+        description:
+          - Label for the encryption key on the HSM.
+        type: str
+        default: ""
+
+      vault_hsm_hmac_key_label:
+        description:
+          - Label for the HMAC key on the HSM.
+          - Required when vault_hsm_enabled is true.
+        type: str
+        default: ""
+
+      vault_hsm_mechanism:
+        description:
+          - "Encryption mechanism for PKCS#11 (hex with 0x prefix)."
+          - "Common: 0x1087 (AES-GCM), 0x1085 (AES-CBC-PAD), 0x0009 (RSA-OAEP)."
+        type: str
+        default: ""
+
+      vault_hsm_hmac_mechanism:
+        description:
+          - "HMAC mechanism for PKCS#11."
+          - "Only 0x0251 (CKM_SHA256_HMAC) is currently supported."
+        type: str
+        default: "0x0251"
+
+      vault_hsm_generate_key:
+        description:
+          - Auto-generate encryption and HMAC keys on HSM during initialization.
+          - Disable after initial setup for security.
+        type: bool
+        default: false
+
+      vault_hsm_max_parallel:
+        description:
+          - Maximum concurrent requests to the HSM.
+        type: int
+        default: 1

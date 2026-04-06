@@ -2,13 +2,99 @@
 ###############################################################################
 # Filename: tasks/tls.yml
 # Role: ansible-role-vault
-# Summary: Deploy TLS certificates for Vault listener and Raft cluster
+# Summary: Deploy TLS certificates for Vault listener
 # NIST 800-53: SC-8 (Transmission Confidentiality and Integrity)
-# Last Updated: 03 Apr 2026
 # Classification: UNCLASSIFIED
 ###############################################################################
-# TODO: Implement TLS certificate deployment
-# - Copy TLS cert, key, and CA from controller to target
-# - Set STIG-compliant ownership (vault:vault) and permissions (0640)
-# - Set SELinux context on TLS files
-# - Update CA trust store if CA cert provided
+
+###############################################################################
+# File-based TLS deployment (enclave CA: ADCS, RHCS, etc.)
+###############################################################################
+- name: Deploy TLS certificates from controller (file-based)
+  when: vault_tls_source == 'file'
+  block:
+    - name: Copy TLS certificate
+      ansible.builtin.copy:
+        src: "{{ vault_tls_src_cert }}"
+        dest: "{{ vault_tls_cert_file }}"
+        owner: "{{ vault_user }}"
+        group: "{{ vault_group }}"
+        mode: "{{ vault_tls_file_mode }}"
+      notify: Restart vault
+
+    - name: Copy TLS private key
+      ansible.builtin.copy:
+        src: "{{ vault_tls_src_key }}"
+        dest: "{{ vault_tls_key_file }}"
+        owner: "{{ vault_user }}"
+        group: "{{ vault_group }}"
+        mode: "{{ vault_tls_file_mode }}"
+      no_log: true
+      notify: Restart vault
+
+    - name: Copy CA certificate
+      ansible.builtin.copy:
+        src: "{{ vault_tls_src_ca }}"
+        dest: "{{ vault_tls_ca_file }}"
+        owner: "{{ vault_user }}"
+        group: "{{ vault_group }}"
+        mode: "{{ vault_tls_file_mode }}"
+      notify: Restart vault
+
+###############################################################################
+# Vault PKI-based TLS deployment (requires existing Vault infrastructure)
+###############################################################################
+- name: Generate TLS certificate via Vault PKI engine
+  when: vault_tls_source == 'vault_pki'
+  block:
+    - name: Generate certificate from Vault PKI
+      community.hashi_vault.vault_pki_generate_certificate:
+        role_name: "{{ vault_pki_role }}"
+        common_name: "{{ ansible_fqdn }}"
+        engine_mount_point: "{{ vault_pki_mount }}"
+      register: __vault_pki_cert
+
+    - name: Write PKI certificate to target
+      ansible.builtin.copy:
+        content: "{{ __vault_pki_cert.data.certificate }}"
+        dest: "{{ vault_tls_cert_file }}"
+        owner: "{{ vault_user }}"
+        group: "{{ vault_group }}"
+        mode: "{{ vault_tls_file_mode }}"
+      notify: Restart vault
+
+    - name: Write PKI private key to target
+      ansible.builtin.copy:
+        content: "{{ __vault_pki_cert.data.private_key }}"
+        dest: "{{ vault_tls_key_file }}"
+        owner: "{{ vault_user }}"
+        group: "{{ vault_group }}"
+        mode: "{{ vault_tls_file_mode }}"
+      no_log: true
+      notify: Restart vault
+
+    - name: Write PKI CA chain to target
+      ansible.builtin.copy:
+        content: "{{ __vault_pki_cert.data.ca_chain | join('\n') }}"
+        dest: "{{ vault_tls_ca_file }}"
+        owner: "{{ vault_user }}"
+        group: "{{ vault_group }}"
+        mode: "{{ vault_tls_file_mode }}"
+      notify: Restart vault
+
+###############################################################################
+# Update system CA trust store
+###############################################################################
+- name: Copy CA certificate to system trust anchors
+  ansible.builtin.copy:
+    src: "{{ vault_tls_ca_file }}"
+    dest: /etc/pki/ca-trust/source/anchors/vault-ca.crt
+    owner: root
+    group: root
+    mode: '0644'
+    remote_src: true
+
+- name: Update system CA trust store
+  ansible.builtin.command:
+    cmd: update-ca-trust
+  changed_when: false

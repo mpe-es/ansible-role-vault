@@ -1,0 +1,15 @@
+# {{ ansible_managed }}
+# RHEL 9 STIG V-205167, Application Security STIG V5R3
+[Unit]
+Description=Vault Audit Log Backup Timer (Daily at 02:00 UTC)
+Documentation=man:systemd.timer(5)
+Requires=vault-audit-backup.service
+
+[Timer]
+OnCalendar=*-*-* 02:00:00
+OnBootSec=5min
+RandomizedDelaySec=15min
+Persistent=yes
+
+[Install]
+WantedBy=timers.target
