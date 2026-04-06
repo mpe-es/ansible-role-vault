@@ -3,7 +3,7 @@
 # Filename: .ansible-lint
 # Role: ansible-role-vault
 # Summary: Ansible linting configuration for CI/CD pipeline
-# Last Updated: 03 Apr 2026
+# Last Updated: 06 Apr 2026
 # Classification: UNCLASSIFIED
 ###############################################################################
 
@@ -24,11 +24,12 @@ skip_list:
   # Vault initialization is a sequential one-shot flow, not a handler pattern.
   # Post-init tasks (store keys, enable audit) run once in order, not reactively.
   - no-handler
+  # Role is deployed from Git paths on private GitLab in airgap, not Galaxy.
+  - role-name
 
 # Warn but don't fail on these
 warn_list:
   - experimental
-  - role-name
 
 # Exclude paths from linting
 exclude_paths:
