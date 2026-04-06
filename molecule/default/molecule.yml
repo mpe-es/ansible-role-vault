@@ -18,14 +18,12 @@ platforms:
     image: registry.access.redhat.com/ubi9/ubi-init:latest
     pre_build_image: true
     privileged: true
-    cgroupns_mode: host
+    command: /usr/sbin/init
     tmpfs:
-      /run: ""
-      /tmp: ""
-    capabilities:
-      - SYS_ADMIN
-      - AUDIT_WRITE
-      - AUDIT_CONTROL
+      /run: rw
+      /tmp: rw
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:ro
 
 provisioner:
   name: ansible
