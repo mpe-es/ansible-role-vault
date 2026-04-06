@@ -21,6 +21,9 @@ skip_list:
   - command-instead-of-module
   # Some STIG tasks require specific line formats
   - risky-file-permissions
+  # Vault initialization is a sequential one-shot flow, not a handler pattern.
+  # Post-init tasks (store keys, enable audit) run once in order, not reactively.
+  - no-handler
 
 # Warn but don't fail on these
 warn_list:
