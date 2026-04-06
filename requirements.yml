@@ -15,6 +15,11 @@ collections:
   - name: ansible.posix
     version: ">=1.6.0"
 
+  # SELinux file context management (community.general.sefcontext)
+  # Required for: tasks/system.yml
+  - name: community.general
+    version: ">=9.0.0"
+
   # HashiCorp Vault modules and lookup plugins
   # Required for: post-install Vault initialization and configuration
   # (vault_init, vault_write, vault_read, hashi_vault lookup)
