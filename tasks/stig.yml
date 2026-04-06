@@ -3,13 +3,151 @@
 # Filename: tasks/stig.yml
 # Role: ansible-role-vault
 # Summary: STIG hardening tasks for HashiCorp Vault
-# Last Updated: 03 Apr 2026
 # Classification: UNCLASSIFIED
 ###############################################################################
-# TODO: Implement STIG hardening
-# - Deploy logrotate configuration (vault_stig_logrotate_enabled)
-# - Deploy audit backup service/timer (vault_stig_audit_backup_enabled)
-# - Deploy AIDE integrity check service/timer (vault_stig_aide_check_enabled)
-# - Deploy vault-unseal service (vault_auto_unseal_enabled)
-# - Configure rsyslog forwarding (vault_rsyslog_enabled)
-# - Set STIG-compliant file permissions on all Vault paths
+
+###############################################################################
+# Logrotate Configuration
+# NIST 800-53: AU-4 (Audit Log Storage Capacity)
+# DISA STIG: Minimum 90-day retention
+###############################################################################
+- name: Deploy logrotate configuration for Vault
+  ansible.builtin.template:
+    src: vault-logrotate.conf.j2
+    dest: /etc/logrotate.d/vault
+    owner: root
+    group: root
+    mode: '0644'
+  when: vault_stig_logrotate_enabled | bool
+
+###############################################################################
+# Audit Backup Service and Timer
+# RHEL 9 STIG V-205167: Backup audit records
+###############################################################################
+- name: Deploy audit backup components
+  when: vault_stig_audit_backup_enabled | bool
+  block:
+    - name: Copy vault-audit-backup.sh script
+      ansible.builtin.copy:
+        src: vault-audit-backup.sh
+        dest: /usr/local/bin/vault-audit-backup.sh
+        owner: root
+        group: root
+        mode: '0750'
+
+    - name: Deploy vault-audit-backup.service
+      ansible.builtin.template:
+        src: vault-audit-backup.service.j2
+        dest: /usr/lib/systemd/system/vault-audit-backup.service
+        owner: root
+        group: root
+        mode: '0644'
+      notify: Reload systemd
+
+    - name: Deploy vault-audit-backup.timer
+      ansible.builtin.template:
+        src: vault-audit-backup.timer.j2
+        dest: /usr/lib/systemd/system/vault-audit-backup.timer
+        owner: root
+        group: root
+        mode: '0644'
+      notify: Reload systemd
+
+    - name: Enable and start vault-audit-backup.timer
+      ansible.builtin.systemd_service:
+        name: vault-audit-backup.timer
+        enabled: true
+        state: started
+        daemon_reload: true
+
+###############################################################################
+# AIDE File Integrity Check
+# RHEL 9 STIG V-257842, Application Security STIG V-263644
+###############################################################################
+- name: Deploy AIDE integrity check components
+  when: vault_stig_aide_check_enabled | bool
+  block:
+    - name: Deploy vault-aide-check.service
+      ansible.builtin.template:
+        src: vault-aide-check.service.j2
+        dest: /usr/lib/systemd/system/vault-aide-check.service
+        owner: root
+        group: root
+        mode: '0644'
+      notify: Reload systemd
+
+    - name: Deploy vault-aide-check.timer
+      ansible.builtin.template:
+        src: vault-aide-check.timer.j2
+        dest: /usr/lib/systemd/system/vault-aide-check.timer
+        owner: root
+        group: root
+        mode: '0644'
+      notify: Reload systemd
+
+    - name: Enable and start vault-aide-check.timer
+      ansible.builtin.systemd_service:
+        name: vault-aide-check.timer
+        enabled: true
+        state: started
+        daemon_reload: true
+
+    - name: Check if AIDE database exists
+      ansible.builtin.stat:
+        path: /var/lib/aide/aide.db.gz
+      register: __vault_aide_db
+
+    - name: Initialize AIDE database if not present
+      ansible.builtin.command:
+        cmd: aide --init
+      when: not __vault_aide_db.stat.exists
+      changed_when: true
+
+    - name: Move new AIDE database to active location
+      ansible.builtin.copy:
+        src: /var/lib/aide/aide.db.new.gz
+        dest: /var/lib/aide/aide.db.gz
+        remote_src: true
+        owner: root
+        group: root
+        mode: '0600'
+      when: not __vault_aide_db.stat.exists
+
+###############################################################################
+# Auto-Unseal Service (Community edition with Shamir keys)
+###############################################################################
+- name: Deploy auto-unseal components
+  when:
+    - vault_auto_unseal_enabled | bool
+    - not vault_hsm_enabled | bool
+  block:
+    - name: Copy vault-unseal.sh script
+      ansible.builtin.copy:
+        src: vault-unseal.sh
+        dest: /usr/local/bin/vault-unseal.sh
+        owner: "{{ vault_user }}"
+        group: "{{ vault_group }}"
+        mode: '0750'
+
+    - name: Deploy vault-unseal.service
+      ansible.builtin.template:
+        src: vault-unseal.service.j2
+        dest: /usr/lib/systemd/system/vault-unseal.service
+        owner: root
+        group: root
+        mode: '0644'
+      notify: Reload systemd
+
+###############################################################################
+# Rsyslog Forwarding
+# NIST 800-53: AU-4, AU-6
+###############################################################################
+- name: Deploy rsyslog forwarding configuration
+  ansible.builtin.template:
+    src: rsyslog-vault.conf.j2
+    dest: /etc/rsyslog.d/10-vault-remote.conf
+    owner: root
+    group: root
+    mode: '0644'
+  when: vault_rsyslog_enabled | bool
+  notify: Restart rsyslog
