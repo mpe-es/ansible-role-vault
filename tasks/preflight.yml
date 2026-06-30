@@ -18,12 +18,12 @@
       Detected OS family: {{ ansible_os_family }}
     success_msg: "OS family: {{ ansible_os_family }}"
 
-- name: Verify supported OS major version (EL 8 or 9)
+- name: Verify supported OS major version (EL 8, 9, or 10)
   ansible.builtin.assert:
     that:
-      - ansible_distribution_major_version in ['8', '9']
+      - ansible_distribution_major_version in ['8', '9', '10']
     fail_msg: >-
-      This role supports RHEL 8 and 9 only.
+      This role supports RHEL/EL 8, 9, and 10 only.
       Detected version: {{ ansible_distribution }} {{ ansible_distribution_version }}
     success_msg: "OS version: {{ ansible_distribution }} {{ ansible_distribution_version }}"
 

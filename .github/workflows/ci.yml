@@ -103,7 +103,7 @@ jobs:
   # Molecule Test Stage
   ###########################################################
   molecule:
-    name: Molecule Test
+    name: Molecule Test (${{ matrix.el.name }})
     runs-on: ubuntu-latest
     needs: syntax
     strategy:
@@ -111,6 +111,16 @@ jobs:
       matrix:
         scenario:
           - default
+        el:
+          - name: el8
+            image: registry.access.redhat.com/ubi8/ubi-init:latest
+            python: /usr/bin/python3.11
+          - name: el9
+            image: registry.access.redhat.com/ubi9/ubi-init:latest
+            python: /usr/bin/python3
+          - name: el10
+            image: registry.access.redhat.com/ubi10/ubi-init:latest
+            python: /usr/bin/python3
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
@@ -152,18 +162,20 @@ jobs:
 
       - name: Test Podman container creation
         run: |
-          # Pull and test official Red Hat UBI9-init (SCRM compliant)
-          podman pull registry.access.redhat.com/ubi9/ubi-init:latest
+          # Pull and test official Red Hat UBI init image (SCRM-friendly base)
+          podman pull "${MOLECULE_IMAGE}"
           # Test basic container creation with systemd
           podman run --rm -d --name test-systemd \
             --privileged \
             --cgroupns=host \
             --tmpfs /run --tmpfs /tmp \
             --cap-add SYS_ADMIN --cap-add AUDIT_WRITE --cap-add AUDIT_CONTROL \
-            registry.access.redhat.com/ubi9/ubi-init:latest /usr/sbin/init
+            "${MOLECULE_IMAGE}" /usr/sbin/init
           sleep 5
           podman exec test-systemd systemctl status || true
           podman stop test-systemd || true
+        env:
+          MOLECULE_IMAGE: ${{ matrix.el.image }}
 
       - name: Run Molecule tests
         run: molecule test --scenario-name ${{ matrix.scenario }}
@@ -171,6 +183,8 @@ jobs:
           PY_COLORS: '1'
           ANSIBLE_FORCE_COLOR: '1'
           ANSIBLE_VERBOSITY: '3'
+          MOLECULE_IMAGE: ${{ matrix.el.image }}
+          MOLECULE_PYTHON: ${{ matrix.el.python }}
 
   ###########################################################
   # Security Scan Stage
@@ -225,7 +239,8 @@ jobs:
         run: |
           if [[ "${{ needs.lint.result }}" == "failure" ]] || \
              [[ "${{ needs.syntax.result }}" == "failure" ]] || \
-             [[ "${{ needs.molecule.result }}" == "failure" ]]; then
+             [[ "${{ needs.molecule.result }}" == "failure" ]] || \
+             [[ "${{ needs.security.result }}" == "failure" ]]; then
             echo "One or more jobs failed"
             exit 1
           fi
