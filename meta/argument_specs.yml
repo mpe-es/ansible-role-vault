@@ -301,7 +301,7 @@ argument_specs:
       vault_auto_unseal_enabled:
         description:
           - Deploy vault-unseal systemd service for automatic unsealing after reboot.
-          - Uses Shamir key shares stored in /etc/vault.d/tokens.env.
+          - Uses Shamir key shares stored in /etc/vault.d/tokens.env and validates TLS with vault_tls_ca_file.
         type: bool
         default: false
 
@@ -399,10 +399,37 @@ argument_specs:
       vault_initialize:
         description:
           - Run vault operator init on first deploy.
-          - Keys stored in /etc/vault.d/tokens.env (mode 0600, root:root).
+          - Keys can be stored in /etc/vault.d/tokens.env, captured on the controller, or both.
           - "Set to true for greenfield deployments only."
         type: bool
         default: false
+
+      vault_init_store_target:
+        description:
+          - Store unseal keys and the root token on the target in /etc/vault.d/tokens.env.
+          - Disable only when a controller/AAP capture path or another approved handoff is configured.
+        type: bool
+        default: true
+
+      vault_init_controller_capture_enabled:
+        description:
+          - Capture raw vault operator init JSON on the Ansible controller/AAP execution environment.
+          - The artifact contains unseal keys and the root token and must be moved to an approved secret store.
+        type: bool
+        default: false
+
+      vault_init_controller_output_path:
+        description:
+          - Controller-side path for captured Vault initialization JSON.
+          - Required when vault_init_controller_capture_enabled is true.
+        type: path
+        default: ""
+
+      vault_init_controller_output_mode:
+        description:
+          - File mode for controller-side captured Vault initialization JSON.
+        type: str
+        default: "0600"
 
       ################################################################
       # HSM / PKCS#11 Configuration (Enterprise Only)
