@@ -237,11 +237,11 @@ jobs:
     steps:
       - name: Check job results
         run: |
-          if [[ "${{ needs.lint.result }}" == "failure" ]] || \
-             [[ "${{ needs.syntax.result }}" == "failure" ]] || \
-             [[ "${{ needs.molecule.result }}" == "failure" ]] || \
-             [[ "${{ needs.security.result }}" == "failure" ]]; then
-            echo "One or more jobs failed"
+          if [[ "${{ needs.lint.result }}" != "success" ]] || \
+             [[ "${{ needs.syntax.result }}" != "success" ]] || \
+             [[ "${{ needs.molecule.result }}" != "success" ]] || \
+             [[ "${{ needs.security.result }}" != "success" ]]; then
+            echo "One or more required jobs did not succeed"
             exit 1
           fi
           echo "All required jobs passed"
