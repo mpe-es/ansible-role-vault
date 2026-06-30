@@ -49,9 +49,9 @@
     vault_tls_cipher_suites: []
     vault_tls_require_client_cert: false
     vault_tls_disable_client_certs: false
-    vault_raft_node_id: vault-rhel9
-    vault_api_addr: "https://vault-rhel9:8200"
-    vault_cluster_addr: "https://vault-rhel9:8201"
+    vault_raft_node_id: vault-el
+    vault_api_addr: "https://vault-el:8200"
+    vault_cluster_addr: "https://vault-el:8201"
     vault_cluster_leader_addr: ""
     vault_manage_tls: false
     vault_manage_firewall: false
@@ -202,6 +202,22 @@
       ansible.builtin.template:
         src: "{{ playbook_dir }}/../../templates/vault-audit-backup.timer.j2"
         dest: /usr/lib/systemd/system/vault-audit-backup.timer
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Copy vault-unseal.sh script
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../../files/vault-unseal.sh"
+        dest: /usr/local/bin/vault-unseal.sh
+        owner: "{{ vault_user }}"
+        group: "{{ vault_group }}"
+        mode: '0750'
+
+    - name: Deploy vault-unseal.service
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../../templates/vault-unseal.service.j2"
+        dest: /usr/lib/systemd/system/vault-unseal.service
         owner: root
         group: root
         mode: '0644'

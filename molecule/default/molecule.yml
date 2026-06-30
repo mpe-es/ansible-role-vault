@@ -14,8 +14,8 @@ driver:
   name: podman
 
 platforms:
-  - name: vault-rhel9
-    image: registry.access.redhat.com/ubi9/ubi-init:latest
+  - name: vault-el
+    image: ${MOLECULE_IMAGE:-registry.access.redhat.com/ubi9/ubi-init:latest}
     pre_build_image: true
     privileged: true
     command: /usr/sbin/init
@@ -26,8 +26,9 @@ provisioner:
     ansible_become: false
   inventory:
     host_vars:
-      vault-rhel9:
+      vault-el:
         ansible_user: root
+        ansible_python_interpreter: ${MOLECULE_PYTHON:-/usr/bin/python3}
         # Skip phases that require real infrastructure
         vault_manage_repo: false
         vault_manage_firewall: false
