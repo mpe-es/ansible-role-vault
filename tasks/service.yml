@@ -29,6 +29,19 @@
 - name: Initialize Vault
   when: vault_initialize | bool
   block:
+    - name: Validate initialization handoff destination
+      ansible.builtin.assert:
+        that:
+          - vault_init_store_target | bool or vault_init_controller_capture_enabled | bool
+          - not vault_init_controller_capture_enabled | bool or vault_init_controller_output_path | length > 0
+          - not vault_init_controller_capture_enabled | bool or vault_init_controller_output_path is match('^/')
+        fail_msg: >-
+          Vault initialization is enabled, but no valid initialization handoff
+          destination is configured. Enable vault_init_store_target, or enable
+          vault_init_controller_capture_enabled and set
+          vault_init_controller_output_path to an absolute controller path.
+        success_msg: "Vault initialization handoff destination configured"
+
     - name: Check Vault initialization status
       ansible.builtin.command:
         cmd: >-
@@ -69,10 +82,36 @@
         owner: root
         group: root
         mode: '0600'
-      when: __vault_init_output is changed
+      when:
+        - __vault_init_output is changed
+        - vault_init_store_target | bool
       no_log: true
       vars:
         __vault_init_data: "{{ __vault_init_output.stdout | from_json }}"
+
+    - name: Create controller directory for Vault init capture
+      ansible.builtin.file:
+        path: "{{ vault_init_controller_output_path | dirname }}"
+        state: directory
+        mode: '0700'
+      delegate_to: localhost
+      become: false
+      when:
+        - __vault_init_output is changed
+        - vault_init_controller_capture_enabled | bool
+      no_log: true
+
+    - name: Capture Vault init output on controller
+      ansible.builtin.copy:
+        content: "{{ __vault_init_output.stdout }}\n"
+        dest: "{{ vault_init_controller_output_path }}"
+        mode: "{{ vault_init_controller_output_mode }}"
+      delegate_to: localhost
+      become: false
+      when:
+        - __vault_init_output is changed
+        - vault_init_controller_capture_enabled | bool
+      no_log: true
 
     - name: Unseal Vault after initialization (Shamir)
       ansible.builtin.command:

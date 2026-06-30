@@ -8,11 +8,21 @@
 - name: Prepare
   hosts: all
   # Running as root in container - no become needed
+  gather_facts: false
 
   tasks:
+    - name: Bootstrap requested Python interpreter
+      ansible.builtin.raw: >-
+        sh -c 'test -x {{ ansible_python_interpreter }}
+        || dnf install -y {{ ansible_python_interpreter | basename }}'
+      register: __prepare_python
+      changed_when: "'Installed:' in __prepare_python.stdout"
+
+    - name: Gather facts after Python bootstrap
+      ansible.builtin.setup:
+
     - name: Install packages needed for role testing
-      ansible.builtin.dnf:
-        name:
-          - python3-libselinux
-          - policycoreutils-python-utils
-        state: present
+      ansible.builtin.raw: >-
+        dnf install -y python3-libselinux policycoreutils-python-utils
+      register: __prepare_packages
+      changed_when: "'Installed:' in __prepare_packages.stdout"
