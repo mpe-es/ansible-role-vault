@@ -1,16 +1,23 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # Unseal local vault instance
 #
+set -euo pipefail
 
 TOKENS_FILE="/etc/vault.d/tokens.env"
+VAULT_CA_FILE="${VAULT_CACERT:-/opt/vault/tls/ca.crt}"
 
 export VAULT_ADDR="https://localhost:8200"
-export VAULT_SKIP_VERIFY=true
+export VAULT_CACERT="$VAULT_CA_FILE"
 
 # Check if tokens file exists
 if [[ ! -f "$TOKENS_FILE" ]]; then
     echo "Error: Tokens file not found: $TOKENS_FILE"
+    exit 1
+fi
+
+if [[ ! -r "$VAULT_CA_FILE" ]]; then
+    echo "Error: Vault CA certificate not readable: $VAULT_CA_FILE"
     exit 1
 fi
 

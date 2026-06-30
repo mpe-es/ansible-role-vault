@@ -7,7 +7,7 @@ Supports single-node and HA (3/5-node) Raft clusters in airgap or internet-conne
 
 ### Platform
 
-- RHEL 8 or 9 (or compatible EL distribution)
+- RHEL 8, 9, or 10 (or compatible EL distribution)
 
 ### Ansible
 
@@ -126,6 +126,10 @@ auto-generation and input validation.
 | `vault_auto_unseal_enabled` | `false` | Deploy auto-unseal service |
 | `vault_key_shares` | `5` | Shamir key shares for initialization |
 | `vault_key_threshold` | `3` | Shamir keys required to unseal |
+| `vault_init_store_target` | `true` | Store init output on the target in `/etc/vault.d/tokens.env` |
+| `vault_init_controller_capture_enabled` | `false` | Capture init output back to the Ansible controller/AAP execution environment |
+| `vault_init_controller_output_path` | `""` | Controller-side path for captured init JSON |
+| `vault_init_controller_output_mode` | `0600` | File mode for controller-side captured init JSON |
 | `vault_rsyslog_enabled` | `false` | Enable remote syslog forwarding |
 | `vault_rsyslog_host` | `""` | Remote syslog target |
 | `vault_rsyslog_port` | `514` | Remote syslog port |
@@ -188,6 +192,30 @@ for Python library dependencies. No other Ansible role dependencies.
         vault_rsyslog_host: "syslog.enclave.mil"
 ```
 
+### Greenfield Initialization with AAP Capture
+
+When `vault_initialize` is enabled, initialization material is secret-bearing.
+By default, the role preserves existing behavior and writes
+`/etc/vault.d/tokens.env` on the target with mode `0600`. For Ansible
+Automation Platform workflows, capture the raw init JSON back to the execution
+environment and immediately move it into an approved secret store:
+
+```yaml
+- hosts: vault
+  become: true
+  roles:
+    - role: darkhonor.vault
+      vars:
+        vault_initialize: true
+        vault_init_store_target: false
+        vault_init_controller_capture_enabled: true
+        vault_init_controller_output_path: "/runner/artifacts/vault-init-{{ inventory_hostname }}.json"
+```
+
+The role uses `no_log: true` for initialization tasks and never prints the root
+token or unseal keys. Treat the controller-side artifact as temporary key
+material and remove it after transfer to the approved credential store.
+
 ## Compliance
 
 This role implements controls from:
@@ -197,6 +225,9 @@ This role implements controls from:
 - **CNSSI 1253**: Moderate-Moderate-Moderate dimensional baselines
 - **CNSA 1.0** (CNSSP-15 / APSC-DV-002010): ECDSA P-384, RSA-3072+, SHA-384, AES-256-GCM
 - **FIPS 140-3**: TLS 1.2+ enforcement, FIPS-validated cryptographic modules
+
+Auto-unseal uses the configured CA certificate path for TLS verification. The
+role does not disable certificate verification for Vault API calls.
 
 ## License
 
