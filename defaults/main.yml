@@ -212,9 +212,21 @@ vault_pki_role: ""
 ###############################################################################
 # Vault Initialization
 # Set to true for greenfield deployments to auto-initialize Vault.
-# Keys are stored in /etc/vault.d/tokens.env (mode 0600, root:root).
+# By default, keys are stored in /etc/vault.d/tokens.env (mode 0600,
+# root:root). AAP/controller capture can also write the init JSON to the
+# calling execution environment so it can be moved to an approved secret store.
 ###############################################################################
 vault_initialize: false
+
+# Store unseal keys and the root token on the target host.
+vault_init_store_target: true
+
+# Capture the raw vault operator init JSON on the Ansible controller/AAP
+# execution environment. This file is secret-bearing and should be treated as a
+# temporary handoff artifact.
+vault_init_controller_capture_enabled: false
+vault_init_controller_output_path: ""
+vault_init_controller_output_mode: '0600'
 
 ###############################################################################
 # HSM / PKCS#11 Seal Configuration (Enterprise Only)
