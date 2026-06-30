@@ -130,6 +130,7 @@
       loop:
         - /usr/lib/systemd/system/vault-audit-backup.service
         - /usr/lib/systemd/system/vault-audit-backup.timer
+        - /usr/lib/systemd/system/vault-unseal.service
       loop_control:
         label: "{{ item | basename }}"
 
@@ -156,3 +157,38 @@
           - __verify_backup_script.stat.exists
           - __verify_backup_script.stat.mode == '0750'
         fail_msg: "vault-audit-backup.sh missing or incorrect permissions"
+
+    - name: Verify unseal script exists with correct permissions
+      ansible.builtin.stat:
+        path: /usr/local/bin/vault-unseal.sh
+      register: __verify_unseal_script
+
+    - name: Assert unseal script permissions
+      ansible.builtin.assert:
+        that:
+          - __verify_unseal_script.stat.exists
+          - __verify_unseal_script.stat.mode == '0750'
+        fail_msg: "vault-unseal.sh missing or incorrect permissions"
+
+    - name: Read unseal script
+      ansible.builtin.slurp:
+        src: /usr/local/bin/vault-unseal.sh
+      register: __verify_unseal_script_content
+
+    - name: Assert unseal script validates TLS instead of skipping verification
+      ansible.builtin.assert:
+        that:
+          - "'VAULT_SKIP_VERIFY' not in (__verify_unseal_script_content.content | b64decode)"
+          - "'VAULT_CACERT' in (__verify_unseal_script_content.content | b64decode)"
+        fail_msg: "vault-unseal.sh must use VAULT_CACERT and must not set VAULT_SKIP_VERIFY"
+
+    - name: Read unseal service
+      ansible.builtin.slurp:
+        src: /usr/lib/systemd/system/vault-unseal.service
+      register: __verify_unseal_service_content
+
+    - name: Assert unseal service passes configured CA path
+      ansible.builtin.assert:
+        that:
+          - "'Environment=VAULT_CACERT=/opt/vault/tls/ca.crt' in (__verify_unseal_service_content.content | b64decode)"
+        fail_msg: "vault-unseal.service does not pass VAULT_CACERT"
