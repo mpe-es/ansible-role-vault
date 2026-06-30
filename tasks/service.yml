@@ -34,11 +34,12 @@
         that:
           - vault_init_store_target | bool or vault_init_controller_capture_enabled | bool
           - not vault_init_controller_capture_enabled | bool or vault_init_controller_output_path | length > 0
+          - not vault_init_controller_capture_enabled | bool or vault_init_controller_output_path is match('^/')
         fail_msg: >-
           Vault initialization is enabled, but no valid initialization handoff
           destination is configured. Enable vault_init_store_target, or enable
           vault_init_controller_capture_enabled and set
-          vault_init_controller_output_path.
+          vault_init_controller_output_path to an absolute controller path.
         success_msg: "Vault initialization handoff destination configured"
 
     - name: Check Vault initialization status

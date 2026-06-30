@@ -129,6 +129,7 @@ auto-generation and input validation.
 | `vault_init_store_target` | `true` | Store init output on the target in `/etc/vault.d/tokens.env` |
 | `vault_init_controller_capture_enabled` | `false` | Capture init output back to the Ansible controller/AAP execution environment |
 | `vault_init_controller_output_path` | `""` | Controller-side path for captured init JSON |
+| `vault_init_controller_output_mode` | `0600` | File mode for controller-side captured init JSON |
 | `vault_rsyslog_enabled` | `false` | Enable remote syslog forwarding |
 | `vault_rsyslog_host` | `""` | Remote syslog target |
 | `vault_rsyslog_port` | `514` | Remote syslog port |
