@@ -2,44 +2,80 @@
 ###############################################################################
 # Filename: .github/dependabot.yml
 # Role: ansible-role-vault
-# Summary: Dependabot configuration for automated dependency updates
-# Last Updated: 03 Apr 2026
+# Summary: Dependabot configuration for automated dependency updates.
+#          Conventions mirrored from the Microkosmos project.
+# Last Updated: 14 Jul 2026
 # Classification: UNCLASSIFIED
 ###############################################################################
+# Ecosystems monitored:
+#   1. pip            - requirements.in / requirements.txt (pip-compile managed)
+#   2. github-actions - .github/workflows/ (SHA-pinned to full commit hashes)
+#
+# NOT monitored: requirements.yml (Ansible Galaxy collections). Dependabot has
+# no Galaxy ecosystem; those collection versions are bumped by hand.
+###############################################################################
 version: 2
+
 updates:
-  # GitHub Actions (SHA-pinned, Dependabot updates to latest SHAs)
-  - package-ecosystem: "github-actions"
-    directory: "/"
+  # ---------------------------------------------------------------------------
+  # Python dependencies - requirements.in (source) + requirements.txt (compiled)
+  # ---------------------------------------------------------------------------
+  # Rationale: keep hvac and its transitive HTTP stack (requests, urllib3,
+  # certifi, idna, charset-normalizer) current with upstream security fixes.
+  # allow: direct + indirect is REQUIRED for a pip-compile lockfile - without
+  # "indirect", the transitive pins in requirements.txt would never update.
+  # Dependabot regenerates the --hash entries in the same PR.
+  - package-ecosystem: pip
+    directory: /
     schedule:
-      interval: "weekly"
-      day: "monday"
+      interval: daily
+      time: "06:00"
+      timezone: "Etc/UTC"
+    # Cooldown: 7-day floor for new releases, 10 days for majors. Gives a
+    # malicious or yanked upstream release (e.g. the yanked charset-normalizer
+    # 3.4.8) time to be caught before Dependabot proposes it. The 7-day floor
+    # also satisfies the semgrep supply-chain guardian.
+    cooldown:
+      default-days: 7
+      semver-major-days: 10
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "build"
+      include: scope
+    labels:
+      - dependencies
+      - python
+    allow:
+      - dependency-type: direct
+      - dependency-type: indirect
+    groups:
+      # Collapse the hvac stack into one PR for patch + minor bumps. Major
+      # bumps stay individual for deliberate review.
+      python-deps:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+
+  # ---------------------------------------------------------------------------
+  # GitHub Actions - .github/workflows/
+  # ---------------------------------------------------------------------------
+  # Rationale: actions are pinned to full commit SHAs with a trailing
+  # "# vX.Y.Z" comment. Dependabot updates both the SHA and the comment while
+  # preserving the pinning policy.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: daily
+      time: "06:00"
+      timezone: "Etc/UTC"
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 10
     commit-message:
       prefix: "ci"
+      include: scope
     labels:
-      - "dependencies"
-      - "ci"
-    reviewers:
-      - "darkhonor"
-
-  # Python dependencies (pip-compile managed)
-  # Dependabot monitors requirements.in (source) and requirements.txt (compiled)
-  # After merging Dependabot PRs, regenerate hashes locally:
-  #   pip-compile --generate-hashes requirements.in
-  - package-ecosystem: "pip"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-    commit-message:
-      prefix: "deps"
-    labels:
-      - "dependencies"
-      - "python"
-    reviewers:
-      - "darkhonor"
-    # Dependabot will update requirements.txt directly; after merge,
-    # re-run pip-compile to regenerate with hashes if needed
-    allow:
-      - dependency-type: "direct"
-      - dependency-type: "indirect"
+      - dependencies
+      - github-actions
