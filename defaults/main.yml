@@ -279,7 +279,8 @@ vault_hsm_max_parallel: 1
 # none of the three; it registers trust entries consumed under them)
 ###############################################################################
 # Whether the role manages fapolicyd trust entries.
-# Tasks skip silently if fapolicyd (with trust.d support) is not present.
+# Tasks skip without failure (logging the reason) if fapolicyd (with
+# trust.d support) is not present.
 # When false the role does not touch fapolicyd at all — including not
 # removing a previously deployed trust file (see README for manual cleanup).
 vault_manage_fapolicyd: true

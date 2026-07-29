@@ -530,7 +530,7 @@ argument_specs:
       vault_manage_fapolicyd:
         description:
           - Whether the role manages fapolicyd file-trust entries.
-          - Tasks skip silently if fapolicyd (with trust.d support) is absent.
+          - Tasks skip without failure (logging the reason) if fapolicyd (with trust.d support) is absent.
         type: bool
         default: true
 

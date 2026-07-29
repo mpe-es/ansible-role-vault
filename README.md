@@ -146,7 +146,7 @@ auto-generation and input validation.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `vault_manage_fapolicyd` | `true` | Manage fapolicyd file-trust entries (skips silently when fapolicyd/trust.d absent) |
+| `vault_manage_fapolicyd` | `true` | Manage fapolicyd file-trust entries (skips without failure, logging the reason, when fapolicyd/trust.d absent) |
 | `vault_fapolicyd_trusted_files` | see defaults | Files registered in fapolicyd file trust (existing regular files only) |
 
 ## Dependencies
