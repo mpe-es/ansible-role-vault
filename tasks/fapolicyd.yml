@@ -37,7 +37,7 @@
       Skipping fapolicyd trust management:
       {{ '/usr/sbin/fapolicyd missing (fapolicyd not installed)'
          if not __vault_fapolicyd_bin.stat.exists
-         else (vault_fapolicyd_trust_file | dirname) ~ ' missing (fapolicyd lacks trust.d support, e.g. early EL8)' }}
+         else (vault_fapolicyd_trust_file | dirname) ~ ' missing or not a directory (fapolicyd lacks trust.d support, e.g. early EL8, or a stray file occupies the path)' }}
   when: >-
     not __vault_fapolicyd_bin.stat.exists
     or not (__vault_fapolicyd_trustd.stat.isdir | default(false))
@@ -45,7 +45,10 @@
 ###############################################################################
 # Read-only advisory: trust= must include 'file' or the rendered trust.d
 # file is never consulted (feature inert). Warn, never fail — the conf
-# belongs to the host baseline.
+# belongs to the host baseline. Known imprecisions (accepted, warn-only):
+# a second trust= line can warn spuriously (fapolicyd is last-wins), and
+# the whole-line 'file' search can be suppressed by a trailing comment
+# containing the word 'file'.
 ###############################################################################
 - name: Read fapolicyd.conf for trust advisory
   ansible.builtin.slurp:

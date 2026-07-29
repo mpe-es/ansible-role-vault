@@ -226,13 +226,15 @@ material and remove it after transfer to the approved credential store.
 
 ## fapolicyd File Trust
 
-When `vault_manage_fapolicyd` is `true` (the default), the role renders a
-declarative ancillary trust file at `/etc/fapolicyd/trust.d/vault.trust`
-containing size + SHA-256 entries for the Vault binary, a pre-positioned
+When `vault_manage_fapolicyd` is `true` (the default) and a
+trust.d-capable fapolicyd is detected, the role renders a declarative
+ancillary trust file at `/etc/fapolicyd/trust.d/vault.trust` containing
+size + SHA-256 entries for the Vault binary, a pre-positioned
 `/usr/local/bin/vault` (future binary-install location), and the two helper
-scripts the role deploys to `/usr/local/bin`, then hot-reloads the daemon's
-trust database with `fapolicyd-cli --update` before the Vault service is
-started. Entries are computed from the files actually present at run time,
+scripts the role deploys to `/usr/local/bin`; then — when the daemon is
+running and the trust file or the vault package changed — hot-reloads the
+daemon's trust database with `fapolicyd-cli --update` before the Vault
+service is started. Entries are computed from the files actually present at run time,
 so the hashes always match the installed version. Duplicate list entries
 are deduped by the role. Paths containing whitespace cannot be represented
 in the space-delimited trust format and are silently excluded.
@@ -258,16 +260,19 @@ precedence.
 **Host-baseline dependencies** (this role manages none of these):
 
 - `trust =` in `/etc/fapolicyd/fapolicyd.conf` must include `file` for
-  trust.d to be consulted at all (the role emits a warning when it does
-  not); `integrity =` governs whether size/hash are verified at execution
-  time; `permissive = 0` is required for enforcement.
+  trust.d to be consulted at all (the role warns when an *uncommented*
+  `trust =` line omits `file`; an absent or commented-out key is NOT
+  detected — the no-key branch assumes the compiled-in default includes
+  `file`, pending verification item 8); `integrity =` governs whether
+  size/hash are verified at execution time; `permissive = 0` is required
+  for enforcement.
 - A trust.d-capable fapolicyd. Older EL8 builds using the single
   `/etc/fapolicyd/fapolicyd.trust` file are detected and skipped — the
   role provides no refresh there at all. Minimum trust.d-capable version
   per EL major: pending verification item 4.
 - The fapolicyd dnf plugin keeps the rpmdb trust snapshot fresh for
-  out-of-band upgrades; without it, staleness persists until the daemon
-  reloads. This also applies when `vault_manage_fapolicyd` is `false` (or
+  out-of-band upgrades (presence on target hosts: pending verification
+  item 9); without it, staleness persists until the daemon reloads. This also applies when `vault_manage_fapolicyd` is `false` (or
   detection skips) and an upgrade occurs on an enforcing plugin-less
   host — that combination is not benign.
 - The shipped rules.d must honor trust for `ftype=text/x-shellscript` on
