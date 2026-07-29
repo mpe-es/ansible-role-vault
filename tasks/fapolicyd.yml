@@ -1,0 +1,146 @@
+---
+###############################################################################
+# Filename: tasks/fapolicyd.yml
+# Role: ansible-role-vault
+# Summary: Register fapolicyd file-trust entries for the Vault binary and
+#   helper scripts via a declarative trust.d ancillary trust file, then
+#   refresh the daemon in-phase (before Phase 9 executes the binary).
+# NIST 800-53: CM-7(5), SI-7
+# RHEL 9 STIG: supports RHEL-09-433016 (433010/433015 = prerequisites)
+# Classification: UNCLASSIFIED
+###############################################################################
+
+###############################################################################
+# Detection: trust.d-capable fapolicyd (binary AND trust.d directory).
+# No directory creation: fabricating trust.d on a daemon that never reads
+# it would render the trust file inert while reporting success.
+###############################################################################
+- name: Detect fapolicyd binary
+  ansible.builtin.stat:
+    path: /usr/sbin/fapolicyd
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: __vault_fapolicyd_bin
+
+- name: Detect fapolicyd trust.d directory
+  ansible.builtin.stat:
+    path: "{{ vault_fapolicyd_trust_file | dirname }}"
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: __vault_fapolicyd_trustd
+
+- name: Note fapolicyd skip reason
+  ansible.builtin.debug:
+    msg: >-
+      Skipping fapolicyd trust management:
+      {{ '/usr/sbin/fapolicyd missing (fapolicyd not installed)'
+         if not __vault_fapolicyd_bin.stat.exists
+         else (vault_fapolicyd_trust_file | dirname) ~ ' missing (fapolicyd lacks trust.d support, e.g. early EL8)' }}
+  when: >-
+    not __vault_fapolicyd_bin.stat.exists
+    or not (__vault_fapolicyd_trustd.stat.isdir | default(false))
+
+###############################################################################
+# Read-only advisory: trust= must include 'file' or the rendered trust.d
+# file is never consulted (feature inert). Warn, never fail — the conf
+# belongs to the host baseline.
+###############################################################################
+- name: Read fapolicyd.conf for trust advisory
+  ansible.builtin.slurp:
+    src: /etc/fapolicyd/fapolicyd.conf
+  register: __vault_fapolicyd_conf
+  failed_when: false
+  when:
+    - __vault_fapolicyd_bin.stat.exists
+    - __vault_fapolicyd_trustd.stat.isdir | default(false)
+
+- name: Warn when fapolicyd trust= excludes file trust
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: /etc/fapolicyd/fapolicyd.conf carries an uncommented trust=
+      line that does not include 'file'. The rendered trust.d file will
+      never be consulted and fapolicyd trust management is inert on this
+      host until the host baseline adds 'file' to trust=.
+  when:
+    - __vault_fapolicyd_bin.stat.exists
+    - __vault_fapolicyd_trustd.stat.isdir | default(false)
+    - __vault_fapolicyd_conf.content is defined
+    - (__vault_fapolicyd_conf.content | b64decode).split('\n') | select('match', '^\s*trust\s*=') | reject('search', 'file') | list | length > 0
+
+###############################################################################
+# Service state (data source for the refresh guard — handlers cannot
+# gather facts at flush time; this is not a handler by design).
+###############################################################################
+- name: Check fapolicyd service state
+  ansible.builtin.command:
+    cmd: systemctl is-active fapolicyd
+  register: __vault_fapolicyd_svc
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when:
+    - __vault_fapolicyd_bin.stat.exists
+    - __vault_fapolicyd_trustd.stat.isdir | default(false)
+
+###############################################################################
+# Trust entries: stat each candidate (sha256). Reads the full Vault binary
+# (~400 MB) every run — accepted cost; do NOT "optimize" into staleness.
+###############################################################################
+- name: Stat fapolicyd trusted files
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    checksum_algorithm: sha256
+    get_mime: false
+    get_attributes: false
+  loop: "{{ vault_fapolicyd_trusted_files | unique }}"
+  loop_control:
+    label: "{{ item }}"
+  register: __vault_fapolicyd_stat
+  when:
+    - __vault_fapolicyd_bin.stat.exists
+    - __vault_fapolicyd_trustd.stat.isdir | default(false)
+
+###############################################################################
+# Version header source. rpm prints "package X is not installed" to STDOUT
+# with rc=1 — the template pins the header to rc, never `| default`.
+###############################################################################
+- name: Query installed Vault package version
+  ansible.builtin.command:
+    cmd: rpm -q --queryformat '%{NAME} %{VERSION}-%{RELEASE}\n' {{ vault_package_name }}
+  register: __vault_fapolicyd_pkg
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when:
+    - __vault_fapolicyd_bin.stat.exists
+    - __vault_fapolicyd_trustd.stat.isdir | default(false)
+
+- name: Render fapolicyd trust file
+  ansible.builtin.template:
+    src: fapolicyd-vault.trust.j2
+    dest: "{{ vault_fapolicyd_trust_file }}"
+    owner: root
+    group: root
+    mode: '0644'
+  register: __vault_fapolicyd_render
+  when:
+    - __vault_fapolicyd_bin.stat.exists
+    - __vault_fapolicyd_trustd.stat.isdir | default(false)
+
+###############################################################################
+# In-phase refresh (NOT a handler: handlers flush after Phase 9 execs the
+# binary). Fail-loud: no failed_when relaxation. MUST NOT carry
+# check_mode: false — its check-mode safety is that `command` never runs
+# under --check (the `is changed` guard evaluates TRUE there).
+###############################################################################
+- name: Refresh fapolicyd trust database
+  ansible.builtin.command:
+    cmd: fapolicyd-cli --update
+  changed_when: true
+  when:
+    - __vault_fapolicyd_bin.stat.exists
+    - __vault_fapolicyd_trustd.stat.isdir | default(false)
+    - (__vault_fapolicyd_svc.stdout | default('') | trim) == 'active'
+    - (__vault_fapolicyd_render is changed) or (__vault_install_pkg is defined and __vault_install_pkg is changed)

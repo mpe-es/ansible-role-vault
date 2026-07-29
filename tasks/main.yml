@@ -97,6 +97,29 @@
     - stig
 
 ###############################################################################
+# Phase 8.5: fapolicyd Trust Management
+# Register file-trust entries for the Vault binary and helper scripts.
+# apply: is REQUIRED — include_tasks does NOT propagate its own tags to
+# included tasks (only import_tasks does).
+# NIST 800-53: CM-7(5), SI-7
+###############################################################################
+- name: Include fapolicyd trust tasks
+  ansible.builtin.include_tasks:
+    file: fapolicyd.yml
+    apply:
+      tags:
+        - vault
+        - install
+        - stig
+        - fapolicyd
+  when: vault_manage_fapolicyd | bool
+  tags:
+    - vault
+    - install
+    - stig
+    - fapolicyd
+
+###############################################################################
 # Phase 9: Service Management
 # Enable and start the Vault service.
 ###############################################################################
