@@ -68,3 +68,8 @@ vault_selinux_contexts:
   - path: /var/log/vault(/.*)?
     setype: var_log_t
     seuser: system_u
+
+###############################################################################
+# fapolicyd Trust Management (internal)
+###############################################################################
+vault_fapolicyd_trust_file: /etc/fapolicyd/trust.d/vault.trust

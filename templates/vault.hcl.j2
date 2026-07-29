@@ -12,7 +12,7 @@ ui            = {{ vault_ui_enabled | lower }}
 disable_mlock = {{ vault_disable_mlock | lower }}
 log_level     = "{{ vault_log_level }}"
 
-{% if vault_edition == 'vault-enterprise' %}
+{% if vault_edition is match('vault-enterprise') %}
 # Enterprise-only parameter
 disable_performance_standby = {{ vault_disable_performance_standby | lower }}
 {% endif %}

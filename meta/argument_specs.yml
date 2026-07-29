@@ -347,12 +347,16 @@ argument_specs:
       vault_edition:
         description:
           - Vault RPM package name to install.
-          - "'vault' for Community (OSS), 'vault-enterprise' for Enterprise."
+          - >-
+            'vault' for Community (OSS), 'vault-enterprise' for Enterprise,
+            'vault-enterprise-fips1403' for Enterprise with FIPS 140-3
+            crypto.
         type: str
         default: "vault"
         choices:
           - vault
           - vault-enterprise
+          - vault-enterprise-fips1403
 
       ################################################################
       # TLS Maximum Version
@@ -519,3 +523,25 @@ argument_specs:
           - Maximum concurrent requests to the HSM.
         type: int
         default: 1
+
+      ################################################################
+      # fapolicyd Trust Management
+      ################################################################
+      vault_manage_fapolicyd:
+        description:
+          - Whether the role manages fapolicyd file-trust entries.
+          - Tasks skip silently if fapolicyd (with trust.d support) is absent.
+        type: bool
+        default: true
+
+      vault_fapolicyd_trusted_files:
+        description:
+          - Files to register in the fapolicyd file trust database.
+          - Entries are generated only for regular files present on the target.
+        type: list
+        elements: str
+        default:
+          - "{{ vault_binary }}"
+          - /usr/local/bin/vault
+          - /usr/local/bin/vault-audit-backup.sh
+          - /usr/local/bin/vault-unseal.sh
