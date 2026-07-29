@@ -26,3 +26,36 @@
         dnf install -y python3-libselinux policycoreutils-python-utils
       register: __prepare_packages
       changed_when: "'Installed:' in __prepare_packages.stdout"
+
+    - name: Create mock fapolicyd binary
+      ansible.builtin.copy:
+        content: |
+          #!/bin/bash
+          echo "mock fapolicyd"
+        dest: /usr/sbin/fapolicyd
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Create fapolicyd trust.d directory
+      ansible.builtin.file:
+        path: /etc/fapolicyd/trust.d
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Create whitespace-path exclusion fixture
+      ansible.builtin.copy:
+        content: ""
+        dest: "/usr/local/bin/vault-with space.sh"
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Create symlink exclusion fixture
+      ansible.builtin.file:
+        src: /usr/bin/true
+        dest: /usr/local/bin/vault-symlink
+        state: link
+        force: true
