@@ -13,6 +13,7 @@
   ansible.builtin.dnf:
     name: "{{ vault_package_name }}{% if vault_package_version != 'latest' %}-{{ vault_package_version }}{% endif %}"
     state: "{{ vault_package_state }}"
+  register: __vault_install_pkg
   notify: Enable vault
 
 ###############################################################################

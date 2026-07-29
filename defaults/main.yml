@@ -188,7 +188,8 @@ vault_rsyslog_port: 514
 ###############################################################################
 # Vault Edition
 # Controls the RPM package name installed.
-# 'vault' = Community (OSS), 'vault-enterprise' = Enterprise
+# 'vault' = Community (OSS), 'vault-enterprise' = Enterprise,
+# 'vault-enterprise-fips1403' = Enterprise with FIPS 140-3 crypto
 ###############################################################################
 vault_edition: "vault"
 
@@ -268,3 +269,27 @@ vault_hsm_generate_key: false
 
 # Maximum concurrent HSM requests
 vault_hsm_max_parallel: 1
+
+###############################################################################
+# fapolicyd Trust Management
+# NIST 800-53: CM-7(5) (Authorized Software — Allow-by-Exception; effective
+# only where fapolicyd enforces with file trust — see README), SI-7
+# RHEL 9 STIG: supports RHEL-09-433016 (fapolicyd deny-all enforcement;
+# 433010/433015 = install/enable prerequisites — this role remediates
+# none of the three; it registers trust entries consumed under them)
+###############################################################################
+# Whether the role manages fapolicyd trust entries.
+# Tasks skip silently if fapolicyd (with trust.d support) is not present.
+# When false the role does not touch fapolicyd at all — including not
+# removing a previously deployed trust file (see README for manual cleanup).
+vault_manage_fapolicyd: true
+
+# Files to register in the fapolicyd file trust database.
+# Entries are generated only for regular files that exist on the target.
+# Paths containing whitespace cannot be represented in the space-delimited
+# trust format and are silently excluded. Duplicates are deduped by the role.
+vault_fapolicyd_trusted_files:
+  - "{{ vault_binary }}"                    # RPM install location (vars/main.yml)
+  - /usr/local/bin/vault                    # binary/zip install location (future)
+  - /usr/local/bin/vault-audit-backup.sh    # deployed by stig.yml
+  - /usr/local/bin/vault-unseal.sh          # deployed by stig.yml (auto-unseal)
