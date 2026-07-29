@@ -4,7 +4,7 @@
 # Role: ansible-role-vault
 # Summary: Default variables for HashiCorp Vault installation and STIG
 #   compliance. Override these in playbooks or inventory to customize behavior.
-# Last Updated: 03 Apr 2026
+# Last Updated: 29 Jul 2026
 # Classification: UNCLASSIFIED
 ###############################################################################
 

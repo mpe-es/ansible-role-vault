@@ -4,7 +4,7 @@
 # Role: ansible-role-vault
 # Summary: Main task orchestration for HashiCorp Vault installation and STIG
 #   compliance on RHEL systems. Tasks are split into logical includes.
-# Last Updated: 03 Apr 2026
+# Last Updated: 29 Jul 2026
 # Classification: UNCLASSIFIED
 ###############################################################################
 

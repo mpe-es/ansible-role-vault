@@ -4,7 +4,7 @@
 # Role: ansible-role-vault
 # Summary: Role argument specifications for AAP survey generation, input
 #   validation, and ansible-doc rendering. Maps 1:1 with defaults/main.yml.
-# Last Updated: 03 Apr 2026
+# Last Updated: 29 Jul 2026
 # Classification: UNCLASSIFIED
 ###############################################################################
 argument_specs:
