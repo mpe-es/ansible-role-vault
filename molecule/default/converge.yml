@@ -65,6 +65,23 @@
     vault_stig_aide_check_enabled: false
     vault_auto_unseal_enabled: false
     vault_rsyslog_enabled: false
+    # fapolicyd trust (Phase 8.5) — hand-copied per this file's convention;
+    # converge loads neither defaults/ nor vars/
+    # vault_manage_fapolicyd is documentation value only here: the replica
+    # reproduces the included file's tasks, not the tasks/main.yml include
+    # gate where the var is actually consumed — do NOT add a
+    # when: vault_manage_fapolicyd to the replica tasks
+    vault_manage_fapolicyd: true
+    vault_package_name: "{{ vault_edition }}"
+    vault_fapolicyd_trust_file: /etc/fapolicyd/trust.d/vault.trust
+    vault_fapolicyd_trusted_files:
+      - /usr/bin/vault
+      - /usr/local/bin/vault
+      - /usr/local/bin/vault-audit-backup.sh
+      - /usr/local/bin/vault-unseal.sh
+      - "/usr/local/bin/vault-with space.sh"       # whitespace-exclusion fixture
+      - /usr/local/bin/vault-symlink               # symlink-exclusion fixture
+      - /usr/local/bin/vault-audit-backup.sh       # duplicate — dedupe fixture
 
   pre_tasks:
     ###########################################################################
@@ -218,6 +235,139 @@
       ansible.builtin.template:
         src: "{{ playbook_dir }}/../../templates/vault-unseal.service.j2"
         dest: /usr/lib/systemd/system/vault-unseal.service
+        owner: root
+        group: root
+        mode: '0644'
+
+    ###########################################################################
+    # Phase 8.5: fapolicyd trust (inline replica of tasks/fapolicyd.yml —
+    # register names, guards, and flags copied verbatim; only the template
+    # src path diverges per the replica convention)
+    ###########################################################################
+    - name: Detect fapolicyd binary
+      ansible.builtin.stat:
+        path: /usr/sbin/fapolicyd
+        get_checksum: false
+        get_mime: false
+        get_attributes: false
+      register: __vault_fapolicyd_bin
+
+    - name: Detect fapolicyd trust.d directory
+      ansible.builtin.stat:
+        path: "{{ vault_fapolicyd_trust_file | dirname }}"
+        get_checksum: false
+        get_mime: false
+        get_attributes: false
+      register: __vault_fapolicyd_trustd
+
+    - name: Note fapolicyd skip reason
+      ansible.builtin.debug:
+        msg: >-
+          Skipping fapolicyd trust management:
+          {{ '/usr/sbin/fapolicyd missing (fapolicyd not installed)'
+             if not __vault_fapolicyd_bin.stat.exists
+             else (vault_fapolicyd_trust_file | dirname) ~ ' missing or not a directory (fapolicyd lacks trust.d support, e.g. early EL8, or a stray file occupies the path)' }}
+      when: >-
+        not __vault_fapolicyd_bin.stat.exists
+        or not (__vault_fapolicyd_trustd.stat.isdir | default(false))
+
+    - name: Read fapolicyd.conf for trust advisory
+      ansible.builtin.slurp:
+        src: /etc/fapolicyd/fapolicyd.conf
+      register: __vault_fapolicyd_conf
+      failed_when: false
+      when:
+        - __vault_fapolicyd_bin.stat.exists
+        - __vault_fapolicyd_trustd.stat.isdir | default(false)
+
+    - name: Warn when fapolicyd trust= excludes file trust
+      ansible.builtin.debug:
+        msg: >-
+          WARNING: /etc/fapolicyd/fapolicyd.conf carries an uncommented trust=
+          line that does not include 'file'. The rendered trust.d file will
+          never be consulted and fapolicyd trust management is inert on this
+          host until the host baseline adds 'file' to trust=.
+      when:
+        - __vault_fapolicyd_bin.stat.exists
+        - __vault_fapolicyd_trustd.stat.isdir | default(false)
+        - __vault_fapolicyd_conf.content is defined
+        - (__vault_fapolicyd_conf.content | b64decode).split('\n') | select('match', '^\s*trust\s*=') | reject('search', 'file') | list | length > 0
+
+    - name: Check fapolicyd service state
+      ansible.builtin.command:
+        cmd: systemctl is-active fapolicyd
+      register: __vault_fapolicyd_svc
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      when:
+        - __vault_fapolicyd_bin.stat.exists
+        - __vault_fapolicyd_trustd.stat.isdir | default(false)
+
+    - name: Stat fapolicyd trusted files
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        checksum_algorithm: sha256
+        get_mime: false
+        get_attributes: false
+      loop: "{{ vault_fapolicyd_trusted_files | unique }}"
+      loop_control:
+        label: "{{ item }}"
+      register: __vault_fapolicyd_stat
+      when:
+        - __vault_fapolicyd_bin.stat.exists
+        - __vault_fapolicyd_trustd.stat.isdir | default(false)
+
+    - name: Query installed Vault package version
+      ansible.builtin.command:
+        cmd: rpm -q --queryformat '%{NAME} %{VERSION}-%{RELEASE}\n' {{ vault_package_name }}
+      register: __vault_fapolicyd_pkg
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      when:
+        - __vault_fapolicyd_bin.stat.exists
+        - __vault_fapolicyd_trustd.stat.isdir | default(false)
+
+    - name: Render fapolicyd trust file
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../../templates/fapolicyd-vault.trust.j2"
+        dest: "{{ vault_fapolicyd_trust_file }}"
+        owner: root
+        group: root
+        mode: '0644'
+      register: __vault_fapolicyd_render
+      when:
+        - __vault_fapolicyd_bin.stat.exists
+        - __vault_fapolicyd_trustd.stat.isdir | default(false)
+
+    - name: Refresh fapolicyd trust database
+      ansible.builtin.command:
+        cmd: fapolicyd-cli --update
+      changed_when: true
+      when:
+        - __vault_fapolicyd_bin.stat.exists
+        - __vault_fapolicyd_trustd.stat.isdir | default(false)
+        - (__vault_fapolicyd_svc.stdout | default('') | trim) == 'active'
+        - (__vault_fapolicyd_render is changed) or (__vault_install_pkg is defined and __vault_install_pkg is changed)
+
+    ###########################################################################
+    # rc==0 branch coverage — MUST remain the last tasks (set_fact clobbers
+    # the real __vault_fapolicyd_pkg register)
+    ###########################################################################
+    - name: Override package register with synthetic rc0 fixture
+      ansible.builtin.set_fact:
+        __vault_fapolicyd_pkg:
+          rc: 0
+          stdout: "vault-enterprise-fips1403 2.0.3-1\nvault-enterprise-fips1403 2.0.2-1\n"
+          stdout_lines:
+            - "vault-enterprise-fips1403 2.0.3-1"
+            - "vault-enterprise-fips1403 2.0.2-1"
+
+    - name: Render synthetic rc0 trust file to scratch path
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../../templates/fapolicyd-vault.trust.j2"
+        dest: /root/.molecule-fapolicyd-rc0.trust
         owner: root
         group: root
         mode: '0644'
