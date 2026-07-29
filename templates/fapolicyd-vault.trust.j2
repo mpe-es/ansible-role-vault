@@ -1,0 +1,10 @@
+{# Static header by design — ansible_managed may contain {date}/{file}
+   markers that would churn this file (and fire fapolicyd-cli --update)
+   every run. See spec: fapolicyd trust design, template contract. #}
+# Ansible managed - ansible-role-vault
+# Vault package: {{ (__vault_fapolicyd_pkg.stdout_lines | first | trim) if (__vault_fapolicyd_pkg.rc == 0 and __vault_fapolicyd_pkg.stdout_lines | length > 0) else 'unknown' }}
+{% for r in __vault_fapolicyd_stat.results %}
+{% if r.stat.exists and r.stat.isreg and r.stat.checksum is defined and not r.stat.path is search('\s') %}
+{{ r.stat.path }} {{ r.stat.size }} {{ r.stat.checksum }}
+{% endif %}
+{% endfor %}
