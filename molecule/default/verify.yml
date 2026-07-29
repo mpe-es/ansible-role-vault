@@ -210,6 +210,8 @@
       ansible.builtin.stat:
         path: "{{ item }}"
         checksum_algorithm: sha256
+        get_mime: false
+        get_attributes: false
       loop:
         - /usr/bin/vault
         - /usr/local/bin/vault-audit-backup.sh
