@@ -192,3 +192,85 @@
         that:
           - "'Environment=VAULT_CACERT=/opt/vault/tls/ca.crt' in (__verify_unseal_service_content.content | b64decode)"
         fail_msg: "vault-unseal.service does not pass VAULT_CACERT"
+
+    ###########################################################################
+    # fapolicyd trust file
+    ###########################################################################
+    - name: Slurp fapolicyd trust file
+      ansible.builtin.slurp:
+        src: /etc/fapolicyd/trust.d/vault.trust
+      register: __verify_fapolicyd_slurp
+
+    - name: Stat fapolicyd trust file
+      ansible.builtin.stat:
+        path: /etc/fapolicyd/trust.d/vault.trust
+      register: __verify_fapolicyd_stat
+
+    - name: Stat trusted files for independent hash verification
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        checksum_algorithm: sha256
+        get_mime: false
+        get_attributes: false
+      loop:
+        - /usr/bin/vault
+        - /usr/local/bin/vault-audit-backup.sh
+        - /usr/local/bin/vault-unseal.sh
+      loop_control:
+        label: "{{ item }}"
+      register: __verify_fapolicyd_files
+
+    - name: Assert fapolicyd trust file shape and content
+      vars:
+        content: "{{ __verify_fapolicyd_slurp.content | b64decode }}"
+        __entries: "{{ content.split('\n') | map('trim') | reject('eq', '') | reject('match', '^#') | list }}"
+        __hdr: "{{ content.split('\n') | select('match', '^# Vault package: ') | list }}"
+      ansible.builtin.assert:
+        fail_msg: "fapolicyd trust file failed shape/content assertions"
+        that:
+          - "__verify_fapolicyd_stat.stat.exists"
+          - "__verify_fapolicyd_stat.stat.mode == '0644'"
+          - "__verify_fapolicyd_stat.stat.pw_name == 'root'"
+          - "__verify_fapolicyd_stat.stat.gr_name == 'root'"
+          - "content.split('\n') | last == ''"
+          - "content.split('\n')[:-1] | select('eq', '') | list | length == 0"
+          - "content.split('\n')[:-1] | select('match', '^\\s') | list | length == 0"
+          - "content.split('\n')[:-1] | select('search', '\\s$') | list | length == 0"
+          - "content.split('\n') | first == '# Ansible managed - ansible-role-vault'"
+          - "__entries | map('split') | map('first') | sort | list == ['/usr/bin/vault', '/usr/local/bin/vault-audit-backup.sh', '/usr/local/bin/vault-unseal.sh']"
+          - "__entries | reject('match', '^\\S+ [0-9]+ [0-9a-f]{64}$') | list | length == 0"
+          - "__hdr | list | length == 1"
+          - "__hdr | first | trim == '# Vault package: unknown'"
+
+    - name: Assert trust entries match independently computed hashes
+      vars:
+        content: "{{ __verify_fapolicyd_slurp.content | b64decode }}"
+        __entries: "{{ content.split('\n') | map('trim') | reject('eq', '') | reject('match', '^#') | list }}"
+      ansible.builtin.assert:
+        fail_msg: "trust entry for {{ item.item }} does not match independently computed size/hash"
+        that:
+          - "item.item ~ ' ' ~ item.stat.size ~ ' ' ~ item.stat.checksum in __entries"
+      loop: "{{ __verify_fapolicyd_files.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Slurp synthetic rc0 render
+      ansible.builtin.slurp:
+        src: /root/.molecule-fapolicyd-rc0.trust
+      register: __verify_fapolicyd_rc0
+
+    - name: Assert synthetic rc0 render exercises the version branch
+      vars:
+        __rc0_content: "{{ __verify_fapolicyd_rc0.content | b64decode }}"
+        __rc0_entries: "{{ __rc0_content.split('\n') | map('trim') | reject('eq', '') | reject('match', '^#') | list }}"
+        __rc0_hdr: "{{ __rc0_content.split('\n') | select('match', '^# Vault package: ') | list }}"
+      ansible.builtin.assert:
+        fail_msg: "synthetic rc0 render failed shape/header assertions"
+        that:
+          - "__rc0_content.split('\n') | last == ''"
+          - "__rc0_content.split('\n')[:-1] | select('eq', '') | list | length == 0"
+          - "__rc0_content.split('\n')[:-1] | select('match', '^\\s') | list | length == 0"
+          - "__rc0_content.split('\n')[:-1] | select('search', '\\s$') | list | length == 0"
+          - "__rc0_entries | reject('match', '^\\S+ [0-9]+ [0-9a-f]{64}$') | list | length == 0"
+          - "__rc0_hdr | list | length == 1"
+          - "__rc0_hdr | first | trim == '# Vault package: vault-enterprise-fips1403 2.0.3-1'"

@@ -72,6 +72,7 @@ auto-generation and input validation.
 |----------|---------|-------------|
 | `vault_package_version` | `latest` | Version to install (e.g., `1.18.3-1`) |
 | `vault_package_state` | `present` | DNF state: `present` or `latest` |
+| `vault_edition` | `vault` | Package/edition: `vault` (Community), `vault-enterprise`, `vault-enterprise-fips1403` (Enterprise FIPS 140-3) |
 
 ### Server Configuration
 
@@ -140,6 +141,13 @@ auto-generation and input validation.
 |----------|---------|-------------|
 | `vault_manage_firewall` | `true` | Configure firewalld rules |
 | `vault_firewall_ports` | `["8200/tcp", "8201/tcp"]` | Ports to open |
+
+### fapolicyd Trust
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `vault_manage_fapolicyd` | `true` | Manage fapolicyd file-trust entries (skips without failure, logging the reason, when fapolicyd/trust.d absent) |
+| `vault_fapolicyd_trusted_files` | see defaults | Files registered in fapolicyd file trust (existing regular files only) |
 
 ## Dependencies
 
@@ -216,12 +224,74 @@ The role uses `no_log: true` for initialization tasks and never prints the root
 token or unseal keys. Treat the controller-side artifact as temporary key
 material and remove it after transfer to the approved credential store.
 
+## fapolicyd File Trust
+
+When `vault_manage_fapolicyd` is `true` (the default) and a
+trust.d-capable fapolicyd is detected, the role renders a declarative
+ancillary trust file at `/etc/fapolicyd/trust.d/vault.trust` containing
+size + SHA-256 entries for the Vault binary, a pre-positioned
+`/usr/local/bin/vault` (future binary-install location), and the two helper
+scripts the role deploys to `/usr/local/bin`; then — when the daemon is
+running and the trust file or the vault package changed — hot-reloads the
+daemon's trust database with `fapolicyd-cli --update` before the Vault
+service is started. Entries are computed from the files actually present at run time,
+so the hashes always match the installed version. Duplicate list entries
+are deduped by the role. Paths containing whitespace cannot be represented
+in the space-delimited trust format and are silently excluded.
+
+**rpmdb vs file trust.** The RPM-installed `/usr/bin/vault` is already
+trusted via fapolicyd's rpmdb backend; the explicit file-trust entry
+documents intent and covers file-trust-only configurations. When the same
+path appears in both backends, fapolicyd's duplicate resolution is
+version-dependent and has not been confirmed for all target releases.
+
+**Operational contract.** Re-run this role after every vault package
+transaction. An out-of-band upgrade (e.g. a Satellite patch cycle without
+a role run) leaves the trust.d entry with the old size/hash; depending on
+the host's `integrity =` setting and duplicate resolution, that stale
+entry MAY deny execution of the upgraded binary. Operators who cannot
+guarantee re-runs should override `vault_fapolicyd_trusted_files` to drop
+`{{ vault_binary }}`. In-band upgrades (performed by this role) are
+covered when detection passes and the daemon is active — contingent on
+`fapolicyd-cli --update` refreshing the rpmdb backend (see the
+verification-items disposition) or on trust.d winning duplicate
+precedence.
+
+**Host-baseline dependencies** (this role manages none of these):
+
+- `trust =` in `/etc/fapolicyd/fapolicyd.conf` must include `file` for
+  trust.d to be consulted at all (the role warns when an *uncommented*
+  `trust =` line omits `file`; an absent or commented-out key is NOT
+  detected — the no-key branch assumes the compiled-in default includes
+  `file`, pending verification item 8); `integrity =` governs whether
+  size/hash are verified at execution time; `permissive = 0` is required
+  for enforcement.
+- A trust.d-capable fapolicyd. Older EL8 builds using the single
+  `/etc/fapolicyd/fapolicyd.trust` file are detected and skipped — the
+  role provides no refresh there at all. Minimum trust.d-capable version
+  per EL major: pending verification item 4.
+- The fapolicyd dnf plugin keeps the rpmdb trust snapshot fresh for
+  out-of-band upgrades (presence on target hosts: pending verification
+  item 9); without it, staleness persists until the daemon reloads. This also applies when `vault_manage_fapolicyd` is `false` (or
+  detection skips) and an upgrade occurs on an enforcing plugin-less
+  host — that combination is not benign.
+- The shipped rules.d must honor trust for `ftype=text/x-shellscript` on
+  the interpreter-open path — both helper scripts reach execution via
+  interpreter-open (env-bash shebangs), and the nominally direct-exec
+  `vault-audit-backup.service` path also fires an exec-perm check on the
+  script file, so both exec and open rules apply there.
+
+**Disabling.** Setting `vault_manage_fapolicyd: false` stops the role from
+touching fapolicyd entirely — including a previously deployed trust file.
+Manual cleanup: `rm /etc/fapolicyd/trust.d/vault.trust && fapolicyd-cli
+--update`.
+
 ## Compliance
 
 This role implements controls from:
 
 - **DISA STIG**: Application Security and Development STIG, RHEL 9 STIG
-- **NIST SP 800-53 Rev 5**: AC-6, AU-4, AU-6, SC-7, SC-8, SC-13, SC-23, SC-28, SI-7
+- **NIST SP 800-53 Rev 5**: AC-6, AU-4, AU-6, CM-7(5) (when a trust.d-capable fapolicyd is installed and enforcing with file trust enabled), SC-7, SC-8, SC-13, SC-23, SC-28, SI-7
 - **CNSSI 1253**: Moderate-Moderate-Moderate dimensional baselines
 - **CNSA 1.0** (CNSSP-15 / APSC-DV-002010): ECDSA P-384, RSA-3072+, SHA-384, AES-256-GCM
 - **FIPS 140-3**: TLS 1.2+ enforcement, FIPS-validated cryptographic modules
