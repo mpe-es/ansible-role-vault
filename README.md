@@ -231,10 +231,11 @@ material and remove it after transfer to the approved credential store.
 When `vault_auto_unseal_enabled` is `true` (and `vault_hsm_enabled` is
 `false`), the role deploys `vault-unseal.service`, a oneshot unit
 (`RemainAfterExit=yes`) that runs after `vault.service` on boot and applies
-the Shamir key shares stored in `/etc/vault.d/tokens.env`. The unit is
-also wanted by `vault.service` itself, so a stop/start or restart of
-Vault re-pulls the unseal; that behavior is noted as an open verification
-item in the behavior contract at the end of this section.
+the Shamir key shares stored in `/etc/vault.d/tokens.env`. Explicit
+restarts of Vault propagate to the unit (`Requires=`/`PartOf=`), and the
+unit is also wanted by `vault.service` itself so a stop-then-start cycle
+re-pulls it; both couplings are noted as open verification items in the
+behavior contract at the end of this section.
 
 **Privilege model.** The service runs as **root** by design: the tokens
 file is `root:root` mode `0600`, and `/etc/vault.d` itself is
@@ -264,11 +265,14 @@ out-of-band package updates.
 
 **Upgrading from earlier role versions.** The tokens file path is
 unchanged; on the next full role run the directory ownership tightens
-(`vault:vault` to `root:vault`), the unseal unit is re-enabled so the
-new `WantedBy=vault.service` link is created (a plain `enabled: true`
-would not refresh `[Install]` symlinks on already-enabled hosts), and
-AIDE will report the ownership change on its first post-upgrade check —
-expected, one time.
+(`vault:vault` to `root:vault`) and the role repairs the unseal unit's
+`[Install]` links by state: it checks for the `vault.service.wants`
+symlink every run and re-enables the unit when the link is missing (a
+plain `enabled: true` cannot refresh `[Install]` symlinks on
+already-enabled hosts, and a notify-based repair would be lost if a run
+aborts). AIDE will report the `/etc/vault.d` ownership change on every
+daily check until the baseline is refreshed — run `aide --update` (or
+re-initialize) once after the upgrade.
 
 **Behavior contract.** The script waits (bounded, default 60 s, 2 s
 retry interval) for the Vault API to answer before unsealing, refuses to

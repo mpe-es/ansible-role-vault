@@ -233,6 +233,34 @@
         group: root
         mode: '0750'
 
+    # Upgrade-path fixture: seed and enable a LEGACY unit (WantedBy=
+    # multi-user.target only) BEFORE deploying the real template, so the
+    # vault.service.wants link can only come from the state-based
+    # reenable repair — pins the round-5/6 critical class (a fresh
+    # enable would create the link and mask a deleted repair task).
+    # force:false keeps run 2 idempotent (real unit already in place).
+    - name: Seed legacy vault-unseal unit (already-enabled fleet fixture)
+      ansible.builtin.copy:
+        content: |
+          [Unit]
+          Description=Auto-Unseal HashiCorp Vault Service (legacy fixture)
+          [Service]
+          Type=oneshot
+          ExecStart=/bin/true
+          [Install]
+          WantedBy=multi-user.target
+        dest: /usr/lib/systemd/system/vault-unseal.service
+        force: false
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Enable legacy unseal unit (simulates already-enabled host)
+      ansible.builtin.systemd_service:
+        name: vault-unseal.service
+        enabled: true
+        daemon_reload: true
+
     - name: Deploy vault-unseal.service
       ansible.builtin.template:
         src: "{{ playbook_dir }}/../../templates/vault-unseal.service.j2"
@@ -241,14 +269,21 @@
         group: root
         mode: '0644'
 
-    # Enable so the [Install] symlinks exist and verify can assert the
-    # vault.service.wants link — the coupling the round-5 critical showed
-    # text-only assertions cannot see
-    - name: Enable vault-unseal.service (replica of tasks/service.yml)
-      ansible.builtin.systemd_service:
-        name: vault-unseal.service
-        enabled: true
-        daemon_reload: true
+    # --- replica of tasks/service.yml state-based Install-link repair
+    # (auto-unseal/hsm gating omitted per this scenario's fixed vars) ---
+    - name: Check vault.service.wants link for the unseal unit
+      ansible.builtin.stat:
+        path: "/etc/systemd/system/{{ vault_service_name }}.service.wants/vault-unseal.service"
+        get_checksum: false
+        get_mime: false
+        get_attributes: false
+      register: __vault_unseal_wants
+
+    - name: Repair unseal unit Install links (reenable)
+      ansible.builtin.command:
+        cmd: systemctl reenable vault-unseal.service
+      changed_when: true
+      when: not (__vault_unseal_wants.stat.exists | default(false))
 
     ###########################################################################
     # Phase 8.5: fapolicyd trust (inline replica of tasks/fapolicyd.yml —

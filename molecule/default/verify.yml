@@ -217,8 +217,9 @@
           vault-unseal.service must run as root (no User=/Group= directive;
           the tokens file is root-only 0600), must Require vault.service,
           must pass VAULT_ADDR with the configured listener port, must be
-          PartOf vault.service (restart propagation), and must be WantedBy
-          vault.service (start re-pull)
+          PartOf vault.service (explicit stop/restart propagation,
+          redundant with Requires), and must be WantedBy vault.service
+          (start re-pull)
 
     - name: Stat vault.service.wants symlink for the unseal unit
       ansible.builtin.stat:

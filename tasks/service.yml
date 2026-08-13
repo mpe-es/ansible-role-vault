@@ -158,8 +158,34 @@
       changed_when: true
 
 ###############################################################################
-# Enable auto-unseal service (after init completes)
+# Enable auto-unseal service (after init completes).
+# The [Install] link repair is STATE-based, not notify-based: a handler
+# queued on unit-file change is discarded if the play aborts before
+# flush, and `enabled: true` is a no-op on already-enabled units — so a
+# missing vault.service.wants link would otherwise never heal on
+# upgraded hosts (review round 6). reenable rebuilds all [Install]
+# links from the on-disk unit file.
 ###############################################################################
+- name: Check vault.service.wants link for the unseal unit
+  ansible.builtin.stat:
+    path: "/etc/systemd/system/{{ vault_service_name }}.service.wants/vault-unseal.service"
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: __vault_unseal_wants
+  when:
+    - vault_auto_unseal_enabled | bool
+    - not vault_hsm_enabled | bool
+
+- name: Repair unseal unit Install links (reenable)
+  ansible.builtin.command:
+    cmd: systemctl reenable vault-unseal.service
+  changed_when: true
+  when:
+    - vault_auto_unseal_enabled | bool
+    - not vault_hsm_enabled | bool
+    - not (__vault_unseal_wants.stat.exists | default(false))
+
 - name: Enable vault-unseal.service
   ansible.builtin.systemd_service:
     name: vault-unseal.service
