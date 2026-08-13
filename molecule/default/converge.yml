@@ -40,7 +40,7 @@
     vault_disable_performance_standby: true
     vault_log_level: info
     vault_listener_address: "0.0.0.0"
-    vault_listener_port: 8200
+    vault_listener_port: 8205  # non-default: proves the unit templates the port
     vault_tls_cert_file: /opt/vault/tls/tls.crt
     vault_tls_key_file: /opt/vault/tls/tls.key
     vault_tls_ca_file: /opt/vault/tls/ca.crt
@@ -50,7 +50,7 @@
     vault_tls_require_client_cert: false
     vault_tls_disable_client_certs: false
     vault_raft_node_id: vault-el
-    vault_api_addr: "https://vault-el:8200"
+    vault_api_addr: "https://vault-el:8205"
     vault_cluster_addr: "https://vault-el:8201"
     vault_cluster_leader_addr: ""
     vault_manage_tls: false
@@ -163,7 +163,8 @@
         group: "{{ item.group }}"
         mode: "{{ item.mode }}"
       loop:
-        - { path: "{{ vault_config_dir }}", owner: "{{ vault_user }}", group: "{{ vault_group }}", mode: "{{ vault_config_dir_mode }}" }
+        # root:vault mirrors tasks/system.yml (issue #30 tokens-file parent)
+        - { path: "{{ vault_config_dir }}", owner: root, group: "{{ vault_group }}", mode: "{{ vault_config_dir_mode }}" }
         - { path: "{{ vault_data_dir }}", owner: "{{ vault_user }}", group: "{{ vault_group }}", mode: "{{ vault_data_dir_mode }}" }
         - { path: "{{ vault_tls_dir }}", owner: "{{ vault_user }}", group: "{{ vault_group }}", mode: "{{ vault_tls_dir_mode }}" }
         - { path: "{{ vault_log_dir }}", owner: "{{ vault_user }}", group: "{{ vault_group }}", mode: "{{ vault_log_dir_mode }}" }
@@ -225,13 +226,42 @@
         group: root
         mode: '0644'
 
+    # root:root by design — mirrors tasks/stig.yml (issue #30 privilege model)
     - name: Copy vault-unseal.sh script
       ansible.builtin.copy:
         src: "{{ playbook_dir }}/../../files/vault-unseal.sh"
         dest: /usr/local/bin/vault-unseal.sh
-        owner: "{{ vault_user }}"
-        group: "{{ vault_group }}"
+        owner: root
+        group: root
         mode: '0750'
+
+    # Upgrade-path fixture: seed and enable a LEGACY unit (WantedBy=
+    # multi-user.target only) BEFORE deploying the real template, so the
+    # vault.service.wants link can only come from the state-based
+    # reenable repair — pins the round-5/6 critical class (a fresh
+    # enable would create the link and mask a deleted repair task).
+    # force:false keeps run 2 idempotent (real unit already in place).
+    - name: Seed legacy vault-unseal unit (already-enabled fleet fixture)
+      ansible.builtin.copy:
+        content: |
+          [Unit]
+          Description=Auto-Unseal HashiCorp Vault Service (legacy fixture)
+          [Service]
+          Type=oneshot
+          ExecStart=/bin/true
+          [Install]
+          WantedBy=multi-user.target
+        dest: /usr/lib/systemd/system/vault-unseal.service
+        force: false
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Enable legacy unseal unit (simulates already-enabled host)
+      ansible.builtin.systemd_service:
+        name: vault-unseal.service
+        enabled: true
+        daemon_reload: true
 
     - name: Deploy vault-unseal.service
       ansible.builtin.template:
@@ -240,6 +270,30 @@
         owner: root
         group: root
         mode: '0644'
+
+    # --- replica of tasks/service.yml state-based Install-link repair.
+    # Gating omitted DELIBERATELY: this scenario pins
+    # vault_auto_unseal_enabled: false (the role gate would skip every
+    # unseal task) yet still exercises the unseal artifacts to test
+    # template/render/repair behavior ---
+    - name: Check vault.service.wants link for the unseal unit
+      ansible.builtin.stat:
+        path: "/etc/systemd/system/{{ vault_service_name }}.service.wants/vault-unseal.service"
+        get_checksum: false
+        get_mime: false
+        get_attributes: false
+      register: __vault_unseal_wants
+
+    - name: Repair unseal unit Install links (reenable)
+      ansible.builtin.command:
+        cmd: systemctl reenable vault-unseal.service
+      changed_when: true
+      when: >-
+        not (
+          (__vault_unseal_wants.stat.islnk | default(false))
+          and (__vault_unseal_wants.stat.lnk_source | default('')
+               == '/usr/lib/systemd/system/vault-unseal.service')
+        )
 
     ###########################################################################
     # Phase 8.5: fapolicyd trust (inline replica of tasks/fapolicyd.yml —

@@ -3,7 +3,7 @@
 # Filename: handlers/main.yml
 # Role: ansible-role-vault
 # Summary: Event handlers for HashiCorp Vault service management
-# Last Updated: 03 Apr 2026
+# Last Updated: 13 Aug 2026
 # Classification: UNCLASSIFIED
 ###############################################################################
 
