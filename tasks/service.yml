@@ -164,7 +164,10 @@
 # flush, and `enabled: true` is a no-op on already-enabled units — so a
 # missing vault.service.wants link would otherwise never heal on
 # upgraded hosts (review round 6). reenable rebuilds all [Install]
-# links from the on-disk unit file.
+# links from the on-disk unit file. The link is HEALTHY only when it is
+# a symlink resolving to the canonical unit fragment — a stale symlink to
+# another unit, or a regular file, must trigger repair (a bare exists
+# check would skip it and Vault would start sealed; codex).
 ###############################################################################
 - name: Check vault.service.wants link for the unseal unit
   ansible.builtin.stat:
@@ -184,7 +187,12 @@
   when:
     - vault_auto_unseal_enabled | bool
     - not vault_hsm_enabled | bool
-    - not (__vault_unseal_wants.stat.exists | default(false))
+    - >-
+      not (
+        (__vault_unseal_wants.stat.islnk | default(false))
+        and (__vault_unseal_wants.stat.lnk_source | default('')
+             == '/usr/lib/systemd/system/vault-unseal.service')
+      )
 
 - name: Enable vault-unseal.service
   ansible.builtin.systemd_service:

@@ -249,14 +249,19 @@
         path: /etc/systemd/system/vault.service.wants/vault-unseal.service
       register: __verify_unseal_wants
 
-    - name: Assert the vault.service.wants link exists (enable really ran)
+    - name: Assert the vault.service.wants link resolves to the real unit
       ansible.builtin.assert:
         that:
           - __verify_unseal_wants.stat.islnk | default(false)
+          - >-
+            __verify_unseal_wants.stat.lnk_source | default('')
+            == '/usr/lib/systemd/system/vault-unseal.service'
         fail_msg: >-
-          vault.service.wants/vault-unseal.service symlink missing — the
-          [Install] WantedBy coupling exists only as unit text; enable (or
-          reenable on upgrades) did not materialize it
+          vault.service.wants/vault-unseal.service missing or not resolving
+          to /usr/lib/systemd/system/vault-unseal.service — the [Install]
+          WantedBy coupling exists only as unit text, or the repair guard
+          accepted a stale/wrong-target link; enable/reenable did not
+          materialize the correct link
 
     ###########################################################################
     # fapolicyd trust file
