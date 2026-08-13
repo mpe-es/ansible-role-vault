@@ -3,12 +3,17 @@
 Description=Auto-Unseal HashiCorp Vault Service
 After=network.target
 After={{ vault_service_name }}.service
-# Requires couples this oneshot to the Vault service so an operator
-# `systemctl restart {{ vault_service_name }}` re-runs the unseal as well.
+# Requires couples this unit's lifecycle to the Vault service. With
+# RemainAfterExit below, a `systemctl restart {{ vault_service_name }}`
+# is INTENDED to re-run the unseal via restart propagation — behavior
+# pending verification on a real host (open verification item).
 Requires={{ vault_service_name }}.service
 
 [Service]
 Type=oneshot
+# Keeps the unit 'active (exited)' after success so its state is visible
+# in systemctl and restart propagation from vault.service can apply.
+RemainAfterExit=yes
 ExecStart=/bin/bash /usr/local/bin/vault-unseal.sh
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 Environment=VAULT_CACERT={{ vault_tls_ca_file }}

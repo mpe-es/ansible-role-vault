@@ -44,9 +44,15 @@ stat_uid_mode() { # portable: GNU coreutils first, BSD fallback
     stat -c '%u %a' "$1" 2>/dev/null || stat -f '%u %Lp' "$1"
 }
 
+# Scope: checks the target and its immediate parent. The shipped default
+# lives under /etc (root-owned); a VAULT_TOKENS_FILE override placed under
+# an untrusted grandparent is the operator's responsibility.
 require_trusted_path() {
     local path="$1" uid mode gbit obit
-    read -r uid mode < <(stat_uid_mode "$path")
+    if ! read -r uid mode < <(stat_uid_mode "$path"); then
+        echo "Error: cannot stat $path" >&2
+        exit 1
+    fi
     if [[ "$uid" -ne 0 && "$uid" -ne "$EUID" ]]; then
         echo "Error: $path owned by uid $uid (not root); refusing to trust it" >&2
         exit 1
@@ -99,7 +105,7 @@ done
 
 # rc 2 also covers an UNINITIALIZED Vault (verified against a real vault
 # binary); throwing unseal keys at one only produces confusing errors.
-if [[ "$STATUS_OUT" == *'"initialized": false'* ]]; then
+if grep -Eq '"initialized"[[:space:]]*:[[:space:]]*false' <<< "$STATUS_OUT"; then
     echo "Error: Vault is not initialized (vault operator init has not run); refusing to apply unseal keys" >&2
     exit 1
 fi
