@@ -287,7 +287,23 @@ else
     fail "guard-file-perms: refuses group-writable tokens file (got 0)"
 fi
 assert_eq "$(vault_calls)" "0" "guard-file-perms: vault never invoked"
-assert_output_contains "writable" "guard-file-perms: diagnostic names the write bits"
+assert_output_contains "group/other" "guard-file-perms: diagnostic names the access bits"
+cleanup_scenario
+
+###############################################################################
+# Scenario 10b: tokens file group-READABLE (0640) -> refuse. Key material
+#   at rest must be 0600; a readable-by-group file leaks shares even when
+#   nobody can replace it.
+###############################################################################
+setup_scenario 0 sealed 3
+chmod 0640 "$MOCK_DIR/tokens.env"
+run_script
+if [ "$RC" -ne 0 ]; then
+    pass "guard-file-read: refuses group-readable tokens file"
+else
+    fail "guard-file-read: refuses group-readable tokens file (got 0)"
+fi
+assert_eq "$(vault_calls)" "0" "guard-file-read: vault never invoked"
 cleanup_scenario
 
 ###############################################################################

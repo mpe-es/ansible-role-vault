@@ -175,9 +175,12 @@
 # copy to the root-only location — the legacy file may be the only copy of
 # the unseal keys on hosts initialized by older versions. When the new
 # path already holds DIFFERENT content, the legacy file is preserved as
-# tokens.env.legacy for manual reconciliation; content is never destroyed.
-# Mutating tasks are gated off check mode (copy fails on a missing
-# destination directory even under --check; verified review round 2).
+# a content-addressed tokens.env.legacy.<sha256-prefix> for manual
+# reconciliation; content is never destroyed (identical content maps to
+# the identical preservation path, so nothing can be clobbered by a
+# different generation). Mutating tasks are gated off check mode (copy
+# fails on a missing destination directory even under --check; verified
+# review round 2) and on the legacy path being a regular file.
 ###############################################################################
 - name: Check for legacy tokens.env in vault-owned config directory
   ansible.builtin.stat:
@@ -197,9 +200,20 @@
     - __vault_legacy_tokens.stat.exists
     - ansible_check_mode
 
+- name: Warn when legacy tokens path is not a regular file
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: /etc/vault.d/tokens.env exists but is not a regular file
+      (symlink or special file); migration refuses to touch it. Inspect
+      and migrate it manually to /etc/vault-unseal/tokens.env.
+  when:
+    - __vault_legacy_tokens.stat.exists
+    - not (__vault_legacy_tokens.stat.isreg | default(false))
+
 - name: Migrate legacy tokens.env to root-only directory
   when:
     - __vault_legacy_tokens.stat.exists
+    - __vault_legacy_tokens.stat.isreg | default(false)
     - not ansible_check_mode
   block:
     - name: Create root-only directory for initialization material (migration)
@@ -218,6 +232,10 @@
         get_attributes: false
       register: __vault_new_tokens
 
+    # diff suppressed (content is key material) but NOT no_log: these two
+    # copies are the abort-before-delete safety property, and their
+    # failure diagnostics must be visible. remote_src params carry no
+    # secret content.
     - name: Copy legacy tokens.env to root-only location
       ansible.builtin.copy:
         src: /etc/vault.d/tokens.env
@@ -227,12 +245,16 @@
         group: root
         mode: '0600'
       when: not __vault_new_tokens.stat.exists
-      no_log: true
+      diff: false
 
+    # Content-addressed destination: identical content -> identical path
+    # (idempotent re-copy); different content -> different path. A prior
+    # unreconciled .legacy.<prefix> can therefore never be clobbered by a
+    # NEW divergent generation (review round 3, finding 1).
     - name: Preserve divergent legacy tokens.env for manual reconciliation
       ansible.builtin.copy:
         src: /etc/vault.d/tokens.env
-        dest: /etc/vault-unseal/tokens.env.legacy
+        dest: "/etc/vault-unseal/tokens.env.legacy.{{ __vault_legacy_tokens.stat.checksum[:12] }}"
         remote_src: true
         owner: root
         group: root
@@ -240,15 +262,16 @@
       when:
         - __vault_new_tokens.stat.exists
         - __vault_new_tokens.stat.checksum != __vault_legacy_tokens.stat.checksum
-      no_log: true
+      diff: false
 
     - name: Warn about divergent legacy unseal material
       ansible.builtin.debug:
         msg: >-
           WARNING: /etc/vault.d/tokens.env differed from
           /etc/vault-unseal/tokens.env. The legacy file was preserved at
-          /etc/vault-unseal/tokens.env.legacy — reconcile the two sets of
-          key material manually and remove the .legacy file once verified.
+          /etc/vault-unseal/tokens.env.legacy.{{ __vault_legacy_tokens.stat.checksum[:12] }}
+          — reconcile the key material manually and remove the preserved
+          file once verified.
       when:
         - __vault_new_tokens.stat.exists
         - __vault_new_tokens.stat.checksum != __vault_legacy_tokens.stat.checksum

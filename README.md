@@ -233,8 +233,8 @@ When `vault_auto_unseal_enabled` is `true` (and `vault_hsm_enabled` is
 (`RemainAfterExit=yes`) that runs after `vault.service` on boot and applies
 the Shamir key shares stored in `/etc/vault-unseal/tokens.env`. Re-running
 the unseal when `vault.service` is restarted is the intent of the
-`Requires=` coupling; that behavior is listed under the open verification
-items below.
+`Requires=` coupling; that behavior is noted as an open verification item
+in the behavior contract at the end of this section.
 
 **Privilege model.** The service runs as **root** by design: the tokens
 file is `root:root` mode `0600` inside a root-only `0700` directory, so the
@@ -246,13 +246,27 @@ ownership. During the unseal window itself the keys currently transit
 closing that channel by moving unseal to the API is tracked as issue #31.
 The script at `/usr/local/bin/vault-unseal.sh` is `root:root` so the
 service account cannot edit what root executes, and the script itself
-refuses to run if the tokens file or its directory is not root-owned or
-carries group/other write bits. Do not add a service-account directive to
-the unit without changing that model. Hosts deployed by earlier role
+refuses to run if the directory is not root-owned or group/other-writable,
+or if the tokens file carries ANY group/other access bits (key material
+must be `0600`). When `vault_auto_unseal_enabled` is `true`, the role
+re-enforces `/etc/vault-unseal` to `root:root 0700` on every run — so an
+operator-placed tokens file (the AAP flow with
+`vault_init_store_target: false`) sits in a hardened directory, and the
+operator is responsible only for creating the file itself `root:root
+0600`. Do not add a service-account directive to the unit without
+changing that model.
+
+**Migration from earlier versions.** Hosts deployed by earlier role
 versions had the tokens file at `/etc/vault.d/tokens.env`; the role
-migrates it on the next full (untagged) role run — move, never delete:
-if the new path already holds different content, the legacy file is
-preserved as `tokens.env.legacy` for manual reconciliation.
+migrates it on the next full (untagged) role run, regardless of the
+`vault_initialize`/`vault_auto_unseal_enabled` settings — the file
+already exists on the host at a less safe path, so relocating it adds no
+new exposure. Move, never delete: if the new path already holds different
+content, the legacy file is preserved content-addressed as
+`tokens.env.legacy.<sha256-prefix>` for manual reconciliation (a prior
+unreconciled preservation can never be overwritten by a new divergent
+generation). Symlinked or otherwise non-regular legacy paths are refused
+with a warning and left for manual migration.
 
 **Behavior contract.** The script waits (bounded, default 60 s, 2 s
 retry interval) for the Vault API to answer before unsealing, refuses to

@@ -41,16 +41,25 @@ fi
 # needs only directory write, not file ownership).
 ###############################################################################
 stat_uid_mode() { # portable: GNU coreutils first, BSD fallback
-    stat -c '%u %a' "$1" 2>/dev/null || stat -f '%u %Lp' "$1"
+    stat -c '%u %a' "$1" 2>/dev/null || stat -f '%u %Lp' "$1" 2>/dev/null
 }
 
 # Scope: checks the target and its immediate parent. The shipped default
 # lives under /etc (root-owned); a VAULT_TOKENS_FILE override placed under
 # an untrusted grandparent is the operator's responsibility.
+# kind=dir  -> refuse group/other WRITE bits (replacement protection)
+# kind=file -> refuse ANY group/other access bits (key material is 0600;
+#              a group-readable tokens file leaks shares at rest)
 require_trusted_path() {
-    local path="$1" uid mode gbit obit
+    local path="$1" kind="$2" uid mode gbit obit
     if ! read -r uid mode < <(stat_uid_mode "$path"); then
         echo "Error: cannot stat $path" >&2
+        exit 1
+    fi
+    # Fail closed on unparseable stat output (a formatter mismatch must
+    # never degrade into a silently-passing guard)
+    if ! [[ "$uid" =~ ^[0-9]+$ && "$mode" =~ ^[0-7]+$ ]]; then
+        echo "Error: unparseable stat output for $path ('$uid $mode')" >&2
         exit 1
     fi
     if [[ "$uid" -ne 0 && "$uid" -ne "$EUID" ]]; then
@@ -59,16 +68,23 @@ require_trusted_path() {
     fi
     gbit="${mode: -2:1}"
     obit="${mode: -1}"
-    case "$gbit$obit" in
-        *[2367]*)
-            echo "Error: $path is group- or other-writable (mode $mode); refusing" >&2
+    if [[ "$kind" == "file" ]]; then
+        if [[ "$gbit$obit" != "00" ]]; then
+            echo "Error: $path has group/other access bits (mode $mode); tokens file must be 0600" >&2
             exit 1
-            ;;
-    esac
+        fi
+    else
+        case "$gbit$obit" in
+            *[2367]*)
+                echo "Error: $path is group- or other-writable (mode $mode); refusing" >&2
+                exit 1
+                ;;
+        esac
+    fi
 }
 
-require_trusted_path "$(dirname "$TOKENS_FILE")"
-require_trusted_path "$TOKENS_FILE"
+require_trusted_path "$(dirname "$TOKENS_FILE")" dir
+require_trusted_path "$TOKENS_FILE" file
 
 # seal_status: 0 = unsealed, 2 = sealed or uninitialized, other = the CLI
 # could not obtain seal status (listener down, TLS/CA error, DNS — all
