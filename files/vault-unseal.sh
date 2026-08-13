@@ -6,16 +6,17 @@
 #   for the Vault API to answer, applies Shamir key shares until unsealed,
 #   and reports the true outcome in the exit code.
 # Location (deployed): /usr/local/bin/vault-unseal.sh (root:root)
-# Runs as: root, via vault-unseal.service. The tokens file lives in a
-#   root-owned 0700 directory so no unprivileged account can replace it —
-#   this file is `source`d by root; its whole path chain must be trusted.
+# Runs as: root, via vault-unseal.service. The tokens file lives in
+#   /etc/vault.d (root:vault 0750 — root-owned so no unprivileged account
+#   can replace entries; vault group reads its configs). This file is
+#   `source`d by root; its path chain must be trusted.
 # Exit codes: 0 = Vault is unsealed; 1 = failure (untrusted tokens path,
 #   unreachable API, uninitialized Vault, or still sealed after all keys)
 # Classification: UNCLASSIFIED
 ###############################################################################
 set -euo pipefail
 
-TOKENS_FILE="${VAULT_TOKENS_FILE:-/etc/vault-unseal/tokens.env}"
+TOKENS_FILE="${VAULT_TOKENS_FILE:-/etc/vault.d/tokens.env}"
 VAULT_CA_FILE="${VAULT_CACERT:-/opt/vault/tls/ca.crt}"
 WAIT_TIMEOUT="${VAULT_UNSEAL_TIMEOUT:-60}"
 RETRY_INTERVAL="${VAULT_UNSEAL_RETRY_INTERVAL:-2}"
@@ -47,7 +48,9 @@ stat_uid_mode() { # portable: GNU coreutils first, BSD fallback
 # Scope: checks the target and its immediate parent. The shipped default
 # lives under /etc (root-owned); a VAULT_TOKENS_FILE override placed under
 # an untrusted grandparent is the operator's responsibility.
-# kind=dir  -> refuse group/other WRITE bits (replacement protection)
+# kind=dir  -> refuse group/other WRITE bits (replacement protection;
+#              group r-x is EXPECTED — /etc/vault.d is root:vault 0750 so
+#              the vault group can read its own configs)
 # kind=file -> refuse ANY group/other access bits (key material is 0600;
 #              a group-readable tokens file leaks shares at rest)
 require_trusted_path() {

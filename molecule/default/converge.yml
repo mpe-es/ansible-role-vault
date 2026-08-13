@@ -50,7 +50,7 @@
     vault_tls_require_client_cert: false
     vault_tls_disable_client_certs: false
     vault_raft_node_id: vault-el
-    vault_api_addr: "https://vault-el:8200"
+    vault_api_addr: "https://vault-el:8205"
     vault_cluster_addr: "https://vault-el:8201"
     vault_cluster_leader_addr: ""
     vault_manage_tls: false
@@ -161,7 +161,8 @@
         group: "{{ item.group }}"
         mode: "{{ item.mode }}"
       loop:
-        - { path: "{{ vault_config_dir }}", owner: "{{ vault_user }}", group: "{{ vault_group }}", mode: "{{ vault_config_dir_mode }}" }
+        # root:vault mirrors tasks/system.yml (issue #30 tokens-file parent)
+        - { path: "{{ vault_config_dir }}", owner: root, group: "{{ vault_group }}", mode: "{{ vault_config_dir_mode }}" }
         - { path: "{{ vault_data_dir }}", owner: "{{ vault_user }}", group: "{{ vault_group }}", mode: "{{ vault_data_dir_mode }}" }
         - { path: "{{ vault_tls_dir }}", owner: "{{ vault_user }}", group: "{{ vault_group }}", mode: "{{ vault_tls_dir_mode }}" }
         - { path: "{{ vault_log_dir }}", owner: "{{ vault_user }}", group: "{{ vault_group }}", mode: "{{ vault_log_dir_mode }}" }
@@ -239,124 +240,6 @@
         owner: root
         group: root
         mode: '0644'
-
-    ###########################################################################
-    # Phase 9 (partial replica): legacy tokens.env migration — the
-    # DIVERGENCE case (both files exist, different content), which is the
-    # data-loss path review round 2 proved unguarded. Fixtures are gated on
-    # a marker file so the molecule idempotence run stays clean (run 1
-    # migrates and sets the marker; run 2 seeds nothing, migration skips).
-    ###########################################################################
-    - name: Check migration fixture marker
-      ansible.builtin.stat:
-        path: /etc/vault-unseal/.migration-fixture-done
-        get_checksum: false
-        get_mime: false
-        get_attributes: false
-      register: __fixture_marker
-
-    - name: Seed migration fixtures (divergence case)
-      when: not __fixture_marker.stat.exists
-      block:
-        - name: Seed legacy tokens.env fixture
-          ansible.builtin.copy:
-            content: |
-              VAULT_UNSEAL_KEY_1=legacy-key-material
-            dest: /etc/vault.d/tokens.env
-            owner: root
-            group: root
-            mode: '0600'
-
-        # Deliberately WRONG mode (0755): the migration block must enforce
-        # 0700, so the verify assertion measures the role's enforcement,
-        # not the fixture (review round 3, finding 7)
-        - name: Seed unseal directory at a deliberately loose mode
-          ansible.builtin.file:
-            path: /etc/vault-unseal
-            state: directory
-            owner: root
-            group: root
-            mode: '0755'
-
-        - name: Seed divergent tokens.env at root-only location
-          ansible.builtin.copy:
-            content: |
-              VAULT_UNSEAL_KEY_1=different-new-material
-            dest: /etc/vault-unseal/tokens.env
-            owner: root
-            group: root
-            mode: '0600'
-
-    # --- replica of tasks/service.yml migration block: MUTATING tasks
-    # copied verbatim (register names, guards, shapes); the two advisory
-    # debug tasks (check-mode report, divergence warning) are omitted as
-    # non-mutating ---
-    - name: Check for legacy tokens.env in vault-owned config directory
-      ansible.builtin.stat:
-        path: /etc/vault.d/tokens.env
-        checksum_algorithm: sha256
-        get_mime: false
-        get_attributes: false
-      register: __vault_legacy_tokens
-
-    - name: Migrate legacy tokens.env to root-only directory
-      when:
-        - __vault_legacy_tokens.stat.exists
-        - __vault_legacy_tokens.stat.isreg | default(false)
-        - not ansible_check_mode
-      block:
-        - name: Create root-only directory for initialization material (migration)
-          ansible.builtin.file:
-            path: /etc/vault-unseal
-            state: directory
-            owner: root
-            group: root
-            mode: '0700'
-
-        - name: Check for existing tokens.env at the root-only location
-          ansible.builtin.stat:
-            path: /etc/vault-unseal/tokens.env
-            checksum_algorithm: sha256
-            get_mime: false
-            get_attributes: false
-          register: __vault_new_tokens
-
-        - name: Copy legacy tokens.env to root-only location
-          ansible.builtin.copy:
-            src: /etc/vault.d/tokens.env
-            dest: /etc/vault-unseal/tokens.env
-            remote_src: true
-            owner: root
-            group: root
-            mode: '0600'
-          when: not __vault_new_tokens.stat.exists
-          diff: false
-
-        - name: Preserve divergent legacy tokens.env for manual reconciliation
-          ansible.builtin.copy:
-            src: /etc/vault.d/tokens.env
-            dest: "/etc/vault-unseal/tokens.env.legacy.{{ __vault_legacy_tokens.stat.checksum[:12] }}"
-            remote_src: true
-            owner: root
-            group: root
-            mode: '0600'
-          when:
-            - __vault_new_tokens.stat.exists
-            - __vault_new_tokens.stat.checksum != __vault_legacy_tokens.stat.checksum
-          diff: false
-
-        - name: Remove legacy tokens.env after contents are preserved
-          ansible.builtin.file:
-            path: /etc/vault.d/tokens.env
-            state: absent
-
-    - name: Set migration fixture marker
-      ansible.builtin.copy:
-        content: ""
-        dest: /etc/vault-unseal/.migration-fixture-done
-        owner: root
-        group: root
-        mode: '0600'
 
     ###########################################################################
     # Phase 8.5: fapolicyd trust (inline replica of tasks/fapolicyd.yml —

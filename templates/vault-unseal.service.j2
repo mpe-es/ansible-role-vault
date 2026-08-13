@@ -3,10 +3,11 @@
 Description=Auto-Unseal HashiCorp Vault Service
 After=network.target
 After={{ vault_service_name }}.service
-# Requires couples this unit's lifecycle to the Vault service. With
-# RemainAfterExit below, a `systemctl restart {{ vault_service_name }}`
-# is INTENDED to re-run the unseal via restart propagation — behavior
-# pending verification on a real host (open verification item).
+# Requires stops this unit when Vault stops; the WantedBy entry on
+# {{ vault_service_name }}.service in [Install] is what pulls the unseal
+# back in when Vault starts again, so a stop/start or restart cycle
+# re-runs it — behavior pending verification on a real host (open
+# verification item).
 Requires={{ vault_service_name }}.service
 
 [Service]
@@ -18,8 +19,8 @@ ExecStart=/bin/bash /usr/local/bin/vault-unseal.sh
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 Environment=VAULT_CACERT={{ vault_tls_ca_file }}
 Environment=VAULT_ADDR=https://127.0.0.1:{{ vault_listener_port }}
-# Runs as root by design: the unseal keys in /etc/vault-unseal/tokens.env
-# are root-only (0600 in a root:root 0700 directory) so the vault service
+# Runs as root by design: the unseal keys in /etc/vault.d/tokens.env are
+# root:root 0600 inside a root-owned directory, so the vault service
 # account can never read or replace its own unseal keys. Do NOT add a
 # service account directive here without changing that model.
 
@@ -39,4 +40,4 @@ SyslogIdentifier=vault-unseal
 TimeoutStartSec=120
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=multi-user.target {{ vault_service_name }}.service

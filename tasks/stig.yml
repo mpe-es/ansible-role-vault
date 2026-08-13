@@ -121,18 +121,6 @@
     - vault_auto_unseal_enabled | bool
     - not vault_hsm_enabled | bool
   block:
-    # Steady-state posture enforcement: the init/migration tasks create
-    # this directory, but an operator-placed tokens file (AAP flow with
-    # vault_init_store_target=false) or drift must be re-hardened every
-    # run, like /etc/vault.d in system.yml.
-    - name: Enforce root-only unseal directory posture
-      ansible.builtin.file:
-        path: /etc/vault-unseal
-        state: directory
-        owner: root
-        group: root
-        mode: '0700'
-
     # root:root by design: vault-unseal.service runs as root (the tokens
     # file is root-only) and the vault service account must not be able to
     # edit a script that root executes.
