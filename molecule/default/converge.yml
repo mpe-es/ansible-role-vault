@@ -288,7 +288,12 @@
       ansible.builtin.command:
         cmd: systemctl reenable vault-unseal.service
       changed_when: true
-      when: not (__vault_unseal_wants.stat.exists | default(false))
+      when: >-
+        not (
+          (__vault_unseal_wants.stat.islnk | default(false))
+          and (__vault_unseal_wants.stat.lnk_source | default('')
+               == '/usr/lib/systemd/system/vault-unseal.service')
+        )
 
     ###########################################################################
     # Phase 8.5: fapolicyd trust (inline replica of tasks/fapolicyd.yml —
