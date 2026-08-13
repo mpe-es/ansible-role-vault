@@ -60,8 +60,10 @@ if [[ ! -d "$BACKUP_DIR" ]]; then
     mkdir "$BACKUP_DIR"
     log_info "Created backup directory: $BACKUP_DIR"
 fi
-chown root:root "$BACKUP_DIR"
-chmod 0700 "$BACKUP_DIR"
+chown root:root "$BACKUP_DIR" \
+    || { log_crit "Cannot enforce root ownership on $BACKUP_DIR"; exit 1; }
+chmod 0700 "$BACKUP_DIR" \
+    || { log_crit "Cannot enforce 0700 on $BACKUP_DIR"; exit 1; }
 
 # Create timestamped backup subdirectory (root-only)
 BACKUP_SUBDIR="$BACKUP_DIR/backup-$TIMESTAMP"

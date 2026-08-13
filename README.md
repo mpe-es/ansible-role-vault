@@ -306,11 +306,11 @@ therefore stays root-only end to end:
   extracts about itself. `find /opt/vault-backup ! -user root` returns
   nothing after a run.
 - The script re-enforces this ownership/mode contract on every run. On
-  hosts upgraded from earlier releases (which created the tree
-  `vault:vault`), the role immediately sets the top-level directory to
-  `root:root` mode `0700` - denying the vault account all access to the
-  subtree - and the remaining legacy content is swept to `root:root`
-  `0700`/`0600` by the first backup run after the upgrade.
+  hosts upgraded from earlier releases (which created the `backup-*`
+  subdirectories `vault:vault`), the role immediately sets the top-level
+  directory to `root:root` mode `0700` - denying the vault account all
+  access to the subtree - and the remaining legacy content is swept to
+  `root:root` `0700`/`0600` by the first backup run after the upgrade.
 
 There is no supported way to grant the vault account read access through
 role variables; operators who need to export backups should pull them via
