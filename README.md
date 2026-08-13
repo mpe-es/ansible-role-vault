@@ -271,8 +271,10 @@ symlink every run and re-enables the unit when the link is missing (a
 plain `enabled: true` cannot refresh `[Install]` symlinks on
 already-enabled hosts, and a notify-based repair would be lost if a run
 aborts). AIDE will report the `/etc/vault.d` ownership change on every
-daily check until the baseline is refreshed — run `aide --update` (or
-re-initialize) once after the upgrade.
+daily check until the baseline is refreshed — after the upgrade, run
+`aide --update` and move `/var/lib/aide/aide.db.new.gz` to
+`/var/lib/aide/aide.db.gz` (the file the daily check reads), or delete
+`aide.db.gz` and re-run the role, which re-initializes the baseline.
 
 **Behavior contract.** The script waits (bounded, default 60 s, 2 s
 retry interval) for the Vault API to answer before unsealing, refuses to
@@ -283,8 +285,9 @@ untrusted, or Vault remained sealed — so a failed boot-time unseal shows
 as a failed unit in `systemctl`/monitoring instead of silently reporting
 success. The script's behavior is covered by `tests/vault-unseal-test.sh`
 (run in CI); unit-level behavior (root execution, ordering, restart
-coupling) and end-to-end reboot verification on a physical RHEL 9 host
-remain open verification items.
+coupling, and the start re-pull via `WantedBy=vault.service`) and
+end-to-end reboot verification on a physical RHEL 9 host remain open
+verification items.
 
 **Security trade-off.** Storing Shamir shares on the node defeats the
 split-knowledge intent of `vault_key_shares`/`vault_key_threshold` for any

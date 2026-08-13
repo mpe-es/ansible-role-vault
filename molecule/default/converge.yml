@@ -269,8 +269,11 @@
         group: root
         mode: '0644'
 
-    # --- replica of tasks/service.yml state-based Install-link repair
-    # (auto-unseal/hsm gating omitted per this scenario's fixed vars) ---
+    # --- replica of tasks/service.yml state-based Install-link repair.
+    # Gating omitted DELIBERATELY: this scenario pins
+    # vault_auto_unseal_enabled: false (the role gate would skip every
+    # unseal task) yet still exercises the unseal artifacts to test
+    # template/render/repair behavior ---
     - name: Check vault.service.wants link for the unseal unit
       ansible.builtin.stat:
         path: "/etc/systemd/system/{{ vault_service_name }}.service.wants/vault-unseal.service"

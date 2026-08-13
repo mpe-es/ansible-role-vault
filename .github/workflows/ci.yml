@@ -62,6 +62,12 @@ jobs:
       - name: Run vault-unseal behavioral tests
         run: bash tests/vault-unseal-test.sh
 
+      # Replica-drift tripwire: molecule converge hand-copies role tasks,
+      # so its assertions cannot detect deletion of the ROLE's copy. Pin
+      # the load-bearing repair task to the role file itself.
+      - name: Assert Install-link repair exists in the role (not just the molecule replica)
+        run: grep -q "systemctl reenable vault-unseal.service" tasks/service.yml
+
   ###########################################################
   # Syntax Check Stage
   ###########################################################
