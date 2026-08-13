@@ -56,11 +56,16 @@ jobs:
       - name: Run ansible-lint
         run: ansible-lint
 
+      # Widened per the #46-era comment now that both script lineages are
+      # in tree; full consolidation + version pinning tracked in issue #47
       - name: Run shellcheck on shipped and test scripts
-        run: shellcheck files/*.sh tests/vault-unseal-test.sh
+        run: shellcheck files/*.sh tests/*.sh
 
       - name: Run vault-unseal behavioral tests
         run: bash tests/vault-unseal-test.sh
+
+      - name: Run vault-audit-backup behavioral tests
+        run: bash tests/vault-audit-backup-test.sh
 
       # Replica-drift tripwire: molecule converge hand-copies role tasks,
       # so its assertions cannot detect deletion of the ROLE's copy. Pin

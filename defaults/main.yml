@@ -158,6 +158,8 @@ vault_stig_logrotate_days: 90
 vault_stig_audit_backup_enabled: true
 
 # Audit backup retention (days)
+# Injected into vault-audit-backup.service via Environment=RETENTION_DAYS;
+# the backup script falls back to 7 if unset or invalid
 vault_stig_audit_backup_retention_days: 7
 
 # Deploy AIDE file integrity check service and timer

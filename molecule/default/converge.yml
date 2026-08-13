@@ -31,7 +31,7 @@
     vault_tls_file_mode: '0640'
     vault_log_dir_mode: '0750'
     vault_log_file_mode: '0600'
-    vault_backup_dir_mode: '0750'
+    vault_backup_dir_mode: '0700'
     vault_service_name: vault
     # Role defaults
     vault_edition: vault
@@ -61,7 +61,9 @@
     vault_stig_logrotate_enabled: true
     vault_stig_logrotate_days: 90
     vault_stig_audit_backup_enabled: true
-    vault_stig_audit_backup_retention_days: 7
+    # Deliberately non-default (default 7) so verify.yml proves the variable
+    # observably flows into the rendered unit (issue #32)
+    vault_stig_audit_backup_retention_days: 14
     vault_stig_aide_check_enabled: false
     vault_auto_unseal_enabled: false
     vault_rsyslog_enabled: false

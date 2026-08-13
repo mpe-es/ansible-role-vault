@@ -124,6 +124,25 @@ The following hooks are configured:
 - **check-merge-conflict** - Detect merge conflict markers
 - **detect-private-key** - Prevent accidental key commits
 
+### Shell Script Testing
+
+`files/vault-audit-backup.sh` has a behavioral test harness at
+`tests/vault-audit-backup-test.sh`. The CI lint job runs shellcheck and
+the harness; run them locally before submitting:
+
+```bash
+shellcheck files/vault-audit-backup.sh tests/vault-audit-backup-test.sh
+bash tests/vault-audit-backup-test.sh
+```
+
+Coverage for `files/vault-unseal.sh` lands with the auto-unseal
+hardening work (issue #30). New helper scripts should ship with their
+own harness and be added to both CI steps.
+
+The harness is non-root friendly: external commands are mocked via PATH
+shims (chmod is a pass-through shim with targeted failure injection) and
+all paths are redirected into a temporary sandbox.
+
 ### Molecule Testing
 
 Molecule tests require Podman (not Docker) on RHEL:
