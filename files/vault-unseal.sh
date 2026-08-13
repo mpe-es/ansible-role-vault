@@ -151,20 +151,22 @@ if grep -Eq '"initialized"[[:space:]]*:[[:space:]]*false' <<< "$STATUS_OUT"; the
     exit 1
 fi
 
-# Load VAULT_UNSEAL_KEY_* variables (plain assignments; not exported)
-# shellcheck source=/dev/null
-if ! source "$TOKENS_FILE"; then
-    echo "Error: failed to source $TOKENS_FILE (malformed content)" >&2
-    exit 1
-fi
-
+# Parse VAULT_UNSEAL_KEY_<n>=<value> records WITHOUT executing the file.
+# NEVER `source` a secrets file as root: content like `exit 0` would make
+# the service report success while Vault stays sealed (violating the
+# honest-exit contract), and `set -u` could abort on an unquoted value —
+# both outside any catchable diagnostic, and $(...) would run as root.
+# Order is immaterial: any threshold of distinct Shamir shares unseals.
 UNSEAL_KEYS=()
-for var in $(compgen -v | grep "^VAULT_UNSEAL_KEY_" | sort -V); do
-    value="${!var}"
-    if [[ -n "$value" ]]; then
-        UNSEAL_KEYS+=("$value")
+while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ "$line" =~ ^VAULT_UNSEAL_KEY_[0-9]+=(.*)$ ]] || continue
+    value="${BASH_REMATCH[1]}"
+    # strip one layer of matching surrounding quotes, if present
+    if [[ "$value" == \"*\" || "$value" == \'*\' ]]; then
+        value="${value:1:${#value}-2}"
     fi
-done
+    [[ -n "$value" ]] && UNSEAL_KEYS+=("$value")
+done < "$TOKENS_FILE"
 
 if [[ ${#UNSEAL_KEYS[@]} -eq 0 ]]; then
     echo "Error: No unseal keys found in $TOKENS_FILE" >&2

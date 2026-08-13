@@ -259,19 +259,30 @@ assert_output_contains "not initialized" "uninitialized: diagnostic names the co
 cleanup_scenario
 
 ###############################################################################
-# Scenario 9: tokens file sources but a line fails (set -e trap) -> exit
-#   non-zero WITH a diagnostic, not a silent rc-1 abort
+# Scenario 9: tokens file is PARSED, never executed. A file carrying
+#   shell-terminating (`exit 0`) and command-substitution content must not
+#   run it: sourcing would exit-0-while-sealed (false success) and would
+#   fire $(...) as root. Keys are still extracted from the assignment
+#   lines, so with 3 keys the mock unseals.
 ###############################################################################
 setup_scenario 0 sealed 3
-printf 'VAULT_UNSEAL_KEY_1=key-one\nfalse\n' > "$MOCK_DIR/tokens.env"
+{
+    printf 'VAULT_UNSEAL_KEY_1=key-one\n'
+    printf 'exit 0\n'
+    printf 'VAULT_UNSEAL_KEY_2=key-two\n'
+    # shellcheck disable=SC2016  # the $(...) MUST stay literal in the file
+    printf 'VAULT_ROOT_TOKEN=$(touch %s/pwned)\n' "$MOCK_DIR"
+    printf 'VAULT_UNSEAL_KEY_3=key-three\n'
+} > "$MOCK_DIR/tokens.env"
 chmod 0600 "$MOCK_DIR/tokens.env"
 run_script
-if [ "$RC" -ne 0 ]; then
-    pass "source-failure: exits non-zero"
+assert_eq "$RC" "0" "no-exec: unseals (exit 0 line did not terminate the script)"
+assert_eq "$(keys_applied)" "3" "no-exec: all three keys parsed past the exit line"
+if [ -e "$MOCK_DIR/pwned" ]; then
+    fail "no-exec: command substitution in tokens file did NOT execute"
 else
-    fail "source-failure: exits non-zero (got 0)"
+    pass "no-exec: command substitution in tokens file did NOT execute"
 fi
-assert_output_contains "failed to source" "source-failure: diagnostic present"
 cleanup_scenario
 
 ###############################################################################
