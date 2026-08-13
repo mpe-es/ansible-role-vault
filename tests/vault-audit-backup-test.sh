@@ -4,10 +4,11 @@
 # Role: ansible-role-vault
 # Summary: Behavioral test harness for files/vault-audit-backup.sh.
 #   Non-root friendly: external commands (chown, gzip, ausearch, journalctl,
-#   logger) are mocked via a PATH shim directory; all paths are overridden
-#   into a mktemp sandbox via environment variables; every SUT invocation
-#   runs under env -i so no ambient environment leaks in. TAP-ish
-#   ok / not ok output with a static plan.
+#   logger) are mocked via a PATH shim directory, and chmod is a
+#   pass-through shim (real chmod, with targeted failure injection); all
+#   paths are overridden into a mktemp sandbox via environment variables;
+#   every SUT invocation runs under env -i so no ambient environment leaks
+#   in. TAP-ish ok / not ok output with a static plan.
 # Last Updated: 13 Aug 2026
 # Classification: UNCLASSIFIED
 ###############################################################################
@@ -16,7 +17,7 @@ set -uo pipefail
 
 # Static plan: the runner fails if any assertion vanishes or is added
 # without updating this count.
-PLAN=51
+PLAN=57
 
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUT="$TEST_DIR/../files/vault-audit-backup.sh"
@@ -116,7 +117,11 @@ if [[ -n "${MOCK_CHMOD_FAIL_PATH:-}" ]]; then
         fi
     done
 fi
-exec /bin/chmod "$@"
+for real_chmod in /bin/chmod /usr/bin/chmod; do
+    [[ -x "$real_chmod" ]] && exec "$real_chmod" "$@"
+done
+echo "chmod shim: no real chmod found" >&2
+exit 127
 EOF
 
 # ausearch: emit a synthetic root-only audit record unless told to be empty
@@ -422,6 +427,8 @@ RC=$?
 assert "s8: script exits 1 when the directory mode sweep fails" test "$RC" -eq 1
 assert "s8: directory mode sweep failure logged as error" \
     grep -q 'Directory mode sweep incomplete' "$SB8/run.log"
+assert_not "s8: file mode sweep leg not implicated" \
+    grep -q 'File mode sweep incomplete' "$SB8/run.log"
 assert "s8: sweep failure logged as critical at exit" \
     grep -q 'incomplete privilege sweep' "$SB8/run.log"
 
@@ -436,8 +443,35 @@ RC=$?
 assert "s9: script exits 1 when the file mode sweep fails" test "$RC" -eq 1
 assert "s9: file mode sweep failure logged as error" \
     grep -q 'File mode sweep incomplete' "$SB9/run.log"
+assert_not "s9: directory mode sweep leg not implicated" \
+    grep -q 'Directory mode sweep incomplete' "$SB9/run.log"
 assert "s9: sweep failure logged as critical at exit" \
     grep -q 'incomplete privilege sweep' "$SB9/run.log"
+
+###############################################################################
+# Scenario 10: bootstrap privilege guard - un-hardenable backup root -> exit 1
+###############################################################################
+echo "# scenario 10: bootstrap chmod failure on the backup root fails the run"
+SB10="$(new_sandbox)"
+mkdir -p "$SB10/opt/vault-backup"
+run_sut "$SB10" "$SB10/run.log" MOCK_CHMOD_FAIL_PATH="$SB10/opt/vault-backup"
+RC=$?
+assert "s10: script exits 1 when the backup root cannot be chmodded" test "$RC" -eq 1
+assert "s10: bootstrap chmod failure logged as critical" \
+    grep -q 'Cannot enforce 0700' "$SB10/run.log"
+
+###############################################################################
+# Scenario 11: symlinked backup root is refused (find sweeps would skip it)
+###############################################################################
+echo "# scenario 11: symlinked backup root refused"
+SB11="$(new_sandbox)"
+mkdir -p "$SB11/real-backup" "$SB11/opt"
+ln -s "$SB11/real-backup" "$SB11/opt/vault-backup"
+run_sut "$SB11" "$SB11/run.log"
+RC=$?
+assert "s11: script exits 1 when the backup root is a symlink" test "$RC" -eq 1
+assert "s11: symlink refusal logged as critical" \
+    grep -q 'is a symlink - refusing to run' "$SB11/run.log"
 
 ###############################################################################
 # Summary

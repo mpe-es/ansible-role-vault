@@ -51,6 +51,12 @@ if [[ ! "$RETENTION_DAYS" =~ ^[0-9]+$ ]]; then
     RETENTION_DAYS=7
 fi
 
+# Refuse a symlinked backup root: find -type sweeps would silently skip it
+if [[ -L "$BACKUP_DIR" ]]; then
+    log_crit "Backup directory $BACKUP_DIR is a symlink - refusing to run"
+    exit 1
+fi
+
 # Ensure backup directory exists and is root-only, even if a prior release
 # of this script left it owned by the vault service account (0750)
 if [[ ! -d "$BACKUP_DIR" ]]; then
@@ -140,6 +146,8 @@ fi
 SWEEP_FAILED=0
 chown -R root:root "$BACKUP_DIR" \
     || { log_error "Ownership sweep incomplete on $BACKUP_DIR"; SWEEP_FAILED=1; }
+# NOTE: -exec ... + is load-bearing: it propagates chmod failure to find's
+# exit status, while -exec ... \; returns 0 even when the utility fails
 find "$BACKUP_DIR" -type d -exec chmod 0700 {} + \
     || { log_error "Directory mode sweep incomplete on $BACKUP_DIR"; SWEEP_FAILED=1; }
 find "$BACKUP_DIR" -type f -exec chmod 0600 {} + \
