@@ -254,9 +254,21 @@ access bits (key material must be `0600`). An operator-placed tokens
 file (the AAP flow with `vault_init_store_target: false`) goes at the
 same path with the same `root:root 0600` posture — the script refuses
 anything looser. Do not add a service-account directive to the unit
-without changing that model. Hosts deployed by earlier role versions
-already carry the tokens file at this path; only the directory ownership
-tightens (`vault:vault` to `root:vault`) on the next full role run.
+without changing that model. Note the model's residual scope:
+`vault.hcl`/`vault.env` file ownership remains `vault:vault` pending
+issue #38, and an out-of-band `dnf update vault` may revert
+`/etc/vault.d` to the RPM's shipped ownership until the next role run —
+the unseal script fails closed (refuses to unseal) rather than trusting
+an unexpected parent, so re-run the role (or its `system` tag) after
+out-of-band package updates.
+
+**Upgrading from earlier role versions.** The tokens file path is
+unchanged; on the next full role run the directory ownership tightens
+(`vault:vault` to `root:vault`), the unseal unit is re-enabled so the
+new `WantedBy=vault.service` link is created (a plain `enabled: true`
+would not refresh `[Install]` symlinks on already-enabled hosts), and
+AIDE will report the ownership change on its first post-upgrade check —
+expected, one time.
 
 **Behavior contract.** The script waits (bounded, default 60 s, 2 s
 retry interval) for the Vault API to answer before unsealing, refuses to

@@ -42,3 +42,17 @@
   ansible.builtin.systemd_service:
     daemon_reload: true
   listen: Reload systemd
+
+###############################################################################
+# Re-enable on unit-file change: `systemd_service: enabled: true` is a no-op
+# when the unit is already enabled, so an [Install] section change (e.g. the
+# added WantedBy=vault.service) never creates its new symlinks on upgraded
+# hosts. reenable = disable + enable, recreating all [Install] links.
+# Defined AFTER Reload systemd: handlers flush in definition order, so the
+# daemon sees the new unit file before links are rebuilt.
+###############################################################################
+- name: Reenable vault-unseal
+  ansible.builtin.command:
+    cmd: systemctl reenable vault-unseal.service
+  changed_when: true
+  listen: Reenable vault-unseal

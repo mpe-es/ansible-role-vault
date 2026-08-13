@@ -212,11 +212,27 @@
           - "'Requires=vault.service' in (__verify_unseal_service_content.content | b64decode)"
           - "'Environment=VAULT_ADDR=https://127.0.0.1:8205' in (__verify_unseal_service_content.content | b64decode)"
           - "'WantedBy=multi-user.target vault.service' in (__verify_unseal_service_content.content | b64decode)"
+          - "'PartOf=vault.service' in (__verify_unseal_service_content.content | b64decode)"
         fail_msg: >-
           vault-unseal.service must run as root (no User=/Group= directive;
           the tokens file is root-only 0600), must Require vault.service,
-          must pass VAULT_ADDR with the configured listener port, and must
-          be WantedBy vault.service so a stop/start cycle re-pulls it
+          must pass VAULT_ADDR with the configured listener port, must be
+          PartOf vault.service (restart propagation), and must be WantedBy
+          vault.service (start re-pull)
+
+    - name: Stat vault.service.wants symlink for the unseal unit
+      ansible.builtin.stat:
+        path: /etc/systemd/system/vault.service.wants/vault-unseal.service
+      register: __verify_unseal_wants
+
+    - name: Assert the vault.service.wants link exists (enable really ran)
+      ansible.builtin.assert:
+        that:
+          - __verify_unseal_wants.stat.islnk | default(false)
+        fail_msg: >-
+          vault.service.wants/vault-unseal.service symlink missing — the
+          [Install] WantedBy coupling exists only as unit text; enable (or
+          reenable on upgrades) did not materialize it
 
     ###########################################################################
     # fapolicyd trust file
