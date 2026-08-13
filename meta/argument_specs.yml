@@ -4,7 +4,7 @@
 # Role: ansible-role-vault
 # Summary: Role argument specifications for AAP survey generation, input
 #   validation, and ansible-doc rendering. Maps 1:1 with defaults/main.yml.
-# Last Updated: 29 Jul 2026
+# Last Updated: 13 Aug 2026
 # Classification: UNCLASSIFIED
 ###############################################################################
 argument_specs:
@@ -282,12 +282,19 @@ argument_specs:
         description:
           - Deploy Vault audit backup systemd service and timer.
           - Implements RHEL 9 STIG V-205167 (backup audit records).
+          - The backup runs as root and stages root-only content (auditd
+            extracts) under the backup directory. The tree is enforced
+            root:root with directories 0700 and files 0600 - the vault
+            service account has no read access by design.
         type: bool
         default: true
 
       vault_stig_audit_backup_retention_days:
         description:
           - Number of days to retain audit backups before cleanup.
+          - Injected into vault-audit-backup.service as the RETENTION_DAYS
+            environment variable; the backup script falls back to 7 when
+            the value is unset or not a non-negative integer.
         type: int
         default: 7
 

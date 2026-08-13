@@ -22,7 +22,9 @@
         - { path: /opt/vault/data, mode: '0750', owner: vault, group: vault }
         - { path: /opt/vault/tls, mode: '0750', owner: vault, group: vault }
         - { path: /var/log/vault, mode: '0750', owner: vault, group: vault }
-        - { path: /opt/vault-backup, mode: '0750', owner: root, group: root }
+        # Root-only backup staging: contains root-only auditd extracts, so
+        # the vault service account must have no read access (issue #32)
+        - { path: /opt/vault-backup, mode: '0700', owner: root, group: root }
       loop_control:
         label: "{{ item.path }}"
 
@@ -32,11 +34,15 @@
           - item.stat.exists
           - item.stat.isdir
           - item.stat.mode == item.item.mode
+          - item.stat.pw_name == item.item.owner
+          - item.stat.gr_name == item.item.group
         fail_msg: >-
-          {{ item.item.path }} has incorrect permissions:
+          {{ item.item.path }} has incorrect permissions or ownership:
           exists={{ item.stat.exists }},
           mode={{ item.stat.mode | default('missing') }},
-          expected={{ item.item.mode }}
+          expected={{ item.item.mode }},
+          owner={{ item.stat.pw_name | default('missing') }}:{{ item.stat.gr_name | default('missing') }},
+          expected_owner={{ item.item.owner }}:{{ item.item.group }}
       loop: "{{ __verify_dirs.results }}"
       loop_control:
         label: "{{ item.item.path }}"
@@ -142,6 +148,23 @@
       loop: "{{ __verify_units.results }}"
       loop_control:
         label: "{{ item.item | basename }}"
+
+    - name: Read vault-audit-backup.service unit
+      ansible.builtin.slurp:
+        src: /usr/lib/systemd/system/vault-audit-backup.service
+      register: __verify_backup_unit_content
+
+    - name: Assert audit backup retention variable is wired into the unit
+      ansible.builtin.assert:
+        that:
+          # 14 is the deliberately non-default value set in converge.yml:
+          # proves the variable flows, not merely the script default
+          - >-
+            'Environment=RETENTION_DAYS=14'
+            in (__verify_backup_unit_content.content | b64decode)
+        fail_msg: >-
+          vault-audit-backup.service does not inject RETENTION_DAYS from
+          vault_stig_audit_backup_retention_days (issue #32)
 
     ###########################################################################
     # Script files

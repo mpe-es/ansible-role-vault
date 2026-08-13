@@ -3,7 +3,7 @@
 # Filename: .github/workflows/ci.yml
 # Role: ansible-role-vault
 # Summary: Continuous Integration workflow for linting and testing
-# Last Updated: 03 Apr 2026
+# Last Updated: 13 Aug 2026
 # Classification: UNCLASSIFIED
 ###############################################################################
 name: CI
@@ -55,6 +55,15 @@ jobs:
 
       - name: Run ansible-lint
         run: ansible-lint
+
+      # Scoped to the audit-backup surfaces: files/vault-unseal.sh has a
+      # pre-existing SC1090 owned by the in-flight auto-unseal work, which
+      # adds its own shellcheck coverage. Widen to files/*.sh once merged.
+      - name: Run shellcheck on audit backup scripts
+        run: shellcheck files/vault-audit-backup.sh tests/vault-audit-backup-test.sh
+
+      - name: Run vault-audit-backup behavioral tests
+        run: bash tests/vault-audit-backup-test.sh
 
   ###########################################################
   # Syntax Check Stage

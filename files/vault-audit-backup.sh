@@ -4,7 +4,11 @@
 # Author: Alex Ackerman
 # Co-Author: Claude Code (Anthropic) - Audit log backup automation
 # Date: 2025-12-19
-# Summary: Automated backup of Vault audit logs with 7-day retention
+# Last Updated: 13 Aug 2026
+# Summary: Automated backup of Vault audit logs with configurable retention.
+#   Backup tree is root-only (dirs 0700, files 0600, root:root): it contains
+#   auditd extracts that the OS protects at root-only, so the unprivileged
+#   vault service account is deliberately denied read access.
 # Location (deployed): /usr/local/bin/vault-audit-backup.sh
 # Compliant With: RHEL 9 STIG V-205167, Application Security STIG V5R3
 # Classification: UNCLASSIFIED
@@ -12,11 +16,14 @@
 
 set -euo pipefail
 
-# Configuration
-BACKUP_DIR="/opt/vault-backup"
-VAULT_LOG_DIR="/var/log/vault"
-AUDIT_LOG="/var/log/audit/audit.log"
-RETENTION_DAYS=7
+# Restrictive creation mask: new dirs 0700, new files 0600 (root-only tree)
+umask 077
+
+# Configuration (environment-overridable; systemd injects RETENTION_DAYS)
+BACKUP_DIR="${BACKUP_DIR:-/opt/vault-backup}"
+VAULT_LOG_DIR="${VAULT_LOG_DIR:-/var/log/vault}"
+AUDIT_LOG="${AUDIT_LOG:-/var/log/audit/audit.log}"
+RETENTION_DAYS="${RETENTION_DAYS:-7}"
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 HOSTNAME=$(hostname -s)
 
@@ -39,19 +46,25 @@ log_crit() {
     echo "[CRITICAL] $1" >&2
 }
 
-# Ensure backup directory exists
-if [[ ! -d "$BACKUP_DIR" ]]; then
-    mkdir -p "$BACKUP_DIR"
-    chown vault:vault "$BACKUP_DIR"
-    chmod 750 "$BACKUP_DIR"
-    log_info "Created backup directory: $BACKUP_DIR"
+# Validate retention: non-negative integer only, else fall back to 7 days
+if [[ ! "$RETENTION_DAYS" =~ ^[0-9]+$ ]]; then
+    log_error "Invalid RETENTION_DAYS '$RETENTION_DAYS' - using default of 7"
+    RETENTION_DAYS=7
 fi
 
-# Create timestamped backup subdirectory
+# Ensure backup directory exists and is root-only, even if a prior release
+# of this script left it owned by the vault service account (0750)
+if [[ ! -d "$BACKUP_DIR" ]]; then
+    mkdir -p "$BACKUP_DIR"
+    log_info "Created backup directory: $BACKUP_DIR"
+fi
+chown root:root "$BACKUP_DIR"
+chmod 0700 "$BACKUP_DIR"
+
+# Create timestamped backup subdirectory (root-only)
 BACKUP_SUBDIR="$BACKUP_DIR/backup-$TIMESTAMP"
 mkdir -p "$BACKUP_SUBDIR"
-chown vault:vault "$BACKUP_SUBDIR"
-chmod 750 "$BACKUP_SUBDIR"
+chmod 0700 "$BACKUP_SUBDIR"
 
 log_info "Starting Vault audit log backup to $BACKUP_SUBDIR"
 
@@ -113,9 +126,13 @@ else
     log_info "No vault-unseal.service journal entries in last 24 hours"
 fi
 
-# Set ownership and permissions on backup files
-chown -R vault:vault "$BACKUP_SUBDIR"
-chmod -R 640 "$BACKUP_SUBDIR"/*
+# Enforce root-only ownership and permissions across the entire backup tree.
+# The tree contains root-only auditd extracts: the vault service account must
+# never gain read access (Secure by Default). Recursive sweep also remediates
+# legacy trees created vault:vault by earlier releases of this script.
+chown -R root:root "$BACKUP_DIR"
+find "$BACKUP_DIR" -type d -exec chmod 0700 {} +
+find "$BACKUP_DIR" -type f -exec chmod 0600 {} +
 
 # Calculate backup size
 BACKUP_SIZE=$(du -sh "$BACKUP_SUBDIR" | awk '{print $1}')
@@ -123,7 +140,7 @@ log_info "Backup complete: $BACKUP_SIZE in $BACKUP_SUBDIR"
 
 # Retention: Delete backups older than RETENTION_DAYS
 log_info "Applying $RETENTION_DAYS-day retention policy"
-find "$BACKUP_DIR" -maxdepth 1 -type d -name "backup-*" -mtime +$RETENTION_DAYS -exec rm -rf {} \; 2>/dev/null || true
+find "$BACKUP_DIR" -maxdepth 1 -type d -name "backup-*" -mtime "+$RETENTION_DAYS" -exec rm -rf {} \; 2>/dev/null || true
 
 # Count remaining backups
 BACKUP_COUNT=$(find "$BACKUP_DIR" -maxdepth 1 -type d -name "backup-*" | wc -l)
