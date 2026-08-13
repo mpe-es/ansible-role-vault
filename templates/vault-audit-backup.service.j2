@@ -12,12 +12,18 @@ ExecStart=/usr/local/bin/vault-audit-backup.sh
 User=root
 Group=root
 
+# Retention wiring: the role variable observably controls cleanup age.
+# The script falls back to 7 days when unset or invalid.
+Environment=RETENTION_DAYS={{ vault_stig_audit_backup_retention_days }}
+
 # Security hardening
 PrivateTmp=yes
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
-ReadWritePaths={{ vault_backup_dir }} {{ vault_log_dir }}
+# The script only reads {{ vault_log_dir }}; ProtectSystem=strict already
+# allows reads, so write access is granted solely to the backup tree
+ReadWritePaths={{ vault_backup_dir }}
 
 # Logging
 StandardOutput=journal
