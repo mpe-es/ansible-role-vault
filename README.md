@@ -260,8 +260,10 @@ without changing that model. Note the model's residual scope:
 issue #38, and an out-of-band `dnf update vault` may revert
 `/etc/vault.d` to the RPM's shipped ownership until the next role run —
 the unseal script fails closed (refuses to unseal) rather than trusting
-an unexpected parent, so re-run the role (or its `system` tag) after
-out-of-band package updates.
+an unexpected parent, so re-run the **full** role after out-of-band
+package updates. A `--tags system` run does not suffice: the role's
+phases are dynamically included, so tags do not propagate to the
+ownership-remediation task (see the fapolicyd note and issue #28).
 
 **Upgrading from earlier role versions.** The tokens file path is
 unchanged; on the next full role run the directory ownership tightens

@@ -354,6 +354,26 @@ assert_eq "$(vault_calls)" "0" "guard-dir-gwrite: vault never invoked"
 cleanup_scenario
 
 ###############################################################################
+# Scenario 11d: tokens file is a SYMLINK -> refuse. A symlink's lexical
+#   parent (/etc/vault.d) can be trusted while the link target sits under
+#   an attacker-writable directory; -r/stat/source all follow the link,
+#   so a passing guard + a target swap between stat and source is root
+#   code execution (TOCTOU). Refuse symlinked tokens outright.
+###############################################################################
+setup_scenario 0 sealed 3
+mv "$MOCK_DIR/tokens.env" "$MOCK_DIR/real-tokens.env"
+ln -s "$MOCK_DIR/real-tokens.env" "$MOCK_DIR/tokens.env"
+run_script
+if [ "$RC" -ne 0 ]; then
+    pass "guard-symlink: refuses a symlinked tokens file"
+else
+    fail "guard-symlink: refuses a symlinked tokens file (got 0)"
+fi
+assert_eq "$(vault_calls)" "0" "guard-symlink: vault never invoked"
+assert_output_contains "symlink" "guard-symlink: diagnostic names the symlink"
+cleanup_scenario
+
+###############################################################################
 # Scenario 12: tokens file unreadable -> exit non-zero (skipped as root,
 #   where mode 000 is still readable)
 ###############################################################################
