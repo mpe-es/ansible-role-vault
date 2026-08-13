@@ -168,7 +168,11 @@
         that:
           - __verify_unseal_script.stat.exists
           - __verify_unseal_script.stat.mode == '0750'
-        fail_msg: "vault-unseal.sh missing or incorrect permissions"
+          - __verify_unseal_script.stat.pw_name == 'root'
+          - __verify_unseal_script.stat.gr_name == 'root'
+        fail_msg: >-
+          vault-unseal.sh missing, incorrect permissions, or not root:root
+          (root-run service; vault user must not be able to edit it)
 
     - name: Read unseal script
       ansible.builtin.slurp:
@@ -192,6 +196,15 @@
         that:
           - "'Environment=VAULT_CACERT=/opt/vault/tls/ca.crt' in (__verify_unseal_service_content.content | b64decode)"
         fail_msg: "vault-unseal.service does not pass VAULT_CACERT"
+
+    - name: Assert unseal service runs as root with vault.service coupling
+      ansible.builtin.assert:
+        that:
+          - "'User=' not in (__verify_unseal_service_content.content | b64decode)"
+          - "'Requires=vault.service' in (__verify_unseal_service_content.content | b64decode)"
+        fail_msg: >-
+          vault-unseal.service must run as root (no User= directive; the
+          tokens file is root-only 0600) and must Require vault.service
 
     ###########################################################################
     # fapolicyd trust file
