@@ -16,7 +16,7 @@ set -uo pipefail
 
 # Static plan: the runner fails if any assertion vanishes or is added
 # without updating this count.
-PLAN=45
+PLAN=51
 
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUT="$TEST_DIR/../files/vault-audit-backup.sh"
@@ -101,6 +101,22 @@ if [[ "${MOCK_CHOWN_FAIL:-0}" == "1" ]]; then
     done
 fi
 exit 0
+EOF
+
+# chmod: pass through to the real chmod, except simulate failure when any
+# argv element equals MOCK_CHMOD_FAIL_PATH (reached only via the script's
+# find -exec sweeps, so bootstrap chmods still succeed)
+cat > "$SHIM_DIR/chmod" << 'EOF'
+#!/usr/bin/env bash
+if [[ -n "${MOCK_CHMOD_FAIL_PATH:-}" ]]; then
+    for a in "$@"; do
+        if [[ "$a" == "$MOCK_CHMOD_FAIL_PATH" ]]; then
+            echo "chmod shim: simulated failure on $a" >&2
+            exit 1
+        fi
+    done
+fi
+exec /bin/chmod "$@"
 EOF
 
 # ausearch: emit a synthetic root-only audit record unless told to be empty
@@ -383,17 +399,45 @@ assert "s6: integrity failure is logged as critical" \
     grep -q 'integrity errors' "$SB6/run.log"
 
 ###############################################################################
-# Scenario 7: privilege sweep failure -> exit 1 (contract not silently broken)
+# Scenarios 7-9: every leg of the privilege sweep must fail the run when
+# incomplete (ownership, directory modes, file modes)
 ###############################################################################
-echo "# scenario 7: incomplete privilege sweep fails the run"
+echo "# scenario 7: incomplete OWNERSHIP sweep fails the run"
 SB7="$(new_sandbox)"
 run_sut "$SB7" "$SB7/run.log" MOCK_CHOWN_FAIL=1
 RC=$?
 assert "s7: script exits 1 when the ownership sweep fails" test "$RC" -eq 1
-assert "s7: sweep failure logged as error" \
+assert "s7: ownership sweep failure logged as error" \
     grep -q 'Ownership sweep incomplete' "$SB7/run.log"
 assert "s7: sweep failure logged as critical at exit" \
     grep -q 'incomplete privilege sweep' "$SB7/run.log"
+
+echo "# scenario 8: incomplete DIRECTORY mode sweep fails the run"
+SB8="$(new_sandbox)"
+LEGACY_DIR8="$SB8/opt/vault-backup/backup-20260801-000000"
+mkdir -p "$LEGACY_DIR8"
+chmod 0750 "$LEGACY_DIR8"
+run_sut "$SB8" "$SB8/run.log" MOCK_CHMOD_FAIL_PATH="$LEGACY_DIR8"
+RC=$?
+assert "s8: script exits 1 when the directory mode sweep fails" test "$RC" -eq 1
+assert "s8: directory mode sweep failure logged as error" \
+    grep -q 'Directory mode sweep incomplete' "$SB8/run.log"
+assert "s8: sweep failure logged as critical at exit" \
+    grep -q 'incomplete privilege sweep' "$SB8/run.log"
+
+echo "# scenario 9: incomplete FILE mode sweep fails the run"
+SB9="$(new_sandbox)"
+LEGACY_DIR9="$SB9/opt/vault-backup/backup-20260801-000000"
+mkdir -p "$LEGACY_DIR9"
+echo 'legacy audit extract' > "$LEGACY_DIR9/audit-vault.log.gz"
+chmod 0640 "$LEGACY_DIR9/audit-vault.log.gz"
+run_sut "$SB9" "$SB9/run.log" MOCK_CHMOD_FAIL_PATH="$LEGACY_DIR9/audit-vault.log.gz"
+RC=$?
+assert "s9: script exits 1 when the file mode sweep fails" test "$RC" -eq 1
+assert "s9: file mode sweep failure logged as error" \
+    grep -q 'File mode sweep incomplete' "$SB9/run.log"
+assert "s9: sweep failure logged as critical at exit" \
+    grep -q 'incomplete privilege sweep' "$SB9/run.log"
 
 ###############################################################################
 # Summary
