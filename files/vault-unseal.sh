@@ -65,6 +65,9 @@ require_trusted_path() {
         echo "Error: unparseable stat output for $path ('$uid $mode')" >&2
         exit 1
     fi
+    # stat prints minimal digits (mode 000 -> "0"); zero-pad so the
+    # group/other slices below always index real positions
+    mode=$(printf '%04d' "$mode")
     if [[ "$uid" -ne 0 && "$uid" -ne "$EUID" ]]; then
         echo "Error: $path owned by uid $uid (not root); refusing to trust it" >&2
         exit 1

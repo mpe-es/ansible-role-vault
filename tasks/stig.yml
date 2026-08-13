@@ -139,7 +139,9 @@
         owner: root
         group: root
         mode: '0644'
-      notify: Reload systemd
+      notify:
+        - Reload systemd
+        - Reenable vault-unseal
 
 ###############################################################################
 # Rsyslog Forwarding

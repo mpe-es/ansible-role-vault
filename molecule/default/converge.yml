@@ -241,6 +241,15 @@
         group: root
         mode: '0644'
 
+    # Enable so the [Install] symlinks exist and verify can assert the
+    # vault.service.wants link — the coupling the round-5 critical showed
+    # text-only assertions cannot see
+    - name: Enable vault-unseal.service (replica of tasks/service.yml)
+      ansible.builtin.systemd_service:
+        name: vault-unseal.service
+        enabled: true
+        daemon_reload: true
+
     ###########################################################################
     # Phase 8.5: fapolicyd trust (inline replica of tasks/fapolicyd.yml —
     # register names, guards, and flags copied verbatim; only the template

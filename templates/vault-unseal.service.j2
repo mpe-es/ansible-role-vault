@@ -3,17 +3,21 @@
 Description=Auto-Unseal HashiCorp Vault Service
 After=network.target
 After={{ vault_service_name }}.service
-# Requires stops this unit when Vault stops; the WantedBy entry on
-# {{ vault_service_name }}.service in [Install] is what pulls the unseal
-# back in when Vault starts again, so a stop/start or restart cycle
-# re-runs it — behavior pending verification on a real host (open
-# verification item).
+# Three couplings, each with one job (pending verification on a real
+# host — open verification item):
+#   Requires= : hard dependency — fails this unit if Vault is absent
+#   PartOf=   : propagates stop AND restart of Vault to this unit
+#   WantedBy {{ vault_service_name }}.service ([Install]) : pulls the
+#     unseal back in when Vault starts, closing the stop-then-start path
+#     that restart propagation alone does not cover
 Requires={{ vault_service_name }}.service
+PartOf={{ vault_service_name }}.service
 
 [Service]
 Type=oneshot
 # Keeps the unit 'active (exited)' after success so its state is visible
-# in systemctl and restart propagation from vault.service can apply.
+# in systemctl and PartOf stop/restart propagation has an active unit to
+# act on.
 RemainAfterExit=yes
 ExecStart=/bin/bash /usr/local/bin/vault-unseal.sh
 Environment=PATH=/usr/local/bin:/usr/bin:/bin

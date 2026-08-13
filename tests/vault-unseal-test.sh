@@ -324,6 +324,36 @@ assert_eq "$(vault_calls)" "0" "guard-dir-perms: vault never invoked"
 cleanup_scenario
 
 ###############################################################################
+# Scenario 11b: parent directory at the PRODUCTION posture (0750 root:vault
+#   equivalent — group r-x, no group/other write) -> MUST pass. The entire
+#   privilege model rests on this shape being accepted; a "hardening" of
+#   the dir guard to the file rule would fail every production host at boot.
+###############################################################################
+setup_scenario 0 sealed 3
+chmod 0750 "$MOCK_DIR"
+run_script
+chmod 0700 "$MOCK_DIR"
+assert_eq "$RC" "0" "prod-posture-dir: group r-x parent passes and unseals"
+assert_eq "$(keys_applied)" "3" "prod-posture-dir: keys applied through 0750 parent"
+cleanup_scenario
+
+###############################################################################
+# Scenario 11c: parent directory group-WRITABLE (0770) -> refuse. Exercises
+#   the gbit branch of the guard (scenario 11's 0707 only exercises obit).
+###############################################################################
+setup_scenario 0 sealed 3
+chmod 0770 "$MOCK_DIR"
+run_script
+chmod 0700 "$MOCK_DIR"
+if [ "$RC" -ne 0 ]; then
+    pass "guard-dir-gwrite: refuses group-writable parent directory"
+else
+    fail "guard-dir-gwrite: refuses group-writable parent directory (got 0)"
+fi
+assert_eq "$(vault_calls)" "0" "guard-dir-gwrite: vault never invoked"
+cleanup_scenario
+
+###############################################################################
 # Scenario 12: tokens file unreadable -> exit non-zero (skipped as root,
 #   where mode 000 is still readable)
 ###############################################################################
