@@ -41,7 +41,9 @@ vault_group: vault
 # File Permissions (STIG-hardened)
 # RPM defaults are too permissive for STIG compliance:
 #   RPM: /etc/vault.d 0755, vault.hcl 0644 root:root
-#   STIG: /etc/vault.d 0750, vault.hcl 0640 vault:vault
+#   Hardened: /etc/vault.d 0750 root:vault (vault reads via group, cannot
+#   replace entries — the auto-unseal tokens file lives here root-only),
+#   vault.hcl 0640 vault:vault (file ownership tightening is issue #38)
 # NIST 800-53: AC-6 (Least Privilege)
 ###############################################################################
 vault_config_dir_mode: '0750'

@@ -216,8 +216,9 @@ vault_pki_role: ""
 # Vault Initialization
 # Set to true for greenfield deployments to auto-initialize Vault.
 # By default, keys are stored in /etc/vault.d/tokens.env (mode 0600,
-# root:root). AAP/controller capture can also write the init JSON to the
-# calling execution environment so it can be moved to an approved secret store.
+# root:root; the directory is root:vault 0750). AAP/controller capture can
+# also write the init JSON to the calling execution environment so it can
+# be moved to an approved secret store.
 ###############################################################################
 vault_initialize: false
 

@@ -18,7 +18,7 @@
         path: "{{ item.path }}"
       register: __verify_dirs
       loop:
-        - { path: /etc/vault.d, mode: '0750', owner: vault, group: vault }
+        - { path: /etc/vault.d, mode: '0750', owner: root, group: vault }
         - { path: /opt/vault/data, mode: '0750', owner: vault, group: vault }
         - { path: /opt/vault/tls, mode: '0750', owner: vault, group: vault }
         - { path: /var/log/vault, mode: '0750', owner: vault, group: vault }
@@ -194,7 +194,11 @@
         that:
           - __verify_unseal_script.stat.exists
           - __verify_unseal_script.stat.mode == '0750'
-        fail_msg: "vault-unseal.sh missing or incorrect permissions"
+          - __verify_unseal_script.stat.pw_name == 'root'
+          - __verify_unseal_script.stat.gr_name == 'root'
+        fail_msg: >-
+          vault-unseal.sh missing, incorrect permissions, or not root:root
+          (root-run service; vault user must not be able to edit it)
 
     - name: Read unseal script
       ansible.builtin.slurp:
@@ -218,6 +222,46 @@
         that:
           - "'Environment=VAULT_CACERT=/opt/vault/tls/ca.crt' in (__verify_unseal_service_content.content | b64decode)"
         fail_msg: "vault-unseal.service does not pass VAULT_CACERT"
+
+    # Line-anchored: a comment MENTIONING the directives must not trip this,
+    # only a real directive at line start (review round 1, finding 1).
+    - name: Assert unseal service runs as root with vault.service coupling
+      ansible.builtin.assert:
+        that:
+          - >-
+            (__verify_unseal_service_content.content | b64decode).split('\n')
+            | select('match', '^(User|Group)=')
+            | list | length == 0
+          - "'Requires=vault.service' in (__verify_unseal_service_content.content | b64decode)"
+          - "'Environment=VAULT_ADDR=https://127.0.0.1:8205' in (__verify_unseal_service_content.content | b64decode)"
+          - "'WantedBy=multi-user.target vault.service' in (__verify_unseal_service_content.content | b64decode)"
+          - "'PartOf=vault.service' in (__verify_unseal_service_content.content | b64decode)"
+        fail_msg: >-
+          vault-unseal.service must run as root (no User=/Group= directive;
+          the tokens file is root-only 0600), must Require vault.service,
+          must pass VAULT_ADDR with the configured listener port, must be
+          PartOf vault.service (explicit stop/restart propagation,
+          redundant with Requires), and must be WantedBy vault.service
+          (start re-pull)
+
+    - name: Stat vault.service.wants symlink for the unseal unit
+      ansible.builtin.stat:
+        path: /etc/systemd/system/vault.service.wants/vault-unseal.service
+      register: __verify_unseal_wants
+
+    - name: Assert the vault.service.wants link resolves to the real unit
+      ansible.builtin.assert:
+        that:
+          - __verify_unseal_wants.stat.islnk | default(false)
+          - >-
+            __verify_unseal_wants.stat.lnk_source | default('')
+            == '/usr/lib/systemd/system/vault-unseal.service'
+        fail_msg: >-
+          vault.service.wants/vault-unseal.service missing or not resolving
+          to /usr/lib/systemd/system/vault-unseal.service — the [Install]
+          WantedBy coupling exists only as unit text, or the repair guard
+          accepted a stale/wrong-target link; enable/reenable did not
+          materialize the correct link
 
     ###########################################################################
     # fapolicyd trust file

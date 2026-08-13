@@ -75,6 +75,10 @@
       no_log: true
       changed_when: __vault_init_output.rc == 0
 
+    # root:root 0600 in /etc/vault.d, which Phase 4 owns root:vault 0750:
+    # the file is source'd by root (vault-unseal.service), and a root-owned
+    # parent is what prevents any unprivileged account from replacing it
+    # (directory write allows unlink/create regardless of file ownership).
     - name: Store unseal keys and root token
       ansible.builtin.template:
         src: tokens.env.j2
@@ -154,8 +158,42 @@
       changed_when: true
 
 ###############################################################################
-# Enable auto-unseal service (after init completes)
+# Enable auto-unseal service (after init completes).
+# The [Install] link repair is STATE-based, not notify-based: a handler
+# queued on unit-file change is discarded if the play aborts before
+# flush, and `enabled: true` is a no-op on already-enabled units — so a
+# missing vault.service.wants link would otherwise never heal on
+# upgraded hosts (review round 6). reenable rebuilds all [Install]
+# links from the on-disk unit file. The link is HEALTHY only when it is
+# a symlink resolving to the canonical unit fragment — a stale symlink to
+# another unit, or a regular file, must trigger repair (a bare exists
+# check would skip it and Vault would start sealed; codex).
 ###############################################################################
+- name: Check vault.service.wants link for the unseal unit
+  ansible.builtin.stat:
+    path: "/etc/systemd/system/{{ vault_service_name }}.service.wants/vault-unseal.service"
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: __vault_unseal_wants
+  when:
+    - vault_auto_unseal_enabled | bool
+    - not vault_hsm_enabled | bool
+
+- name: Repair unseal unit Install links (reenable)
+  ansible.builtin.command:
+    cmd: systemctl reenable vault-unseal.service
+  changed_when: true
+  when:
+    - vault_auto_unseal_enabled | bool
+    - not vault_hsm_enabled | bool
+    - >-
+      not (
+        (__vault_unseal_wants.stat.islnk | default(false))
+        and (__vault_unseal_wants.stat.lnk_source | default('')
+             == '/usr/lib/systemd/system/vault-unseal.service')
+      )
+
 - name: Enable vault-unseal.service
   ansible.builtin.systemd_service:
     name: vault-unseal.service

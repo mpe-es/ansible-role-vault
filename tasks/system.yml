@@ -18,8 +18,12 @@
     group: "{{ item.group }}"
     mode: "{{ item.mode }}"
   loop:
+    # root:vault — vault reads its configs via group r-x but cannot create
+    # or replace entries; required because vault-unseal.service (root)
+    # sources tokens.env from this directory (issue #30). File-level
+    # ownership of vault.hcl/vault.env is issue #38 scope.
     - path: "{{ vault_config_dir }}"
-      owner: "{{ vault_user }}"
+      owner: root
       group: "{{ vault_group }}"
       mode: "{{ vault_config_dir_mode }}"
     - path: "{{ vault_data_dir }}"

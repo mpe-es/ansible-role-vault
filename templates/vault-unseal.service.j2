@@ -2,15 +2,49 @@
 [Unit]
 Description=Auto-Unseal HashiCorp Vault Service
 After=network.target
-After=vault.service
+After={{ vault_service_name }}.service
+# Three couplings (pending verification on a real host — open
+# verification item):
+#   Requires= : hard dependency; per systemd.unit(5) it ALSO propagates
+#     explicit stop/restart of Vault to this unit
+#   PartOf=   : states the stop/restart propagation explicitly —
+#     redundant with Requires= today; survives a future weakening of
+#     Requires= to Wants=
+#   WantedBy {{ vault_service_name }}.service ([Install]) : pulls the
+#     unseal back in when Vault starts, closing the stop-then-start path
+#     that stop/restart propagation does not cover
+Requires={{ vault_service_name }}.service
+PartOf={{ vault_service_name }}.service
 
 [Service]
 Type=oneshot
+# Keeps the unit 'active (exited)' after success so its state is visible
+# in systemctl and PartOf stop/restart propagation has an active unit to
+# act on.
+RemainAfterExit=yes
 ExecStart=/bin/bash /usr/local/bin/vault-unseal.sh
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 Environment=VAULT_CACERT={{ vault_tls_ca_file }}
-User={{ vault_user }}
-Group={{ vault_group }}
+Environment=VAULT_ADDR=https://127.0.0.1:{{ vault_listener_port }}
+# Runs as root by design: the unseal keys in /etc/vault.d/tokens.env are
+# root:root 0600 inside a root-owned directory, so the vault service
+# account can never read or replace its own unseal keys. Do NOT add a
+# service account directive here without changing that model.
+
+# Security hardening (kept minimal: heavier sandboxing directives are
+# deferred until verified against the vault CLI on a real host)
+PrivateTmp=yes
+NoNewPrivileges=yes
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=vault-unseal
+
+# Bounds the script's API wait phase (60s default) plus key application;
+# a hung listener mid-application can still hit this ceiling, which fails
+# the unit — the honest outcome.
+TimeoutStartSec=120
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=multi-user.target {{ vault_service_name }}.service
