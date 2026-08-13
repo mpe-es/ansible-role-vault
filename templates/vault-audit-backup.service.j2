@@ -21,7 +21,9 @@ PrivateTmp=yes
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
-ReadWritePaths={{ vault_backup_dir }} {{ vault_log_dir }}
+# The script only reads {{ vault_log_dir }}; ProtectSystem=strict already
+# allows reads, so write access is granted solely to the backup tree
+ReadWritePaths={{ vault_backup_dir }}
 
 # Logging
 StandardOutput=journal

@@ -4,14 +4,19 @@
 # Role: ansible-role-vault
 # Summary: Behavioral test harness for files/vault-audit-backup.sh.
 #   Non-root friendly: external commands (chown, gzip, ausearch, journalctl,
-#   logger, hostname) are mocked via a PATH shim directory; all paths are
-#   overridden into a mktemp sandbox via environment variables. TAP-ish
-#   ok / not ok output.
+#   logger) are mocked via a PATH shim directory; all paths are overridden
+#   into a mktemp sandbox via environment variables; every SUT invocation
+#   runs under env -i so no ambient environment leaks in. TAP-ish
+#   ok / not ok output with a static plan.
 # Last Updated: 13 Aug 2026
 # Classification: UNCLASSIFIED
 ###############################################################################
 
 set -uo pipefail
+
+# Static plan: the runner fails if any assertion vanishes or is added
+# without updating this count.
+PLAN=42
 
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUT="$TEST_DIR/../files/vault-audit-backup.sh"
@@ -19,6 +24,8 @@ SUT="$TEST_DIR/../files/vault-audit-backup.sh"
 PASS=0
 FAIL=0
 COUNT=0
+
+echo "1..$PLAN"
 
 ok() {
     COUNT=$((COUNT + 1))
@@ -43,9 +50,28 @@ assert() {
     fi
 }
 
+assert_not() {
+    # assert_not <description> <command...>
+    local desc="$1"
+    shift
+    if "$@"; then
+        not_ok "$desc"
+    else
+        ok "$desc"
+    fi
+}
+
 # Portable octal mode (GNU stat vs BSD stat)
 get_mode() {
     stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1" 2>/dev/null
+}
+
+# Portable "set mtime to N days ago" (GNU date vs BSD date)
+touch_days_ago() {
+    local days="$1" path="$2" stamp
+    stamp="$(date -v "-${days}d" +%Y%m%d%H%M 2>/dev/null \
+        || date -d "${days} days ago" +%Y%m%d%H%M)"
+    touch -t "$stamp" "$path"
 }
 
 ###############################################################################
@@ -59,9 +85,6 @@ mkdir -p "$SHIM_DIR"
 
 # logger: swallow syslog writes
 printf '#!/usr/bin/env bash\nexit 0\n' > "$SHIM_DIR/logger"
-
-# hostname: deterministic
-printf '#!/usr/bin/env bash\necho testhost\n' > "$SHIM_DIR/hostname"
 
 # chown: record argv, perform nothing (non-root cannot chown to root/vault)
 cat > "$SHIM_DIR/chown" << 'EOF'
@@ -90,16 +113,46 @@ echo "mock journal line for $*"
 exit 0
 EOF
 
-# gzip: compress -> replace file with stub .gz; -t -> honor MOCK_GZIP_FAIL
+# gzip: models the real tool's flag behavior instead of hiding it.
+#   -t          integrity test (honors MOCK_GZIP_FAIL)
+#   -f          overwrite an existing .gz (without it, collision -> exit 1,
+#               matching real gzip's refuse-to-overwrite behavior)
+#   -n          accepted no-op
+# Any unmodeled flag fails loudly rather than producing junk files.
 cat > "$SHIM_DIR/gzip" << 'EOF'
 #!/usr/bin/env bash
-if [[ "${1:-}" == "-t" ]]; then
+test_mode=0
+force=0
+files=()
+for a in "$@"; do
+    case "$a" in
+        -*)
+            flags="${a#-}"
+            while [[ -n "$flags" ]]; do
+                c="${flags:0:1}"
+                flags="${flags:1}"
+                case "$c" in
+                    t) test_mode=1 ;;
+                    f) force=1 ;;
+                    n) : ;;
+                    *) echo "gzip shim: unmodeled flag -$c" >&2; exit 64 ;;
+                esac
+            done
+            ;;
+        *) files+=("$a") ;;
+    esac
+done
+if [[ "$test_mode" == "1" ]]; then
     if [[ "${MOCK_GZIP_FAIL:-0}" == "1" ]]; then
         exit 1
     fi
     exit 0
 fi
-for f in "$@"; do
+for f in "${files[@]}"; do
+    if [[ -e "$f.gz" && "$force" != "1" ]]; then
+        echo "gzip shim: $f.gz already exists" >&2
+        exit 1
+    fi
     printf 'MOCKGZ' > "$f.gz"
     rm -f "$f"
 done
@@ -150,6 +203,7 @@ run_sut "$SB1" "$SB1/run.log"
 RC=$?
 
 assert "s1: script exits 0 on happy path" test "$RC" -eq 0
+assert_not "s1: happy path logs no errors" grep -q '\[ERROR\]' "$SB1/run.log"
 
 # Guard against a vacuous pass: the run must actually reach the ownership
 # phase (non-empty chown log) AND never grant vault:vault.
@@ -159,84 +213,113 @@ else
     not_ok "s1: script never invokes chown with vault:vault"
 fi
 
-assert "s1: script enforces root:root ownership on the backup tree" \
-    grep -q 'root:root' "$SB1/chown.log"
+# The recursive ownership sweep must run, not just the top-level chown
+assert "s1: recursive root:root ownership sweep invoked (-R root:root)" \
+    grep -q -- '-R root:root' "$SB1/chown.log"
 
 B1="$SB1/opt/vault-backup"
 assert "s1: backup dir mode is 0700" test "$(get_mode "$B1")" = "700"
 
 SUBDIR_COUNT=0
+SUBDIR=""
 for d in "$B1"/backup-*; do
     [[ -d "$d" ]] || continue
     SUBDIR_COUNT=$((SUBDIR_COUNT + 1))
-    assert "s1: backup subdir $(basename "$d") mode is 0700" \
-        test "$(get_mode "$d")" = "700"
-    for f in "$d"/*; do
-        [[ -f "$f" ]] || continue
-        assert "s1: backup file $(basename "$f") mode is 0600" \
-            test "$(get_mode "$f")" = "600"
-    done
+    SUBDIR="$d"
 done
 assert "s1: exactly one backup subdir created" test "$SUBDIR_COUNT" -eq 1
+assert "s1: backup subdir mode is 0700" test "$(get_mode "$SUBDIR")" = "700"
+
+# Exact expected artifact set: a silent capture regression must go red
+EXPECTED_ARTIFACTS=(
+    vault_audit.log.gz
+    vault_audit_syslog.log.gz
+    audit-vault.log.gz
+    vault-journal.log.gz
+    vault-unseal-journal.log.gz
+)
+for artifact in "${EXPECTED_ARTIFACTS[@]}"; do
+    assert "s1: artifact $artifact captured" test -f "$SUBDIR/$artifact"
+    assert "s1: artifact $artifact mode is 0600" \
+        test "$(get_mode "$SUBDIR/$artifact")" = "600"
+done
+FILE_COUNT=$(find "$SUBDIR" -type f | wc -l | tr -d ' ')
+assert "s1: no unexpected artifacts (exactly 5 files)" test "$FILE_COUNT" -eq 5
 
 ###############################################################################
-# Scenario 2: pre-existing legacy dir (0750) is re-hardened to 0700
+# Scenario 2: legacy vault:vault-era tree (0750 dirs, 0640 files) re-hardened
 ###############################################################################
-echo "# scenario 2: legacy backup dir re-hardened on every run"
+echo "# scenario 2: legacy backup tree re-hardened on every run"
 SB2="$(new_sandbox)"
-mkdir -p "$SB2/opt/vault-backup"
-chmod 0750 "$SB2/opt/vault-backup"
+LEGACY_DIR="$SB2/opt/vault-backup/backup-20260801-000000"
+mkdir -p "$LEGACY_DIR"
+echo 'legacy audit extract' > "$LEGACY_DIR/audit-vault.log.gz"
+chmod 0750 "$SB2/opt/vault-backup" "$LEGACY_DIR"
+chmod 0640 "$LEGACY_DIR/audit-vault.log.gz"
 run_sut "$SB2" "$SB2/run.log"
 RC=$?
 
-assert "s2: script exits 0 with pre-existing backup dir" test "$RC" -eq 0
+assert "s2: script exits 0 with pre-existing backup tree" test "$RC" -eq 0
 assert "s2: pre-existing backup dir tightened to 0700" \
     test "$(get_mode "$SB2/opt/vault-backup")" = "700"
+assert "s2: legacy backup subdir tightened to 0700" \
+    test "$(get_mode "$LEGACY_DIR")" = "700"
+assert "s2: legacy backup file tightened to 0600" \
+    test "$(get_mode "$LEGACY_DIR/audit-vault.log.gz")" = "600"
+assert "s2: recursive root:root ownership sweep invoked (-R root:root)" \
+    grep -q -- '-R root:root' "$SB2/chown.log"
 
 ###############################################################################
 # Scenario 3: retention honors RETENTION_DAYS from the environment
 ###############################################################################
 echo "# scenario 3: retention driven by RETENTION_DAYS env"
 
-# Old fixture dir: fixed timestamp well in the past (>200 days before Aug 2026)
+# Fixtures: OLD (200 days) and MID (3 days). Discrimination matrix:
+#   RETENTION_DAYS=3650 -> both survive
+#   RETENTION_DAYS=1    -> both purged
+#   default / fallback 7 -> OLD purged, MID survives
+OLD_NAME="backup-20260125-000000"
+MID_NAME="backup-20260810-000000"
+
 make_retention_fixture() {
     local sb="$1"
-    mkdir -p "$sb/opt/vault-backup/backup-20260101-000000"
-    touch -t 202601010000 "$sb/opt/vault-backup/backup-20260101-000000"
+    mkdir -p "$sb/opt/vault-backup/$OLD_NAME" "$sb/opt/vault-backup/$MID_NAME"
+    touch_days_ago 200 "$sb/opt/vault-backup/$OLD_NAME"
+    touch_days_ago 3 "$sb/opt/vault-backup/$MID_NAME"
 }
 
-# 3a: RETENTION_DAYS large -> old dir must survive
+# 3a: RETENTION_DAYS large -> everything survives
 SB3A="$(new_sandbox)"
 make_retention_fixture "$SB3A"
 run_sut "$SB3A" "$SB3A/run.log" RETENTION_DAYS=3650
 RC=$?
 assert "s3a: script exits 0 with RETENTION_DAYS=3650" test "$RC" -eq 0
-assert "s3a: old backup dir survives when RETENTION_DAYS=3650" \
-    test -d "$SB3A/opt/vault-backup/backup-20260101-000000"
+assert "s3a: 200-day-old backup survives when RETENTION_DAYS=3650" \
+    test -d "$SB3A/opt/vault-backup/$OLD_NAME"
+assert "s3a: 3-day-old backup survives when RETENTION_DAYS=3650" \
+    test -d "$SB3A/opt/vault-backup/$MID_NAME"
 
-# 3b: RETENTION_DAYS small -> old dir must be purged
+# 3b: RETENTION_DAYS=1 -> both fixtures purged (default 7 would keep MID)
 SB3B="$(new_sandbox)"
 make_retention_fixture "$SB3B"
 run_sut "$SB3B" "$SB3B/run.log" RETENTION_DAYS=1
 RC=$?
 assert "s3b: script exits 0 with RETENTION_DAYS=1" test "$RC" -eq 0
-if [[ -d "$SB3B/opt/vault-backup/backup-20260101-000000" ]]; then
-    not_ok "s3b: old backup dir purged when RETENTION_DAYS=1"
-else
-    ok "s3b: old backup dir purged when RETENTION_DAYS=1"
-fi
+assert_not "s3b: 200-day-old backup purged when RETENTION_DAYS=1" \
+    test -d "$SB3B/opt/vault-backup/$OLD_NAME"
+assert_not "s3b: 3-day-old backup purged when RETENTION_DAYS=1" \
+    test -d "$SB3B/opt/vault-backup/$MID_NAME"
 
-# 3c: no RETENTION_DAYS in env -> default 7 purges the old dir
+# 3c: no RETENTION_DAYS in env -> default 7 purges OLD but keeps MID
 SB3C="$(new_sandbox)"
 make_retention_fixture "$SB3C"
 run_sut "$SB3C" "$SB3C/run.log"
 RC=$?
 assert "s3c: script exits 0 with default retention" test "$RC" -eq 0
-if [[ -d "$SB3C/opt/vault-backup/backup-20260101-000000" ]]; then
-    not_ok "s3c: old backup dir purged under default 7-day retention"
-else
-    ok "s3c: old backup dir purged under default 7-day retention"
-fi
+assert_not "s3c: 200-day-old backup purged under default 7-day retention" \
+    test -d "$SB3C/opt/vault-backup/$OLD_NAME"
+assert "s3c: 3-day-old backup survives under default 7-day retention" \
+    test -d "$SB3C/opt/vault-backup/$MID_NAME"
 
 # 3d: non-numeric RETENTION_DAYS -> rejected, falls back to default 7
 SB3D="$(new_sandbox)"
@@ -246,11 +329,10 @@ RC=$?
 assert "s3d: script exits 0 with invalid RETENTION_DAYS" test "$RC" -eq 0
 assert "s3d: invalid RETENTION_DAYS is logged as an error" \
     grep -q 'Invalid RETENTION_DAYS' "$SB3D/run.log"
-if [[ -d "$SB3D/opt/vault-backup/backup-20260101-000000" ]]; then
-    not_ok "s3d: default 7-day retention applied after invalid value"
-else
-    ok "s3d: default 7-day retention applied after invalid value"
-fi
+assert_not "s3d: 200-day-old backup purged under fallback 7-day retention" \
+    test -d "$SB3D/opt/vault-backup/$OLD_NAME"
+assert "s3d: 3-day-old backup survives under fallback 7-day retention" \
+    test -d "$SB3D/opt/vault-backup/$MID_NAME"
 
 ###############################################################################
 # Scenario 4: missing auditd log -> logged error, still exit 0
@@ -292,9 +374,8 @@ assert "s6: integrity failure is logged as critical" \
 ###############################################################################
 # Summary
 ###############################################################################
-echo "1..$COUNT"
-echo "# pass $PASS / $COUNT (fail $FAIL)"
-if [[ $FAIL -gt 0 ]]; then
+echo "# pass $PASS / $COUNT (fail $FAIL, plan $PLAN)"
+if [[ $FAIL -gt 0 || $COUNT -ne $PLAN ]]; then
     exit 1
 fi
 exit 0

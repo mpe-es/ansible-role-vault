@@ -158,10 +158,11 @@
       ansible.builtin.assert:
         that:
           # 14 is the deliberately non-default value set in converge.yml:
-          # proves the variable flows, not merely the script default
+          # proves the variable flows, not merely the script default.
+          # Anchored so RETENTION_DAYS=140 etc. cannot pass.
           - >-
-            'Environment=RETENTION_DAYS=14'
-            in (__verify_backup_unit_content.content | b64decode)
+            __verify_backup_unit_content.content | b64decode
+            is search('(?m)^Environment=RETENTION_DAYS=14$')
         fail_msg: >-
           vault-audit-backup.service does not inject RETENTION_DAYS from
           vault_stig_audit_backup_retention_days (issue #32)
