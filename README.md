@@ -127,7 +127,7 @@ auto-generation and input validation.
 | `vault_auto_unseal_enabled` | `false` | Deploy auto-unseal service |
 | `vault_key_shares` | `5` | Shamir key shares for initialization |
 | `vault_key_threshold` | `3` | Shamir keys required to unseal |
-| `vault_init_store_target` | `true` | Store init output on the target in `/etc/vault.d/tokens.env` |
+| `vault_init_store_target` | `true` | Store init output on the target in `/etc/vault-unseal/tokens.env` (root-only 0700 directory) |
 | `vault_init_controller_capture_enabled` | `false` | Capture init output back to the Ansible controller/AAP execution environment |
 | `vault_init_controller_output_path` | `""` | Controller-side path for captured init JSON |
 | `vault_init_controller_output_mode` | `0600` | File mode for controller-side captured init JSON |
@@ -204,7 +204,9 @@ for Python library dependencies. No other Ansible role dependencies.
 
 When `vault_initialize` is enabled, initialization material is secret-bearing.
 By default, the role preserves existing behavior and writes
-`/etc/vault.d/tokens.env` on the target with mode `0600`. For Ansible
+`/etc/vault-unseal/tokens.env` on the target with mode `0600` inside a
+root-only `0700` directory (deliberately NOT `/etc/vault.d`, which the vault
+service account owns and could therefore replace files in). For Ansible
 Automation Platform workflows, capture the raw init JSON back to the execution
 environment and immediately move it into an approved secret store:
 
@@ -228,23 +230,34 @@ material and remove it after transfer to the approved credential store.
 
 When `vault_auto_unseal_enabled` is `true` (and `vault_hsm_enabled` is
 `false`), the role deploys `vault-unseal.service`, a oneshot unit that runs
-after `vault.service` on boot and applies the Shamir key shares stored in
-`/etc/vault.d/tokens.env`.
+after `vault.service` on boot (and re-runs when `vault.service` is
+restarted, via `Requires=`) and applies the Shamir key shares stored in
+`/etc/vault-unseal/tokens.env`.
 
-**Privilege model.** The service runs as **root** by design: the tokens file
-is `root:root` mode `0600` so the vault service account can never read its
-own unseal keys, and the script at `/usr/local/bin/vault-unseal.sh` is
-`root:root` so the service account cannot edit what root executes. Do not
-add `User=`/`Group=` to the unit without changing that model.
+**Privilege model.** The service runs as **root** by design: the tokens
+file is `root:root` mode `0600` inside a root-only `0700` directory, so the
+vault service account can neither read nor replace its own unseal keys —
+the parent directory matters because the file is `source`d by root, and
+write access to a directory allows file replacement regardless of file
+ownership. The script at `/usr/local/bin/vault-unseal.sh` is `root:root`
+so the service account cannot edit what root executes, and the script
+itself refuses to run if the tokens file or its directory is not
+root-owned or carries group/other write bits. Do not add a service-account
+directive to the unit without changing that model. Hosts deployed by
+earlier role versions had the tokens file at `/etc/vault.d/tokens.env`;
+the role migrates it (move, never delete) on the next run.
 
-**Behavior contract.** The script waits (bounded, default 60 s) for the
-Vault API to answer before unsealing, applies keys only until Vault reports
-unsealed, and its exit code is honest: `0` only when Vault is unsealed,
-non-zero when the API never answered or Vault remained sealed — so a failed
-boot-time unseal shows as a failed unit in `systemctl`/monitoring instead
-of silently reporting success. Behavior is covered by
-`tests/vault-unseal-test.sh` (run in CI); end-to-end reboot verification on
-a physical RHEL 9 host is tracked as an open verification item.
+**Behavior contract.** The script waits (bounded, default 60 s, 2 s
+retry interval) for the Vault API to answer before unsealing, refuses to
+apply keys to an uninitialized Vault, applies keys only until Vault
+reports unsealed, and its exit code is honest: `0` only when Vault is
+unsealed, non-zero when the API never answered, the tokens path is
+untrusted, or Vault remained sealed — so a failed boot-time unseal shows
+as a failed unit in `systemctl`/monitoring instead of silently reporting
+success. The script's behavior is covered by `tests/vault-unseal-test.sh`
+(run in CI); unit-level behavior (root execution, ordering, restart
+coupling) and end-to-end reboot verification on a physical RHEL 9 host
+remain open verification items.
 
 **Security trade-off.** Storing Shamir shares on the node defeats the
 split-knowledge intent of `vault_key_shares`/`vault_key_threshold` for any
@@ -326,6 +339,11 @@ This role implements controls from:
 
 Auto-unseal uses the configured CA certificate path for TLS verification. The
 role does not disable certificate verification for Vault API calls.
+
+AC-6 qualifier: `vault-unseal.service` (when `vault_auto_unseal_enabled` is
+`true`) runs as root — a deliberate exception so unseal key material stays
+root-only rather than readable by the service account; see the Auto-Unseal
+section for the model and its trade-offs.
 
 ## License
 

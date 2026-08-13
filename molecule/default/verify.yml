@@ -197,14 +197,21 @@
           - "'Environment=VAULT_CACERT=/opt/vault/tls/ca.crt' in (__verify_unseal_service_content.content | b64decode)"
         fail_msg: "vault-unseal.service does not pass VAULT_CACERT"
 
+    # Line-anchored: a comment MENTIONING the directives must not trip this,
+    # only a real directive at line start (review round 1, finding 1).
     - name: Assert unseal service runs as root with vault.service coupling
       ansible.builtin.assert:
         that:
-          - "'User=' not in (__verify_unseal_service_content.content | b64decode)"
+          - >-
+            (__verify_unseal_service_content.content | b64decode).split('\n')
+            | select('match', '^(User|Group)=')
+            | list | length == 0
           - "'Requires=vault.service' in (__verify_unseal_service_content.content | b64decode)"
+          - "'Environment=VAULT_ADDR=https://127.0.0.1:8200' in (__verify_unseal_service_content.content | b64decode)"
         fail_msg: >-
-          vault-unseal.service must run as root (no User= directive; the
-          tokens file is root-only 0600) and must Require vault.service
+          vault-unseal.service must run as root (no User=/Group= directive;
+          the tokens file is root-only 0600), must Require vault.service,
+          and must pass VAULT_ADDR with the configured listener port
 
     ###########################################################################
     # fapolicyd trust file

@@ -2,17 +2,20 @@
 ###############################################################################
 # Filename: vault-unseal.sh
 # Summary: Unseal the local Vault instance from a root-only tokens file.
-#   Waits (bounded) for the Vault API to answer, applies Shamir key shares
-#   until unsealed, and reports the true outcome in the exit code.
+#   Refuses untrusted tokens-file ownership/permissions, waits (bounded)
+#   for the Vault API to answer, applies Shamir key shares until unsealed,
+#   and reports the true outcome in the exit code.
 # Location (deployed): /usr/local/bin/vault-unseal.sh (root:root)
-# Runs as: root, via vault-unseal.service (tokens file is root-only 0600)
-# Exit codes: 0 = Vault is unsealed; 1 = failure (unreachable, missing
-#   inputs, or still sealed after all keys were applied)
+# Runs as: root, via vault-unseal.service. The tokens file lives in a
+#   root-owned 0700 directory so no unprivileged account can replace it —
+#   this file is `source`d by root; its whole path chain must be trusted.
+# Exit codes: 0 = Vault is unsealed; 1 = failure (untrusted tokens path,
+#   unreachable API, uninitialized Vault, or still sealed after all keys)
 # Classification: UNCLASSIFIED
 ###############################################################################
 set -euo pipefail
 
-TOKENS_FILE="${VAULT_TOKENS_FILE:-/etc/vault.d/tokens.env}"
+TOKENS_FILE="${VAULT_TOKENS_FILE:-/etc/vault-unseal/tokens.env}"
 VAULT_CA_FILE="${VAULT_CACERT:-/opt/vault/tls/ca.crt}"
 WAIT_TIMEOUT="${VAULT_UNSEAL_TIMEOUT:-60}"
 RETRY_INTERVAL="${VAULT_UNSEAL_RETRY_INTERVAL:-2}"
@@ -30,16 +33,51 @@ if [[ ! -r "$VAULT_CA_FILE" ]]; then
     exit 1
 fi
 
-# seal_status: 0 = unsealed, 2 = sealed, 1 = API not answering
+###############################################################################
+# Trust guard: this script `source`s the tokens file as root. Refuse unless
+# the file AND its parent directory are owned by root (or the invoking uid,
+# for unprivileged test runs) and carry no group/other write bits — a
+# writable parent lets any local account replace the file (unlink/create
+# needs only directory write, not file ownership).
+###############################################################################
+stat_uid_mode() { # portable: GNU coreutils first, BSD fallback
+    stat -c '%u %a' "$1" 2>/dev/null || stat -f '%u %Lp' "$1"
+}
+
+require_trusted_path() {
+    local path="$1" uid mode gbit obit
+    read -r uid mode < <(stat_uid_mode "$path")
+    if [[ "$uid" -ne 0 && "$uid" -ne "$EUID" ]]; then
+        echo "Error: $path owned by uid $uid (not root); refusing to trust it" >&2
+        exit 1
+    fi
+    gbit="${mode: -2:1}"
+    obit="${mode: -1}"
+    case "$gbit$obit" in
+        *[2367]*)
+            echo "Error: $path is group- or other-writable (mode $mode); refusing" >&2
+            exit 1
+            ;;
+    esac
+}
+
+require_trusted_path "$(dirname "$TOKENS_FILE")"
+require_trusted_path "$TOKENS_FILE"
+
+# seal_status: 0 = unsealed, 2 = sealed or uninitialized, other = the CLI
+# could not obtain seal status (listener down, TLS/CA error, DNS — all
+# surface as rc 1; verified against a real vault binary in review round 1).
+# STATUS_OUT carries the JSON (or the error text) for diagnostics.
+STATUS_OUT=""
 seal_status() {
     local rc=0
-    vault status -format=json >/dev/null 2>&1 || rc=$?
+    STATUS_OUT=$(vault status -format=json 2>&1) || rc=$?
     return "$rc"
 }
 
 ###############################################################################
-# Wait (bounded) for the Vault API to answer. vault status exits 0 when
-# unsealed and 2 when sealed; anything else means the listener is not up yet.
+# Wait (bounded) for the Vault API to answer. Non-0/2 covers permanent
+# errors too (bad CA, DNS), so the timeout message carries the last error.
 ###############################################################################
 SECONDS=0
 while true; do
@@ -52,15 +90,26 @@ while true; do
         break
     fi
     if [[ "$SECONDS" -ge "$WAIT_TIMEOUT" ]]; then
-        echo "Error: Vault API did not answer within ${WAIT_TIMEOUT}s at $VAULT_ADDR" >&2
+        echo "Error: could not obtain Vault seal status within ${WAIT_TIMEOUT}s at $VAULT_ADDR" >&2
+        echo "Last error: ${STATUS_OUT}" >&2
         exit 1
     fi
     sleep "$RETRY_INTERVAL"
 done
 
+# rc 2 also covers an UNINITIALIZED Vault (verified against a real vault
+# binary); throwing unseal keys at one only produces confusing errors.
+if [[ "$STATUS_OUT" == *'"initialized": false'* ]]; then
+    echo "Error: Vault is not initialized (vault operator init has not run); refusing to apply unseal keys" >&2
+    exit 1
+fi
+
 # Load VAULT_UNSEAL_KEY_* variables (plain assignments; not exported)
 # shellcheck source=/dev/null
-source "$TOKENS_FILE"
+if ! source "$TOKENS_FILE"; then
+    echo "Error: failed to source $TOKENS_FILE (malformed content)" >&2
+    exit 1
+fi
 
 UNSEAL_KEYS=()
 for var in $(compgen -v | grep "^VAULT_UNSEAL_KEY_" | sort -V); do
@@ -78,12 +127,14 @@ fi
 echo "Found ${#UNSEAL_KEYS[@]} unseal key(s); unsealing Vault..."
 
 ###############################################################################
-# Apply keys until Vault reports unsealed. A single key failure is logged
-# and the next key is tried; the final verdict comes from seal status.
+# Apply keys until Vault reports unsealed. NOTE: `vault operator unseal`
+# returns 0 even for an invalid key (verified against a real vault binary)
+# — the ONLY trustworthy verdict is seal status, which is why every
+# iteration re-checks status and the final error comes from it.
 ###############################################################################
 for key in "${UNSEAL_KEYS[@]}"; do
     if ! vault operator unseal "$key" >/dev/null 2>&1; then
-        echo "Warning: unseal key rejected or call failed; trying next key" >&2
+        echo "Warning: unseal call failed; trying next key" >&2
     fi
     rc=0
     seal_status || rc=$?

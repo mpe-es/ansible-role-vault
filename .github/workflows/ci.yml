@@ -3,7 +3,7 @@
 # Filename: .github/workflows/ci.yml
 # Role: ansible-role-vault
 # Summary: Continuous Integration workflow for linting and testing
-# Last Updated: 03 Apr 2026
+# Last Updated: 13 Aug 2026
 # Classification: UNCLASSIFIED
 ###############################################################################
 name: CI
