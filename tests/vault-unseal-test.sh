@@ -304,6 +304,7 @@ else
     fail "guard-file-read: refuses group-readable tokens file (got 0)"
 fi
 assert_eq "$(vault_calls)" "0" "guard-file-read: vault never invoked"
+assert_output_contains "must be 0600" "guard-file-read: diagnostic names the required mode"
 cleanup_scenario
 
 ###############################################################################

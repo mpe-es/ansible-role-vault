@@ -4,7 +4,7 @@
 # Role: ansible-role-vault
 # Summary: Internal variables for HashiCorp Vault role. These have higher
 #   precedence than defaults and should NOT be overridden by consumers.
-# Last Updated: 29 Jul 2026
+# Last Updated: 13 Aug 2026
 # Classification: UNCLASSIFIED
 ###############################################################################
 
@@ -41,7 +41,9 @@ vault_group: vault
 # File Permissions (STIG-hardened)
 # RPM defaults are too permissive for STIG compliance:
 #   RPM: /etc/vault.d 0755, vault.hcl 0644 root:root
-#   STIG: /etc/vault.d 0750, vault.hcl 0640 vault:vault
+#   Hardened: /etc/vault.d 0750 root:vault (vault reads via group, cannot
+#   replace entries — the auto-unseal tokens file lives here root-only),
+#   vault.hcl 0640 vault:vault (file ownership tightening is issue #38)
 # NIST 800-53: AC-6 (Least Privilege)
 ###############################################################################
 vault_config_dir_mode: '0750'
@@ -63,9 +65,6 @@ vault_selinux_contexts:
     setype: usr_t
     seuser: system_u
   - path: /etc/vault.d(/.*)?
-    setype: etc_t
-    seuser: system_u
-  - path: /etc/vault-unseal(/.*)?
     setype: etc_t
     seuser: system_u
   - path: /var/log/vault(/.*)?

@@ -127,7 +127,7 @@ auto-generation and input validation.
 | `vault_auto_unseal_enabled` | `false` | Deploy auto-unseal service |
 | `vault_key_shares` | `5` | Shamir key shares for initialization |
 | `vault_key_threshold` | `3` | Shamir keys required to unseal |
-| `vault_init_store_target` | `true` | Store init output on the target in `/etc/vault-unseal/tokens.env` (root-only 0700 directory) |
+| `vault_init_store_target` | `true` | Store init output on the target in `/etc/vault.d/tokens.env` (root:root 0600) |
 | `vault_init_controller_capture_enabled` | `false` | Capture init output back to the Ansible controller/AAP execution environment |
 | `vault_init_controller_output_path` | `""` | Controller-side path for captured init JSON |
 | `vault_init_controller_output_mode` | `0600` | File mode for controller-side captured init JSON |
@@ -204,9 +204,9 @@ for Python library dependencies. No other Ansible role dependencies.
 
 When `vault_initialize` is enabled, initialization material is secret-bearing.
 By default, the role preserves existing behavior and writes
-`/etc/vault-unseal/tokens.env` on the target with mode `0600` inside a
-root-only `0700` directory (deliberately NOT `/etc/vault.d`, which the vault
-service account owns and could therefore replace files in). For Ansible
+`/etc/vault.d/tokens.env` on the target, `root:root` mode `0600`. The
+config directory itself is `root:vault 0750`, so the vault service account
+can read its configs but cannot create or replace entries. For Ansible
 Automation Platform workflows, capture the raw init JSON back to the execution
 environment and immediately move it into an approved secret store:
 
@@ -231,42 +231,32 @@ material and remove it after transfer to the approved credential store.
 When `vault_auto_unseal_enabled` is `true` (and `vault_hsm_enabled` is
 `false`), the role deploys `vault-unseal.service`, a oneshot unit
 (`RemainAfterExit=yes`) that runs after `vault.service` on boot and applies
-the Shamir key shares stored in `/etc/vault-unseal/tokens.env`. Re-running
-the unseal when `vault.service` is restarted is the intent of the
-`Requires=` coupling; that behavior is noted as an open verification item
-in the behavior contract at the end of this section.
+the Shamir key shares stored in `/etc/vault.d/tokens.env`. The unit is
+also wanted by `vault.service` itself, so a stop/start or restart of
+Vault re-pulls the unseal; that behavior is noted as an open verification
+item in the behavior contract at the end of this section.
 
 **Privilege model.** The service runs as **root** by design: the tokens
-file is `root:root` mode `0600` inside a root-only `0700` directory, so the
-vault service account can neither read the keys at rest nor replace the
-file — the parent directory matters because the file is `source`d by root,
-and write access to a directory allows file replacement regardless of file
-ownership. During the unseal window itself the keys currently transit
+file is `root:root` mode `0600`, and `/etc/vault.d` itself is
+`root:vault 0750` (enforced by the role on every full run), so the vault
+service account can read its own configs via group access but can neither
+read the keys at rest nor replace the tokens file — the parent directory
+matters because the file is `source`d by root, and write access to a
+directory allows file replacement regardless of file ownership. During
+the unseal window itself the keys currently transit
 `vault operator unseal` argv, which is visible in the process table;
 closing that channel by moving unseal to the API is tracked as issue #31.
 The script at `/usr/local/bin/vault-unseal.sh` is `root:root` so the
 service account cannot edit what root executes, and the script itself
-refuses to run if the directory is not root-owned or group/other-writable,
-or if the tokens file carries ANY group/other access bits (key material
-must be `0600`). When `vault_auto_unseal_enabled` is `true`, the role
-re-enforces `/etc/vault-unseal` to `root:root 0700` on every run — so an
-operator-placed tokens file (the AAP flow with
-`vault_init_store_target: false`) sits in a hardened directory, and the
-operator is responsible only for creating the file itself `root:root
-0600`. Do not add a service-account directive to the unit without
-changing that model.
-
-**Migration from earlier versions.** Hosts deployed by earlier role
-versions had the tokens file at `/etc/vault.d/tokens.env`; the role
-migrates it on the next full (untagged) role run, regardless of the
-`vault_initialize`/`vault_auto_unseal_enabled` settings — the file
-already exists on the host at a less safe path, so relocating it adds no
-new exposure. Move, never delete: if the new path already holds different
-content, the legacy file is preserved content-addressed as
-`tokens.env.legacy.<sha256-prefix>` for manual reconciliation (a prior
-unreconciled preservation can never be overwritten by a new divergent
-generation). Symlinked or otherwise non-regular legacy paths are refused
-with a warning and left for manual migration.
+refuses to run if the directory is untrusted (not root-owned, or
+group/other-writable) or if the tokens file carries ANY group/other
+access bits (key material must be `0600`). An operator-placed tokens
+file (the AAP flow with `vault_init_store_target: false`) goes at the
+same path with the same `root:root 0600` posture — the script refuses
+anything looser. Do not add a service-account directive to the unit
+without changing that model. Hosts deployed by earlier role versions
+already carry the tokens file at this path; only the directory ownership
+tightens (`vault:vault` to `root:vault`) on the next full role run.
 
 **Behavior contract.** The script waits (bounded, default 60 s, 2 s
 retry interval) for the Vault API to answer before unsealing, refuses to

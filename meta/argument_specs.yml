@@ -301,7 +301,7 @@ argument_specs:
       vault_auto_unseal_enabled:
         description:
           - Deploy vault-unseal systemd service for automatic unsealing after reboot.
-          - Uses Shamir key shares stored in /etc/vault-unseal/tokens.env (root-only 0700 directory) and validates TLS with vault_tls_ca_file. The unseal service runs as root by design so key material stays root-only.
+          - Uses Shamir key shares stored in /etc/vault.d/tokens.env (root:root 0600; the directory is root:vault 0750) and validates TLS with vault_tls_ca_file. The unseal service runs as root by design so key material stays root-only.
         type: bool
         default: false
 
@@ -403,14 +403,14 @@ argument_specs:
       vault_initialize:
         description:
           - Run vault operator init on first deploy.
-          - Keys can be stored in /etc/vault-unseal/tokens.env, captured on the controller, or both.
+          - Keys can be stored in /etc/vault.d/tokens.env, captured on the controller, or both.
           - "Set to true for greenfield deployments only."
         type: bool
         default: false
 
       vault_init_store_target:
         description:
-          - Store unseal keys and the root token on the target in /etc/vault-unseal/tokens.env (root:root 0600, directory 0700).
+          - Store unseal keys and the root token on the target in /etc/vault.d/tokens.env (root:root 0600; directory root:vault 0750).
           - Disable only when a controller/AAP capture path or another approved handoff is configured.
         type: bool
         default: true
