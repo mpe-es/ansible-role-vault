@@ -24,8 +24,24 @@ RETRY_INTERVAL="${VAULT_UNSEAL_RETRY_INTERVAL:-2}"
 export VAULT_ADDR="${VAULT_ADDR:-https://127.0.0.1:8200}"
 export VAULT_CACERT="$VAULT_CA_FILE"
 
+# Reject a symlinked tokens file BEFORE any follow: -r/stat/source all
+# follow the link, so a symlink whose lexical parent is trusted but whose
+# TARGET sits under an attacker-writable directory would pass the guard
+# and then be swapped between stat and source (TOCTOU -> root exec). A
+# real regular file's lexical parent IS its real parent, so validating
+# the lexical parent below is sound only once symlinks are refused here.
+if [[ -L "$TOKENS_FILE" ]]; then
+    echo "Error: $TOKENS_FILE is a symlink; refusing (its target's parent may be untrusted)" >&2
+    exit 1
+fi
+
 if [[ ! -r "$TOKENS_FILE" ]]; then
     echo "Error: Tokens file not found or not readable: $TOKENS_FILE" >&2
+    exit 1
+fi
+
+if [[ ! -f "$TOKENS_FILE" ]]; then
+    echo "Error: $TOKENS_FILE is not a regular file; refusing" >&2
     exit 1
 fi
 
