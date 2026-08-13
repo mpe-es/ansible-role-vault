@@ -4,7 +4,11 @@
 # Author: Alex Ackerman
 # Co-Author: Claude Code (Anthropic) - Audit log backup automation
 # Date: 2025-12-19
-# Summary: Automated backup of Vault audit logs with 7-day retention
+# Last Updated: 13 Aug 2026
+# Summary: Automated backup of Vault audit logs with configurable retention.
+#   Backup tree is root-only (dirs 0700, files 0600, root:root): it contains
+#   auditd extracts that the OS protects at root-only, so the unprivileged
+#   vault service account is deliberately denied read access.
 # Location (deployed): /usr/local/bin/vault-audit-backup.sh
 # Compliant With: RHEL 9 STIG V-205167, Application Security STIG V5R3
 # Classification: UNCLASSIFIED
@@ -12,13 +16,15 @@
 
 set -euo pipefail
 
-# Configuration
-BACKUP_DIR="/opt/vault-backup"
-VAULT_LOG_DIR="/var/log/vault"
-AUDIT_LOG="/var/log/audit/audit.log"
-RETENTION_DAYS=7
+# Restrictive creation mask: new dirs 0700, new files 0600 (root-only tree)
+umask 077
+
+# Configuration (environment-overridable; systemd injects RETENTION_DAYS)
+BACKUP_DIR="${BACKUP_DIR:-/opt/vault-backup}"
+VAULT_LOG_DIR="${VAULT_LOG_DIR:-/var/log/vault}"
+AUDIT_LOG="${AUDIT_LOG:-/var/log/audit/audit.log}"
+RETENTION_DAYS="${RETENTION_DAYS:-7}"
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-HOSTNAME=$(hostname -s)
 
 # Logging
 LOG_TAG="vault-audit-backup"
@@ -39,26 +45,43 @@ log_crit() {
     echo "[CRITICAL] $1" >&2
 }
 
-# Ensure backup directory exists
-if [[ ! -d "$BACKUP_DIR" ]]; then
-    mkdir -p "$BACKUP_DIR"
-    chown vault:vault "$BACKUP_DIR"
-    chmod 750 "$BACKUP_DIR"
-    log_info "Created backup directory: $BACKUP_DIR"
+# Validate retention: non-negative integer only, else fall back to 7 days
+if [[ ! "$RETENTION_DAYS" =~ ^[0-9]+$ ]]; then
+    log_error "Invalid RETENTION_DAYS '$RETENTION_DAYS' - using default of 7"
+    RETENTION_DAYS=7
 fi
 
-# Create timestamped backup subdirectory
+# Refuse a symlinked backup root: find -type sweeps would silently skip it
+if [[ -L "$BACKUP_DIR" ]]; then
+    log_crit "Backup directory $BACKUP_DIR is a symlink - refusing to run"
+    exit 1
+fi
+
+# Ensure backup directory exists and is root-only, even if a prior release
+# of this script left it owned by the vault service account (0750)
+if [[ ! -d "$BACKUP_DIR" ]]; then
+    # Missing parents (if any) are created under the default mask so the
+    # umask 077 above does not lock down directories above the backup root
+    (umask 022 && mkdir -p "$(dirname "$BACKUP_DIR")")
+    mkdir "$BACKUP_DIR"
+    log_info "Created backup directory: $BACKUP_DIR"
+fi
+chown root:root "$BACKUP_DIR" \
+    || { log_crit "Cannot enforce root ownership on $BACKUP_DIR"; exit 1; }
+chmod 0700 "$BACKUP_DIR" \
+    || { log_crit "Cannot enforce 0700 on $BACKUP_DIR"; exit 1; }
+
+# Create timestamped backup subdirectory (root-only)
 BACKUP_SUBDIR="$BACKUP_DIR/backup-$TIMESTAMP"
 mkdir -p "$BACKUP_SUBDIR"
-chown vault:vault "$BACKUP_SUBDIR"
-chmod 750 "$BACKUP_SUBDIR"
+chmod 0700 "$BACKUP_SUBDIR"
 
 log_info "Starting Vault audit log backup to $BACKUP_SUBDIR"
 
 # Backup Vault file audit device log
 if [[ -f "$VAULT_LOG_DIR/vault_audit.log" ]]; then
     cp "$VAULT_LOG_DIR/vault_audit.log" "$BACKUP_SUBDIR/vault_audit.log"
-    gzip "$BACKUP_SUBDIR/vault_audit.log"
+    gzip -nf "$BACKUP_SUBDIR/vault_audit.log"
     log_info "Backed up Vault file audit log (compressed)"
 else
     log_error "Vault file audit log not found: $VAULT_LOG_DIR/vault_audit.log"
@@ -67,7 +90,7 @@ fi
 # Backup Vault syslog audit device log (if exists)
 if [[ -f "$VAULT_LOG_DIR/vault_audit_syslog.log" ]]; then
     cp "$VAULT_LOG_DIR/vault_audit_syslog.log" "$BACKUP_SUBDIR/vault_audit_syslog.log"
-    gzip "$BACKUP_SUBDIR/vault_audit_syslog.log"
+    gzip -nf "$BACKUP_SUBDIR/vault_audit_syslog.log"
     log_info "Backed up Vault syslog audit log (compressed)"
 else
     log_info "Vault syslog audit log not found (may not be configured)"
@@ -82,7 +105,7 @@ if [[ -f "$AUDIT_LOG" ]]; then
     ausearch -ts yesterday -te now -f /etc/vault.d/ >> "$BACKUP_SUBDIR/audit-vault.log" 2>/dev/null || true
 
     if [[ -s "$BACKUP_SUBDIR/audit-vault.log" ]]; then
-        gzip "$BACKUP_SUBDIR/audit-vault.log"
+        gzip -nf "$BACKUP_SUBDIR/audit-vault.log"
         log_info "Backed up Vault-related auditd events (compressed)"
     else
         rm -f "$BACKUP_SUBDIR/audit-vault.log"
@@ -96,7 +119,7 @@ fi
 # Extract last 24 hours of vault.service logs
 journalctl -u vault.service --since "24 hours ago" > "$BACKUP_SUBDIR/vault-journal.log" 2>/dev/null || true
 if [[ -s "$BACKUP_SUBDIR/vault-journal.log" ]]; then
-    gzip "$BACKUP_SUBDIR/vault-journal.log"
+    gzip -nf "$BACKUP_SUBDIR/vault-journal.log"
     log_info "Backed up vault.service systemd journal (compressed)"
 else
     rm -f "$BACKUP_SUBDIR/vault-journal.log"
@@ -106,16 +129,29 @@ fi
 # Backup Vault unseal service logs from journald (if auto-unseal is enabled)
 journalctl -u vault-unseal.service --since "24 hours ago" > "$BACKUP_SUBDIR/vault-unseal-journal.log" 2>/dev/null || true
 if [[ -s "$BACKUP_SUBDIR/vault-unseal-journal.log" ]]; then
-    gzip "$BACKUP_SUBDIR/vault-unseal-journal.log"
+    gzip -nf "$BACKUP_SUBDIR/vault-unseal-journal.log"
     log_info "Backed up vault-unseal.service systemd journal (compressed)"
 else
     rm -f "$BACKUP_SUBDIR/vault-unseal-journal.log"
     log_info "No vault-unseal.service journal entries in last 24 hours"
 fi
 
-# Set ownership and permissions on backup files
-chown -R vault:vault "$BACKUP_SUBDIR"
-chmod -R 640 "$BACKUP_SUBDIR"/*
+# Enforce root-only ownership and permissions across the entire backup tree.
+# The tree contains root-only auditd extracts: the vault service account must
+# never gain read access (Secure by Default). Recursive sweep also remediates
+# legacy trees created vault:vault by earlier releases of this script.
+# A partial sweep failure (e.g. one bad inode in an old tree) must not abort
+# the job before retention and integrity checks run, but it MUST fail the
+# final exit status: a green run guarantees the root-only contract holds.
+SWEEP_FAILED=0
+chown -R root:root "$BACKUP_DIR" \
+    || { log_error "Ownership sweep incomplete on $BACKUP_DIR"; SWEEP_FAILED=1; }
+# NOTE: -exec ... + is load-bearing: it propagates chmod failure to find's
+# exit status, while -exec ... \; returns 0 even when the utility fails
+find "$BACKUP_DIR" -type d -exec chmod 0700 {} + \
+    || { log_error "Directory mode sweep incomplete on $BACKUP_DIR"; SWEEP_FAILED=1; }
+find "$BACKUP_DIR" -type f -exec chmod 0600 {} + \
+    || { log_error "File mode sweep incomplete on $BACKUP_DIR"; SWEEP_FAILED=1; }
 
 # Calculate backup size
 BACKUP_SIZE=$(du -sh "$BACKUP_SUBDIR" | awk '{print $1}')
@@ -123,7 +159,7 @@ log_info "Backup complete: $BACKUP_SIZE in $BACKUP_SUBDIR"
 
 # Retention: Delete backups older than RETENTION_DAYS
 log_info "Applying $RETENTION_DAYS-day retention policy"
-find "$BACKUP_DIR" -maxdepth 1 -type d -name "backup-*" -mtime +$RETENTION_DAYS -exec rm -rf {} \; 2>/dev/null || true
+find "$BACKUP_DIR" -maxdepth 1 -type d -name "backup-*" -mtime "+$RETENTION_DAYS" -exec rm -rf {} \; 2>/dev/null || true
 
 # Count remaining backups
 BACKUP_COUNT=$(find "$BACKUP_DIR" -maxdepth 1 -type d -name "backup-*" | wc -l)
@@ -141,6 +177,11 @@ for backup_file in "$BACKUP_SUBDIR"/*.gz; do
         fi
     fi
 done
+
+if [[ $SWEEP_FAILED -ne 0 ]]; then
+    log_crit "Vault audit backup completed with an incomplete privilege sweep"
+    exit 1
+fi
 
 if [[ $INTEGRITY_CHECK -eq 0 ]]; then
     log_info "Vault audit backup completed successfully"
