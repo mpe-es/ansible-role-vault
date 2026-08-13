@@ -56,6 +56,12 @@ jobs:
       - name: Run ansible-lint
         run: ansible-lint
 
+      - name: Run shellcheck on shipped and test scripts
+        run: shellcheck files/*.sh tests/vault-unseal-test.sh
+
+      - name: Run vault-unseal behavioral tests
+        run: bash tests/vault-unseal-test.sh
+
   ###########################################################
   # Syntax Check Stage
   ###########################################################

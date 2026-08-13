@@ -224,6 +224,34 @@ The role uses `no_log: true` for initialization tasks and never prints the root
 token or unseal keys. Treat the controller-side artifact as temporary key
 material and remove it after transfer to the approved credential store.
 
+## Auto-Unseal (Community Edition, Shamir Keys)
+
+When `vault_auto_unseal_enabled` is `true` (and `vault_hsm_enabled` is
+`false`), the role deploys `vault-unseal.service`, a oneshot unit that runs
+after `vault.service` on boot and applies the Shamir key shares stored in
+`/etc/vault.d/tokens.env`.
+
+**Privilege model.** The service runs as **root** by design: the tokens file
+is `root:root` mode `0600` so the vault service account can never read its
+own unseal keys, and the script at `/usr/local/bin/vault-unseal.sh` is
+`root:root` so the service account cannot edit what root executes. Do not
+add `User=`/`Group=` to the unit without changing that model.
+
+**Behavior contract.** The script waits (bounded, default 60 s) for the
+Vault API to answer before unsealing, applies keys only until Vault reports
+unsealed, and its exit code is honest: `0` only when Vault is unsealed,
+non-zero when the API never answered or Vault remained sealed — so a failed
+boot-time unseal shows as a failed unit in `systemctl`/monitoring instead
+of silently reporting success. Behavior is covered by
+`tests/vault-unseal-test.sh` (run in CI); end-to-end reboot verification on
+a physical RHEL 9 host is tracked as an open verification item.
+
+**Security trade-off.** Storing Shamir shares on the node defeats the
+split-knowledge intent of `vault_key_shares`/`vault_key_threshold` for any
+adversary with root or disk access. Prefer the HSM PKCS#11 seal
+(`vault_hsm_enabled`, Enterprise) or manual unseal where operationally
+feasible; see issue #34 for the planned secure-by-default init handoff.
+
 ## fapolicyd File Trust
 
 When `vault_manage_fapolicyd` is `true` (the default) and a

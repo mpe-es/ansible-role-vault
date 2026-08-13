@@ -223,12 +223,13 @@
         group: root
         mode: '0644'
 
+    # root:root by design — mirrors tasks/stig.yml (issue #30 privilege model)
     - name: Copy vault-unseal.sh script
       ansible.builtin.copy:
         src: "{{ playbook_dir }}/../../files/vault-unseal.sh"
         dest: /usr/local/bin/vault-unseal.sh
-        owner: "{{ vault_user }}"
-        group: "{{ vault_group }}"
+        owner: root
+        group: root
         mode: '0750'
 
     - name: Deploy vault-unseal.service

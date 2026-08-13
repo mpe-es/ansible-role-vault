@@ -3,14 +3,30 @@
 Description=Auto-Unseal HashiCorp Vault Service
 After=network.target
 After=vault.service
+Requires=vault.service
 
 [Service]
 Type=oneshot
 ExecStart=/bin/bash /usr/local/bin/vault-unseal.sh
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 Environment=VAULT_CACERT={{ vault_tls_ca_file }}
-User={{ vault_user }}
-Group={{ vault_group }}
+# Runs as root by design: the unseal keys in /etc/vault.d/tokens.env are
+# root:root 0600 so the vault service account can never read its own
+# unseal keys. Do NOT add User=/Group= here without changing that model.
+
+# Security hardening
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=vault-unseal
+
+# The script waits up to 60s for the Vault API before unsealing
+TimeoutStartSec=120
 
 [Install]
 WantedBy=multi-user.target
