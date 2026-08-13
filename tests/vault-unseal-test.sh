@@ -121,7 +121,8 @@ run_script() { # timing overrides via VAULT_UNSEAL_* set by caller
     RC=0
     # Capture caller-intended timing, then scrub ALL ambient VAULT_* so an
     # operator's shell profile (VAULT_ADDR, VAULT_UNSEAL_KEY_9, ...) cannot
-    # pollute scenarios. The harness owns the entire env contract.
+    # pollute scenarios. The harness owns the env contract except the two
+    # timing vars, which are caller-passed and read before the scrub.
     local timeout_v="${VAULT_UNSEAL_TIMEOUT:-10}"
     local interval_v="${VAULT_UNSEAL_RETRY_INTERVAL:-0}"
     # shellcheck disable=SC2086

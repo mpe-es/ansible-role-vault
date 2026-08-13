@@ -229,23 +229,30 @@ material and remove it after transfer to the approved credential store.
 ## Auto-Unseal (Community Edition, Shamir Keys)
 
 When `vault_auto_unseal_enabled` is `true` (and `vault_hsm_enabled` is
-`false`), the role deploys `vault-unseal.service`, a oneshot unit that runs
-after `vault.service` on boot (and re-runs when `vault.service` is
-restarted, via `Requires=`) and applies the Shamir key shares stored in
-`/etc/vault-unseal/tokens.env`.
+`false`), the role deploys `vault-unseal.service`, a oneshot unit
+(`RemainAfterExit=yes`) that runs after `vault.service` on boot and applies
+the Shamir key shares stored in `/etc/vault-unseal/tokens.env`. Re-running
+the unseal when `vault.service` is restarted is the intent of the
+`Requires=` coupling; that behavior is listed under the open verification
+items below.
 
 **Privilege model.** The service runs as **root** by design: the tokens
 file is `root:root` mode `0600` inside a root-only `0700` directory, so the
-vault service account can neither read nor replace its own unseal keys —
-the parent directory matters because the file is `source`d by root, and
-write access to a directory allows file replacement regardless of file
-ownership. The script at `/usr/local/bin/vault-unseal.sh` is `root:root`
-so the service account cannot edit what root executes, and the script
-itself refuses to run if the tokens file or its directory is not
-root-owned or carries group/other write bits. Do not add a service-account
-directive to the unit without changing that model. Hosts deployed by
-earlier role versions had the tokens file at `/etc/vault.d/tokens.env`;
-the role migrates it (move, never delete) on the next run.
+vault service account can neither read the keys at rest nor replace the
+file — the parent directory matters because the file is `source`d by root,
+and write access to a directory allows file replacement regardless of file
+ownership. During the unseal window itself the keys currently transit
+`vault operator unseal` argv, which is visible in the process table;
+closing that channel by moving unseal to the API is tracked as issue #31.
+The script at `/usr/local/bin/vault-unseal.sh` is `root:root` so the
+service account cannot edit what root executes, and the script itself
+refuses to run if the tokens file or its directory is not root-owned or
+carries group/other write bits. Do not add a service-account directive to
+the unit without changing that model. Hosts deployed by earlier role
+versions had the tokens file at `/etc/vault.d/tokens.env`; the role
+migrates it on the next full (untagged) role run — move, never delete:
+if the new path already holds different content, the legacy file is
+preserved as `tokens.env.legacy` for manual reconciliation.
 
 **Behavior contract.** The script waits (bounded, default 60 s, 2 s
 retry interval) for the Vault API to answer before unsealing, refuses to

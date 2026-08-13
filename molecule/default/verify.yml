@@ -207,11 +207,84 @@
             | select('match', '^(User|Group)=')
             | list | length == 0
           - "'Requires=vault.service' in (__verify_unseal_service_content.content | b64decode)"
-          - "'Environment=VAULT_ADDR=https://127.0.0.1:8200' in (__verify_unseal_service_content.content | b64decode)"
+          - "'Environment=VAULT_ADDR=https://127.0.0.1:8205' in (__verify_unseal_service_content.content | b64decode)"
         fail_msg: >-
           vault-unseal.service must run as root (no User=/Group= directive;
           the tokens file is root-only 0600), must Require vault.service,
           and must pass VAULT_ADDR with the configured listener port
+
+    ###########################################################################
+    # tokens.env migration end-state (divergence case seeded by converge)
+    ###########################################################################
+    - name: Stat root-only unseal directory
+      ansible.builtin.stat:
+        path: /etc/vault-unseal
+      register: __verify_unseal_dir
+
+    - name: Assert root-only unseal directory ownership and mode
+      ansible.builtin.assert:
+        that:
+          - __verify_unseal_dir.stat.exists
+          - __verify_unseal_dir.stat.isdir
+          - __verify_unseal_dir.stat.pw_name == 'root'
+          - __verify_unseal_dir.stat.gr_name == 'root'
+          - __verify_unseal_dir.stat.mode == '0700'
+        fail_msg: >-
+          /etc/vault-unseal must be root:root 0700 — any looser and an
+          unprivileged account can replace the file root sources
+
+    - name: Stat migrated tokens.env
+      ansible.builtin.stat:
+        path: /etc/vault-unseal/tokens.env
+      register: __verify_tokens
+
+    - name: Read migrated tokens.env
+      ansible.builtin.slurp:
+        src: /etc/vault-unseal/tokens.env
+      register: __verify_tokens_content
+
+    - name: Assert divergent new-path tokens.env was NOT clobbered
+      ansible.builtin.assert:
+        that:
+          - __verify_tokens.stat.mode == '0600'
+          - __verify_tokens.stat.pw_name == 'root'
+          - "'different-new-material' in (__verify_tokens_content.content | b64decode)"
+        fail_msg: >-
+          Migration must never overwrite existing content at the new path
+
+    - name: Stat preserved legacy tokens.env
+      ansible.builtin.stat:
+        path: /etc/vault-unseal/tokens.env.legacy
+      register: __verify_tokens_legacy
+
+    - name: Read preserved legacy tokens.env
+      ansible.builtin.slurp:
+        src: /etc/vault-unseal/tokens.env.legacy
+      register: __verify_tokens_legacy_content
+
+    - name: Assert divergent legacy content was preserved, never deleted
+      ansible.builtin.assert:
+        that:
+          - __verify_tokens_legacy.stat.exists
+          - __verify_tokens_legacy.stat.mode == '0600'
+          - __verify_tokens_legacy.stat.pw_name == 'root'
+          - "'legacy-key-material' in (__verify_tokens_legacy_content.content | b64decode)"
+        fail_msg: >-
+          Divergent legacy key material must be preserved as
+          tokens.env.legacy (move, never delete)
+
+    - name: Stat legacy tokens.env location
+      ansible.builtin.stat:
+        path: /etc/vault.d/tokens.env
+      register: __verify_tokens_old
+
+    - name: Assert legacy tokens.env removed from vault-owned directory
+      ansible.builtin.assert:
+        that:
+          - not __verify_tokens_old.stat.exists
+        fail_msg: >-
+          Legacy tokens.env must not remain in the vault-writable config
+          directory after migration
 
     ###########################################################################
     # fapolicyd trust file
