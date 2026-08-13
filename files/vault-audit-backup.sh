@@ -132,11 +132,16 @@ fi
 # The tree contains root-only auditd extracts: the vault service account must
 # never gain read access (Secure by Default). Recursive sweep also remediates
 # legacy trees created vault:vault by earlier releases of this script.
-# A partial sweep failure (e.g. one bad inode in an old tree) is logged but
-# must not abort the job before retention and integrity checks run.
-chown -R root:root "$BACKUP_DIR" || log_error "Ownership sweep incomplete on $BACKUP_DIR"
-find "$BACKUP_DIR" -type d -exec chmod 0700 {} + || log_error "Directory mode sweep incomplete on $BACKUP_DIR"
-find "$BACKUP_DIR" -type f -exec chmod 0600 {} + || log_error "File mode sweep incomplete on $BACKUP_DIR"
+# A partial sweep failure (e.g. one bad inode in an old tree) must not abort
+# the job before retention and integrity checks run, but it MUST fail the
+# final exit status: a green run guarantees the root-only contract holds.
+SWEEP_FAILED=0
+chown -R root:root "$BACKUP_DIR" \
+    || { log_error "Ownership sweep incomplete on $BACKUP_DIR"; SWEEP_FAILED=1; }
+find "$BACKUP_DIR" -type d -exec chmod 0700 {} + \
+    || { log_error "Directory mode sweep incomplete on $BACKUP_DIR"; SWEEP_FAILED=1; }
+find "$BACKUP_DIR" -type f -exec chmod 0600 {} + \
+    || { log_error "File mode sweep incomplete on $BACKUP_DIR"; SWEEP_FAILED=1; }
 
 # Calculate backup size
 BACKUP_SIZE=$(du -sh "$BACKUP_SUBDIR" | awk '{print $1}')
@@ -162,6 +167,11 @@ for backup_file in "$BACKUP_SUBDIR"/*.gz; do
         fi
     fi
 done
+
+if [[ $SWEEP_FAILED -ne 0 ]]; then
+    log_crit "Vault audit backup completed with an incomplete privilege sweep"
+    exit 1
+fi
 
 if [[ $INTEGRITY_CHECK -eq 0 ]]; then
     log_info "Vault audit backup completed successfully"

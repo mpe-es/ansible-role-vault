@@ -34,8 +34,10 @@
           - item.stat.exists
           - item.stat.isdir
           - item.stat.mode == item.item.mode
-          - item.stat.pw_name == item.item.owner
-          - item.stat.gr_name == item.item.group
+          # pw_name/gr_name are absent when the uid/gid has no passwd/group
+          # entry - default so the fail_msg fires instead of a Jinja error
+          - item.stat.pw_name | default('') == item.item.owner
+          - item.stat.gr_name | default('') == item.item.group
         fail_msg: >-
           {{ item.item.path }} has incorrect permissions or ownership:
           exists={{ item.stat.exists }},

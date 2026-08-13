@@ -295,6 +295,7 @@ argument_specs:
           - Injected into vault-audit-backup.service as the RETENTION_DAYS
             environment variable; the backup script falls back to 7 when
             the value is unset or not a non-negative integer.
+          - A value of 0 purges every backup older than 24 hours.
         type: int
         default: 7
 

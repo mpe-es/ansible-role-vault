@@ -16,7 +16,7 @@ set -uo pipefail
 
 # Static plan: the runner fails if any assertion vanishes or is added
 # without updating this count.
-PLAN=42
+PLAN=45
 
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUT="$TEST_DIR/../files/vault-audit-backup.sh"
@@ -86,10 +86,20 @@ mkdir -p "$SHIM_DIR"
 # logger: swallow syslog writes
 printf '#!/usr/bin/env bash\nexit 0\n' > "$SHIM_DIR/logger"
 
-# chown: record argv, perform nothing (non-root cannot chown to root/vault)
+# chown: record argv, perform nothing (non-root cannot chown to root/vault).
+# NOTE: ownership is therefore asserted by INVOCATION (path-bound argv match),
+# not by inode state. MOCK_CHOWN_FAIL=1 fails recursive (-R) sweeps only.
 cat > "$SHIM_DIR/chown" << 'EOF'
 #!/usr/bin/env bash
 echo "$*" >> "${CHOWN_LOG:?CHOWN_LOG not set}"
+if [[ "${MOCK_CHOWN_FAIL:-0}" == "1" ]]; then
+    for a in "$@"; do
+        if [[ "$a" == "-R" ]]; then
+            echo "chown shim: simulated -R failure" >&2
+            exit 1
+        fi
+    done
+fi
 exit 0
 EOF
 
@@ -213,11 +223,12 @@ else
     not_ok "s1: script never invokes chown with vault:vault"
 fi
 
-# The recursive ownership sweep must run, not just the top-level chown
-assert "s1: recursive root:root ownership sweep invoked (-R root:root)" \
-    grep -q -- '-R root:root' "$SB1/chown.log"
-
 B1="$SB1/opt/vault-backup"
+
+# The recursive ownership sweep must target the TREE ROOT, not merely today's
+# subdir: full-line path-bound match so a narrowed sweep cannot pass
+assert "s1: recursive root:root ownership sweep covers the whole tree" \
+    grep -qxF -- "-R root:root $B1" "$SB1/chown.log"
 assert "s1: backup dir mode is 0700" test "$(get_mode "$B1")" = "700"
 
 SUBDIR_COUNT=0
@@ -266,8 +277,8 @@ assert "s2: legacy backup subdir tightened to 0700" \
     test "$(get_mode "$LEGACY_DIR")" = "700"
 assert "s2: legacy backup file tightened to 0600" \
     test "$(get_mode "$LEGACY_DIR/audit-vault.log.gz")" = "600"
-assert "s2: recursive root:root ownership sweep invoked (-R root:root)" \
-    grep -q -- '-R root:root' "$SB2/chown.log"
+assert "s2: recursive root:root ownership sweep covers the whole tree" \
+    grep -qxF -- "-R root:root $SB2/opt/vault-backup" "$SB2/chown.log"
 
 ###############################################################################
 # Scenario 3: retention honors RETENTION_DAYS from the environment
@@ -370,6 +381,19 @@ RC=$?
 assert "s6: script exits 1 on gzip integrity failure" test "$RC" -eq 1
 assert "s6: integrity failure is logged as critical" \
     grep -q 'integrity errors' "$SB6/run.log"
+
+###############################################################################
+# Scenario 7: privilege sweep failure -> exit 1 (contract not silently broken)
+###############################################################################
+echo "# scenario 7: incomplete privilege sweep fails the run"
+SB7="$(new_sandbox)"
+run_sut "$SB7" "$SB7/run.log" MOCK_CHOWN_FAIL=1
+RC=$?
+assert "s7: script exits 1 when the ownership sweep fails" test "$RC" -eq 1
+assert "s7: sweep failure logged as error" \
+    grep -q 'Ownership sweep incomplete' "$SB7/run.log"
+assert "s7: sweep failure logged as critical at exit" \
+    grep -q 'incomplete privilege sweep' "$SB7/run.log"
 
 ###############################################################################
 # Summary
