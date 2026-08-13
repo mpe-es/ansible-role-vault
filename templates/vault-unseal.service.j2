@@ -3,13 +3,16 @@
 Description=Auto-Unseal HashiCorp Vault Service
 After=network.target
 After={{ vault_service_name }}.service
-# Three couplings, each with one job (pending verification on a real
-# host — open verification item):
-#   Requires= : hard dependency — fails this unit if Vault is absent
-#   PartOf=   : propagates stop AND restart of Vault to this unit
+# Three couplings (pending verification on a real host — open
+# verification item):
+#   Requires= : hard dependency; per systemd.unit(5) it ALSO propagates
+#     explicit stop/restart of Vault to this unit
+#   PartOf=   : states the stop/restart propagation explicitly —
+#     redundant with Requires= today; survives a future weakening of
+#     Requires= to Wants=
 #   WantedBy {{ vault_service_name }}.service ([Install]) : pulls the
 #     unseal back in when Vault starts, closing the stop-then-start path
-#     that restart propagation alone does not cover
+#     that stop/restart propagation does not cover
 Requires={{ vault_service_name }}.service
 PartOf={{ vault_service_name }}.service
 

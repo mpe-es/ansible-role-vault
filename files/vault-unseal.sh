@@ -65,9 +65,12 @@ require_trusted_path() {
         echo "Error: unparseable stat output for $path ('$uid $mode')" >&2
         exit 1
     fi
-    # stat prints minimal digits (mode 000 -> "0"); zero-pad so the
-    # group/other slices below always index real positions
-    mode=$(printf '%04d' "$mode")
+    # stat prints minimal digits (mode 000 -> "0"); STRING-pad to four
+    # chars so the group/other slices always index real positions. Never
+    # printf '%04d' here: base-0 parsing reads a leading zero as octal
+    # ("0750" -> "0488") and would fail the guard open.
+    mode="000${mode}"
+    mode="${mode: -4}"
     if [[ "$uid" -ne 0 && "$uid" -ne "$EUID" ]]; then
         echo "Error: $path owned by uid $uid (not root); refusing to trust it" >&2
         exit 1
