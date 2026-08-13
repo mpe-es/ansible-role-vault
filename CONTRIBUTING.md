@@ -126,16 +126,20 @@ The following hooks are configured:
 
 ### Shell Script Testing
 
-Helper scripts under `files/` have behavioral test harnesses under
-`tests/`. CI runs shellcheck and the harnesses on every push; run them
-locally before submitting:
+`files/vault-audit-backup.sh` has a behavioral test harness at
+`tests/vault-audit-backup-test.sh`. CI runs shellcheck and the harness on
+every push; run them locally before submitting:
 
 ```bash
 shellcheck files/vault-audit-backup.sh tests/vault-audit-backup-test.sh
 bash tests/vault-audit-backup-test.sh
 ```
 
-The harnesses are non-root friendly: external commands are mocked via
+Coverage for `files/vault-unseal.sh` lands with the auto-unseal
+hardening work (issue #30). New helper scripts should ship with their
+own harness and be added to both CI steps.
+
+The harness is non-root friendly: external commands are mocked via
 PATH shims and all paths are redirected into a temporary sandbox.
 
 ### Molecule Testing
