@@ -122,7 +122,7 @@ auto-generation and input validation.
 | `vault_stig_logrotate_enabled` | `true` | Deploy logrotate config |
 | `vault_stig_logrotate_days` | `90` | Log retention (min 90 for STIG) |
 | `vault_stig_audit_backup_enabled` | `true` | Deploy audit backup service/timer |
-| `vault_stig_audit_backup_retention_days` | `7` | Audit backup retention |
+| `vault_stig_audit_backup_retention_days` | `7` | Audit backup retention in days (injected into the backup service as `RETENTION_DAYS`) |
 | `vault_stig_aide_check_enabled` | `true` | Deploy AIDE integrity check timer |
 | `vault_auto_unseal_enabled` | `false` | Deploy auto-unseal service |
 | `vault_key_shares` | `5` | Shamir key shares for initialization |
@@ -286,12 +286,54 @@ touching fapolicyd entirely — including a previously deployed trust file.
 Manual cleanup: `rm /etc/fapolicyd/trust.d/vault.trust && fapolicyd-cli
 --update`.
 
+## Audit Log Backups
+
+When `vault_stig_audit_backup_enabled` is true (the default), a daily
+systemd timer runs `vault-audit-backup.sh` as root to stage Vault audit
+device logs, Vault-related auditd extracts, and service journals under
+`/opt/vault-backup` (RHEL 9 STIG V-205167).
+
+**Privilege model (Secure by Default).** The backup job copies auditd
+content that the operating system protects at root-only (`/var/log/audit/`
+is 0600 root, and auditd records can contain execve argv). The backup tree
+therefore stays root-only end to end:
+
+- `/opt/vault-backup` and every `backup-*` subdirectory: `root:root`, mode
+  `0700`.
+- Every backup file: `root:root`, mode `0600`.
+- The unprivileged `vault` service account has **no read access** to the
+  backup tree. A compromised vault process cannot read historical audit
+  extracts about itself. `find /opt/vault-backup ! -user root` returns
+  nothing after a run.
+- The script re-enforces this ownership/mode contract on every run. On
+  hosts upgraded from earlier releases (which created the `backup-*`
+  subdirectories `vault:vault`), the role immediately sets the top-level
+  directory to `root:root` mode `0700` - denying the vault account all
+  access to the subtree - and the remaining legacy content is swept to
+  `root:root` `0700`/`0600` by the first backup run after the upgrade.
+
+There is no supported way to grant the vault account read access through
+role variables; operators who need to export backups should pull them via
+a root-privileged transfer path.
+
+**Retention.** `vault_stig_audit_backup_retention_days` (default 7) is
+injected into `vault-audit-backup.service` as the `RETENTION_DAYS`
+environment variable and controls when `backup-*` directories are purged.
+The script falls back to 7 days if the value is unset or not a
+non-negative integer.
+
+**Local-staging boundary.** This job is local staging only: backups remain
+plaintext on the same host, and integrity checking is limited to
+`gzip -t`. Off-host transfer is the enclave's log-forwarding path (see the
+`vault_rsyslog_*` variables for remote syslog forwarding); it is out of
+scope for this backup job.
+
 ## Compliance
 
 This role implements controls from:
 
 - **DISA STIG**: Application Security and Development STIG, RHEL 9 STIG
-- **NIST SP 800-53 Rev 5**: AC-6, AU-4, AU-6, CM-7(5) (when a trust.d-capable fapolicyd is installed and enforcing with file trust enabled), SC-7, SC-8, SC-13, SC-23, SC-28, SI-7
+- **NIST SP 800-53 Rev 5**: AC-6, AU-4, AU-6, AU-9 (root-only audit backup staging), CM-7(5) (when a trust.d-capable fapolicyd is installed and enforcing with file trust enabled), SC-7, SC-8, SC-13, SC-23, SC-28, SI-7
 - **CNSSI 1253**: Moderate-Moderate-Moderate dimensional baselines
 - **CNSA 1.0** (CNSSP-15 / APSC-DV-002010): ECDSA P-384, RSA-3072+, SHA-384, AES-256-GCM
 - **FIPS 140-3**: TLS 1.2+ enforcement, FIPS-validated cryptographic modules
