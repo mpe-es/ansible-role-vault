@@ -267,13 +267,16 @@
             group: root
             mode: '0600'
 
-        - name: Seed root-only directory with divergent tokens.env
+        # Deliberately WRONG mode (0755): the migration block must enforce
+        # 0700, so the verify assertion measures the role's enforcement,
+        # not the fixture (review round 3, finding 7)
+        - name: Seed unseal directory at a deliberately loose mode
           ansible.builtin.file:
             path: /etc/vault-unseal
             state: directory
             owner: root
             group: root
-            mode: '0700'
+            mode: '0755'
 
         - name: Seed divergent tokens.env at root-only location
           ansible.builtin.copy:
@@ -284,8 +287,10 @@
             group: root
             mode: '0600'
 
-    # --- replica of tasks/service.yml migration block (register names,
-    # guards, and task shapes copied verbatim per the replica convention) ---
+    # --- replica of tasks/service.yml migration block: MUTATING tasks
+    # copied verbatim (register names, guards, shapes); the two advisory
+    # debug tasks (check-mode report, divergence warning) are omitted as
+    # non-mutating ---
     - name: Check for legacy tokens.env in vault-owned config directory
       ansible.builtin.stat:
         path: /etc/vault.d/tokens.env
@@ -297,6 +302,7 @@
     - name: Migrate legacy tokens.env to root-only directory
       when:
         - __vault_legacy_tokens.stat.exists
+        - __vault_legacy_tokens.stat.isreg | default(false)
         - not ansible_check_mode
       block:
         - name: Create root-only directory for initialization material (migration)
@@ -324,12 +330,12 @@
             group: root
             mode: '0600'
           when: not __vault_new_tokens.stat.exists
-          no_log: true
+          diff: false
 
         - name: Preserve divergent legacy tokens.env for manual reconciliation
           ansible.builtin.copy:
             src: /etc/vault.d/tokens.env
-            dest: /etc/vault-unseal/tokens.env.legacy
+            dest: "/etc/vault-unseal/tokens.env.legacy.{{ __vault_legacy_tokens.stat.checksum[:12] }}"
             remote_src: true
             owner: root
             group: root
@@ -337,7 +343,7 @@
           when:
             - __vault_new_tokens.stat.exists
             - __vault_new_tokens.stat.checksum != __vault_legacy_tokens.stat.checksum
-          no_log: true
+          diff: false
 
         - name: Remove legacy tokens.env after contents are preserved
           ansible.builtin.file:

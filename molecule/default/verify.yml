@@ -233,10 +233,23 @@
           /etc/vault-unseal must be root:root 0700 — any looser and an
           unprivileged account can replace the file root sources
 
+    # Assert existence BEFORE slurping: a slurp on a missing file kills
+    # the play with an opaque error and the crafted fail_msg never
+    # renders (review round 3, finding 3).
     - name: Stat migrated tokens.env
       ansible.builtin.stat:
         path: /etc/vault-unseal/tokens.env
       register: __verify_tokens
+
+    - name: Assert migrated tokens.env exists with correct posture
+      ansible.builtin.assert:
+        that:
+          - __verify_tokens.stat.exists
+          - __verify_tokens.stat.mode == '0600'
+          - __verify_tokens.stat.pw_name == 'root'
+        fail_msg: >-
+          /etc/vault-unseal/tokens.env missing or wrong posture after
+          migration
 
     - name: Read migrated tokens.env
       ansible.builtin.slurp:
@@ -246,21 +259,17 @@
     - name: Assert divergent new-path tokens.env was NOT clobbered
       ansible.builtin.assert:
         that:
-          - __verify_tokens.stat.mode == '0600'
-          - __verify_tokens.stat.pw_name == 'root'
           - "'different-new-material' in (__verify_tokens_content.content | b64decode)"
         fail_msg: >-
           Migration must never overwrite existing content at the new path
 
+    # Content-addressed preservation path: suffix is the first 12 hex of
+    # sha256 of the seeded legacy fixture content
+    # ("VAULT_UNSEAL_KEY_1=legacy-key-material\n" -> 5aa660ee3bf2)
     - name: Stat preserved legacy tokens.env
       ansible.builtin.stat:
-        path: /etc/vault-unseal/tokens.env.legacy
+        path: /etc/vault-unseal/tokens.env.legacy.5aa660ee3bf2
       register: __verify_tokens_legacy
-
-    - name: Read preserved legacy tokens.env
-      ansible.builtin.slurp:
-        src: /etc/vault-unseal/tokens.env.legacy
-      register: __verify_tokens_legacy_content
 
     - name: Assert divergent legacy content was preserved, never deleted
       ansible.builtin.assert:
@@ -268,10 +277,21 @@
           - __verify_tokens_legacy.stat.exists
           - __verify_tokens_legacy.stat.mode == '0600'
           - __verify_tokens_legacy.stat.pw_name == 'root'
-          - "'legacy-key-material' in (__verify_tokens_legacy_content.content | b64decode)"
         fail_msg: >-
           Divergent legacy key material must be preserved as
-          tokens.env.legacy (move, never delete)
+          tokens.env.legacy.<sha256-prefix> (move, never delete)
+
+    - name: Read preserved legacy tokens.env
+      ansible.builtin.slurp:
+        src: /etc/vault-unseal/tokens.env.legacy.5aa660ee3bf2
+      register: __verify_tokens_legacy_content
+
+    - name: Assert preserved legacy content is byte-faithful
+      ansible.builtin.assert:
+        that:
+          - "'legacy-key-material' in (__verify_tokens_legacy_content.content | b64decode)"
+        fail_msg: >-
+          Preserved legacy file does not carry the original key material
 
     - name: Stat legacy tokens.env location
       ansible.builtin.stat:

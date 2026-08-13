@@ -65,6 +65,9 @@ vault_selinux_contexts:
   - path: /etc/vault.d(/.*)?
     setype: etc_t
     seuser: system_u
+  - path: /etc/vault-unseal(/.*)?
+    setype: etc_t
+    seuser: system_u
   - path: /var/log/vault(/.*)?
     setype: var_log_t
     seuser: system_u
