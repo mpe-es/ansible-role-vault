@@ -75,10 +75,25 @@
       no_log: true
       changed_when: __vault_init_output.rc == 0
 
+    # Root-owned 0700 directory: the tokens file is source'd by root
+    # (vault-unseal.service), so its parent must not be writable by any
+    # unprivileged account — /etc/vault.d is vault-owned and a writable
+    # parent allows file replacement regardless of file ownership.
+    - name: Create root-only directory for initialization material
+      ansible.builtin.file:
+        path: /etc/vault-unseal
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+      when:
+        - __vault_init_output is changed
+        - vault_init_store_target | bool
+
     - name: Store unseal keys and root token
       ansible.builtin.template:
         src: tokens.env.j2
-        dest: /etc/vault.d/tokens.env
+        dest: /etc/vault-unseal/tokens.env
         owner: root
         group: root
         mode: '0600'
@@ -152,6 +167,48 @@
         VAULT_TOKEN: "{{ (__vault_init_output.stdout | from_json).root_token }}"
       no_log: true
       changed_when: true
+
+###############################################################################
+# Migration: earlier role versions stored tokens.env in the vault-owned
+# config directory (/etc/vault.d), whose write access allows the vault
+# account to replace a file root sources. MOVE (never delete) any legacy
+# copy to the root-only location on every run — the legacy file may be the
+# only copy of the unseal keys on hosts initialized by older versions.
+###############################################################################
+- name: Check for legacy tokens.env in vault-owned config directory
+  ansible.builtin.stat:
+    path: /etc/vault.d/tokens.env
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: __vault_legacy_tokens
+
+- name: Migrate legacy tokens.env to root-only directory
+  when: __vault_legacy_tokens.stat.exists
+  block:
+    - name: Create root-only directory for initialization material (migration)
+      ansible.builtin.file:
+        path: /etc/vault-unseal
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+
+    - name: Copy legacy tokens.env to root-only location
+      ansible.builtin.copy:
+        src: /etc/vault.d/tokens.env
+        dest: /etc/vault-unseal/tokens.env
+        remote_src: true
+        owner: root
+        group: root
+        mode: '0600'
+        force: false  # never clobber newer material at the new path
+      no_log: true
+
+    - name: Remove legacy tokens.env after migration
+      ansible.builtin.file:
+        path: /etc/vault.d/tokens.env
+        state: absent
 
 ###############################################################################
 # Enable auto-unseal service (after init completes)
