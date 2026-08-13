@@ -305,8 +305,12 @@ therefore stays root-only end to end:
   backup tree. A compromised vault process cannot read historical audit
   extracts about itself. `find /opt/vault-backup ! -user root` returns
   nothing after a run.
-- The script re-enforces this ownership/mode contract on every run, which
-  also remediates trees created `vault:vault` by earlier releases.
+- The script re-enforces this ownership/mode contract on every run. On
+  hosts upgraded from earlier releases (which created the tree
+  `vault:vault`), the role immediately sets the top-level directory to
+  `root:root` mode `0700` - denying the vault account all access to the
+  subtree - and the remaining legacy content is swept to `root:root`
+  `0700`/`0600` by the first backup run after the upgrade.
 
 There is no supported way to grant the vault account read access through
 role variables; operators who need to export backups should pull them via
@@ -329,7 +333,7 @@ scope for this backup job.
 This role implements controls from:
 
 - **DISA STIG**: Application Security and Development STIG, RHEL 9 STIG
-- **NIST SP 800-53 Rev 5**: AC-6, AU-4, AU-6, CM-7(5) (when a trust.d-capable fapolicyd is installed and enforcing with file trust enabled), SC-7, SC-8, SC-13, SC-23, SC-28, SI-7
+- **NIST SP 800-53 Rev 5**: AC-6, AU-4, AU-6, AU-9 (root-only audit backup staging), CM-7(5) (when a trust.d-capable fapolicyd is installed and enforcing with file trust enabled), SC-7, SC-8, SC-13, SC-23, SC-28, SI-7
 - **CNSSI 1253**: Moderate-Moderate-Moderate dimensional baselines
 - **CNSA 1.0** (CNSSP-15 / APSC-DV-002010): ECDSA P-384, RSA-3072+, SHA-384, AES-256-GCM
 - **FIPS 140-3**: TLS 1.2+ enforcement, FIPS-validated cryptographic modules

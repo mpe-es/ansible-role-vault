@@ -124,6 +124,20 @@ The following hooks are configured:
 - **check-merge-conflict** - Detect merge conflict markers
 - **detect-private-key** - Prevent accidental key commits
 
+### Shell Script Testing
+
+Helper scripts under `files/` have behavioral test harnesses under
+`tests/`. CI runs shellcheck and the harnesses on every push; run them
+locally before submitting:
+
+```bash
+shellcheck files/vault-audit-backup.sh tests/vault-audit-backup-test.sh
+bash tests/vault-audit-backup-test.sh
+```
+
+The harnesses are non-root friendly: external commands are mocked via
+PATH shims and all paths are redirected into a temporary sandbox.
+
 ### Molecule Testing
 
 Molecule tests require Podman (not Docker) on RHEL:

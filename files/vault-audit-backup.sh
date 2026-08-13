@@ -25,7 +25,6 @@ VAULT_LOG_DIR="${VAULT_LOG_DIR:-/var/log/vault}"
 AUDIT_LOG="${AUDIT_LOG:-/var/log/audit/audit.log}"
 RETENTION_DAYS="${RETENTION_DAYS:-7}"
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-HOSTNAME=$(hostname -s)
 
 # Logging
 LOG_TAG="vault-audit-backup"
@@ -55,7 +54,10 @@ fi
 # Ensure backup directory exists and is root-only, even if a prior release
 # of this script left it owned by the vault service account (0750)
 if [[ ! -d "$BACKUP_DIR" ]]; then
-    mkdir -p "$BACKUP_DIR"
+    # Missing parents (if any) are created under the default mask so the
+    # umask 077 above does not lock down directories above the backup root
+    (umask 022 && mkdir -p "$(dirname "$BACKUP_DIR")")
+    mkdir "$BACKUP_DIR"
     log_info "Created backup directory: $BACKUP_DIR"
 fi
 chown root:root "$BACKUP_DIR"
@@ -71,7 +73,7 @@ log_info "Starting Vault audit log backup to $BACKUP_SUBDIR"
 # Backup Vault file audit device log
 if [[ -f "$VAULT_LOG_DIR/vault_audit.log" ]]; then
     cp "$VAULT_LOG_DIR/vault_audit.log" "$BACKUP_SUBDIR/vault_audit.log"
-    gzip "$BACKUP_SUBDIR/vault_audit.log"
+    gzip -nf "$BACKUP_SUBDIR/vault_audit.log"
     log_info "Backed up Vault file audit log (compressed)"
 else
     log_error "Vault file audit log not found: $VAULT_LOG_DIR/vault_audit.log"
@@ -80,7 +82,7 @@ fi
 # Backup Vault syslog audit device log (if exists)
 if [[ -f "$VAULT_LOG_DIR/vault_audit_syslog.log" ]]; then
     cp "$VAULT_LOG_DIR/vault_audit_syslog.log" "$BACKUP_SUBDIR/vault_audit_syslog.log"
-    gzip "$BACKUP_SUBDIR/vault_audit_syslog.log"
+    gzip -nf "$BACKUP_SUBDIR/vault_audit_syslog.log"
     log_info "Backed up Vault syslog audit log (compressed)"
 else
     log_info "Vault syslog audit log not found (may not be configured)"
@@ -95,7 +97,7 @@ if [[ -f "$AUDIT_LOG" ]]; then
     ausearch -ts yesterday -te now -f /etc/vault.d/ >> "$BACKUP_SUBDIR/audit-vault.log" 2>/dev/null || true
 
     if [[ -s "$BACKUP_SUBDIR/audit-vault.log" ]]; then
-        gzip "$BACKUP_SUBDIR/audit-vault.log"
+        gzip -nf "$BACKUP_SUBDIR/audit-vault.log"
         log_info "Backed up Vault-related auditd events (compressed)"
     else
         rm -f "$BACKUP_SUBDIR/audit-vault.log"
@@ -109,7 +111,7 @@ fi
 # Extract last 24 hours of vault.service logs
 journalctl -u vault.service --since "24 hours ago" > "$BACKUP_SUBDIR/vault-journal.log" 2>/dev/null || true
 if [[ -s "$BACKUP_SUBDIR/vault-journal.log" ]]; then
-    gzip "$BACKUP_SUBDIR/vault-journal.log"
+    gzip -nf "$BACKUP_SUBDIR/vault-journal.log"
     log_info "Backed up vault.service systemd journal (compressed)"
 else
     rm -f "$BACKUP_SUBDIR/vault-journal.log"
@@ -119,7 +121,7 @@ fi
 # Backup Vault unseal service logs from journald (if auto-unseal is enabled)
 journalctl -u vault-unseal.service --since "24 hours ago" > "$BACKUP_SUBDIR/vault-unseal-journal.log" 2>/dev/null || true
 if [[ -s "$BACKUP_SUBDIR/vault-unseal-journal.log" ]]; then
-    gzip "$BACKUP_SUBDIR/vault-unseal-journal.log"
+    gzip -nf "$BACKUP_SUBDIR/vault-unseal-journal.log"
     log_info "Backed up vault-unseal.service systemd journal (compressed)"
 else
     rm -f "$BACKUP_SUBDIR/vault-unseal-journal.log"
@@ -130,9 +132,11 @@ fi
 # The tree contains root-only auditd extracts: the vault service account must
 # never gain read access (Secure by Default). Recursive sweep also remediates
 # legacy trees created vault:vault by earlier releases of this script.
-chown -R root:root "$BACKUP_DIR"
-find "$BACKUP_DIR" -type d -exec chmod 0700 {} +
-find "$BACKUP_DIR" -type f -exec chmod 0600 {} +
+# A partial sweep failure (e.g. one bad inode in an old tree) is logged but
+# must not abort the job before retention and integrity checks run.
+chown -R root:root "$BACKUP_DIR" || log_error "Ownership sweep incomplete on $BACKUP_DIR"
+find "$BACKUP_DIR" -type d -exec chmod 0700 {} + || log_error "Directory mode sweep incomplete on $BACKUP_DIR"
+find "$BACKUP_DIR" -type f -exec chmod 0600 {} + || log_error "File mode sweep incomplete on $BACKUP_DIR"
 
 # Calculate backup size
 BACKUP_SIZE=$(du -sh "$BACKUP_SUBDIR" | awk '{print $1}')
