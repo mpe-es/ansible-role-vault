@@ -344,3 +344,20 @@
           - "__rc0_entries | reject('match', '^\\S+ [0-9]+ [0-9a-f]{64}$') | list | length == 0"
           - "__rc0_hdr | list | length == 1"
           - "__rc0_hdr | first | trim == '# Vault package: vault-enterprise-fips1403 2.0.3-1'"
+
+    ###########################################################################
+    # AIDE presence-gate (issue #43): molecule enables the check but the
+    # container ships no aide, so the role must warn+skip — no unit deployed.
+    ###########################################################################
+    - name: Stat the AIDE service unit (must be absent — aide not installed)
+      ansible.builtin.stat:
+        path: /usr/lib/systemd/system/vault-aide-check.service
+      register: __verify_aide_unit
+
+    - name: Assert AIDE integration skipped when aide is absent
+      ansible.builtin.assert:
+        that:
+          - not __verify_aide_unit.stat.exists
+        fail_msg: >-
+          vault-aide-check.service was deployed even though aide is not
+          installed — the presence gate did not fire.
