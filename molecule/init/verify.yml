@@ -1,0 +1,90 @@
+---
+###############################################################################
+# Filename: molecule/init/verify.yml
+# Role: ansible-role-vault
+# Summary: Assert the real init transaction (issue #33). Branches on the
+#   vault_init_unseal host_var (molecule passes host_vars to verify):
+#   default true  -> initialized, UNSEALED, file+syslog audit devices present;
+#   false (opt-out) -> initialized, SEALED, converge still green (no mid-block
+#   failure). The debug warning is not asserted (not observable post-converge).
+# Classification: UNCLASSIFIED
+###############################################################################
+- name: Verify (real-Vault init transaction)
+  hosts: all
+  vars:
+    __vault: /usr/bin/vault
+    __env:
+      VAULT_ADDR: "https://127.0.0.1:8200"
+      VAULT_CACERT: /opt/vault/tls/ca.crt
+
+  tasks:
+    - name: Query Vault status
+      ansible.builtin.command:
+        cmd: "{{ __vault }} status -format=json"
+      register: __vstatus
+      changed_when: false
+      failed_when: false
+      environment: "{{ __env }}"
+
+    - name: Parse Vault status (defensive against a down Vault)
+      ansible.builtin.set_fact:
+        __status: "{{ (__vstatus.stdout | from_json) if (__vstatus.stdout | default('') | length > 0) else {} }}"
+
+    - name: Assert Vault is initialized
+      ansible.builtin.assert:
+        that:
+          - __status.initialized | default(false)
+        fail_msg: "Vault is not initialized (status: {{ __vstatus.stdout | default(__vstatus.stderr) }})"
+
+    ###########################################################################
+    # Default path: vault_init_unseal true -> unsealed + both audit devices
+    ###########################################################################
+    - name: Assert Vault is unsealed after init
+      ansible.builtin.assert:
+        that:
+          - not (__status.sealed | default(true))
+        fail_msg: "Vault should be unsealed after init but sealed={{ __status.sealed | default('unknown') }}"
+      when: vault_init_unseal | bool
+
+    - name: Read tokens.env (shell KEY=VALUE file)
+      ansible.builtin.slurp:
+        src: /etc/vault.d/tokens.env
+      register: __tokens
+      no_log: true
+      when: vault_init_unseal | bool
+
+    - name: Extract the root token (^VAULT_ROOT_TOKEN=)
+      ansible.builtin.set_fact:
+        __root_token: >-
+          {{ (__tokens.content | b64decode).split('\n')
+             | select('match', '^VAULT_ROOT_TOKEN=') | first
+             | regex_replace('^VAULT_ROOT_TOKEN=', '') }}
+      no_log: true
+      when: vault_init_unseal | bool
+
+    - name: List audit devices
+      ansible.builtin.command:
+        cmd: "{{ __vault }} audit list -format=json"
+      register: __audit
+      changed_when: false
+      environment: "{{ __env | combine({'VAULT_TOKEN': __root_token}) }}"
+      no_log: true
+      when: vault_init_unseal | bool
+
+    - name: Assert both file and syslog audit devices are enabled
+      ansible.builtin.assert:
+        that:
+          - "'file/' in (__audit.stdout | from_json)"
+          - "'syslog/' in (__audit.stdout | from_json)"
+        fail_msg: "Expected file/ and syslog/ audit devices to be enabled after init"
+      when: vault_init_unseal | bool
+
+    ###########################################################################
+    # Opt-out path: vault_init_unseal false -> sealed, converge still green
+    ###########################################################################
+    - name: Assert Vault is left sealed (opt-out)
+      ansible.builtin.assert:
+        that:
+          - __status.sealed | default(false)
+        fail_msg: "Vault should be sealed when vault_init_unseal=false but sealed={{ __status.sealed | default('unknown') }}"
+      when: not (vault_init_unseal | bool)
