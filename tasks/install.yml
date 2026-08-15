@@ -15,6 +15,7 @@
     state: "{{ vault_package_state }}"
   register: __vault_install_pkg
   notify: Enable vault
+  when: vault_manage_install | bool
 
 ###############################################################################
 # HSM Client Installation (optional)
