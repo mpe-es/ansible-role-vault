@@ -204,6 +204,19 @@ for Python library dependencies. No other Ansible role dependencies.
         vault_rsyslog_host: "syslog.enclave.mil"
 ```
 
+### Migrating from the pre-#34 key-handling variables
+
+The initialization key-handling variables changed to be secure by default (breaking):
+
+| Removed / renamed | Replacement |
+|---|---|
+| `vault_init_store_target` (default `true`) | **removed** — unseal shares land on the node only when `vault_auto_unseal_enabled: true` (shares only; the root token is never on the node) |
+| `vault_init_controller_capture_enabled` | **removed** — controller capture is now unconditional when `vault_initialize: true` |
+| `vault_init_controller_output_path` (a JSON file) | `vault_init_capture_dir` — a **required** base directory; the role writes per-file (`root-token`, `unseal-key-*`/`recovery-key-*`) under `<dir>/<inventory_hostname>/`, `0600` each |
+| `vault_init_controller_output_mode` | `vault_init_capture_mode` (default `0600`; must be owner-only) |
+
+Unknown variables are silently ignored by Ansible, so an old `vault_init_store_target: false` is simply dropped — the new required-`vault_init_capture_dir` assert fails closed until you set it.
+
 ### Greenfield Initialization — secure key handling
 
 When `vault_initialize: true`, initialization material is secret-bearing, and
@@ -227,8 +240,10 @@ the role is **secure by default**:
     - role: darkhonor.vault
       vars:
         vault_initialize: true
-        # REQUIRED controller directory for per-file key capture:
-        vault_init_capture_dir: "/runner/artifacts/vault-init-{{ inventory_hostname }}"
+        # REQUIRED base controller directory for per-file key capture. The role
+        # writes each host's keys under a per-host subdirectory
+        # (<vault_init_capture_dir>/<inventory_hostname>/), so a shared base is safe.
+        vault_init_capture_dir: "/runner/artifacts/vault-init"
         # Secure default: no keys on the node. Set true ONLY to accept
         # on-node shares for boot-time auto-unseal (availability trade-off).
         vault_auto_unseal_enabled: false
