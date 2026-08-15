@@ -204,15 +204,19 @@ jobs:
   # airgap-overridable via the MOLECULE_VAULT_URL repo/org variable.
   ###########################################################
   molecule-init:
-    name: Molecule Init (${{ matrix.el.name }} unseal=${{ matrix.unseal }})
+    name: Molecule Init (${{ matrix.el.name }} ${{ matrix.mode.name }})
     runs-on: ubuntu-latest
     needs: syntax
     strategy:
       fail-fast: false
       matrix:
-        unseal:
-          - 'true'
-          - 'false'
+        mode:
+          # secure: #34 core — no keys/root token on the node
+          - {name: secure, init_unseal: 'true', auto_unseal: 'false'}
+          # autounseal: shares on the node for the boot service (no root token)
+          - {name: autounseal, init_unseal: 'true', auto_unseal: 'true'}
+          # sealed: #33 opt-out (auto_unseal MUST be false — forbidden-combo assert)
+          - {name: sealed, init_unseal: 'false', auto_unseal: 'false'}
         el:
           - name: el8
             image: registry.access.redhat.com/ubi8/ubi-init:latest
@@ -268,7 +272,8 @@ jobs:
           ANSIBLE_VERBOSITY: '3'
           MOLECULE_IMAGE: ${{ matrix.el.image }}
           MOLECULE_PYTHON: ${{ matrix.el.python }}
-          MOLECULE_INIT_UNSEAL: ${{ matrix.unseal }}
+          MOLECULE_INIT_UNSEAL: ${{ matrix.mode.init_unseal }}
+          MOLECULE_AUTO_UNSEAL: ${{ matrix.mode.auto_unseal }}
           # Enclave CI overrides MOLECULE_VAULT_URL (repo/org variable) to an
           # internal web server; public default constructed from the version.
           MOLECULE_VAULT_URL: ${{ vars.MOLECULE_VAULT_URL }}
