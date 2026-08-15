@@ -301,10 +301,10 @@ argument_specs:
 
       vault_stig_aide_check_enabled:
         description:
-          - Deploy AIDE file integrity check systemd service and timer.
-          - Implements RHEL 9 STIG V-257842 and Application Security STIG V-263644.
+          - Deploy the Vault AIDE integrity check (systemd service and timer) when aide is installed.
+          - Implements RHEL 9 STIG V-257842 / V-263644 on hosts where AIDE is present; skips with a warning otherwise.
         type: bool
-        default: true
+        default: false
 
       vault_auto_unseal_enabled:
         description:
