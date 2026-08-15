@@ -34,6 +34,20 @@
       register: __prep_pkg
       changed_when: "'Installed:' in __prep_pkg.stdout"
 
+    # /dev/log (journald syslog socket) is required by 'vault audit enable
+    # syslog'. It is socket-activated and not always up in a fresh container,
+    # so start it explicitly; failed_when:false in case the image names it
+    # differently — the tripwire below is the real gate.
+    - name: Ensure journald and its /dev/log socket are active
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        state: started
+        daemon_reload: true
+      loop:
+        - systemd-journald.service
+        - systemd-journald-dev-log.socket
+      failed_when: false
+
     # /dev/log must exist or 'vault audit enable syslog' fails — a HARNESS
     # infra issue, not a #33 regression. Fail loudly and distinguishably.
     - name: Stat /dev/log (syslog socket)
