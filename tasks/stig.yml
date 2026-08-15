@@ -64,8 +64,30 @@
 # AIDE File Integrity Check
 # RHEL 9 STIG V-257842, Application Security STIG V-263644
 ###############################################################################
-- name: Deploy AIDE integrity check components
+# AIDE is host-owned: integrate only when the binary is present, never install it.
+- name: Detect aide binary
+  ansible.builtin.stat:
+    path: /usr/sbin/aide
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: __vault_aide_bin
   when: vault_stig_aide_check_enabled | bool
+
+- name: Warn when AIDE check is enabled but aide is not installed
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: STIG V-257842/V-263644 AIDE check SKIPPED — aide not installed
+      (/usr/sbin/aide absent). The host baseline owns AIDE; install aide to
+      enable the Vault integrity check.
+  when:
+    - vault_stig_aide_check_enabled | bool
+    - not __vault_aide_bin.stat.exists
+
+- name: Deploy AIDE integrity check components
+  when:
+    - vault_stig_aide_check_enabled | bool
+    - __vault_aide_bin.stat.exists | default(false)
   block:
     - name: Deploy vault-aide-check.service
       ansible.builtin.template:
@@ -145,6 +167,25 @@
 # Rsyslog Forwarding
 # NIST 800-53: AU-4, AU-6
 ###############################################################################
+# rsyslog is host-owned: forward only when the daemon is present, never install it.
+- name: Detect rsyslogd binary
+  ansible.builtin.stat:
+    path: /usr/sbin/rsyslogd
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: __vault_rsyslogd_bin
+  when: vault_rsyslog_enabled | bool
+
+- name: Warn when rsyslog forwarding is enabled but rsyslogd is not installed
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: Vault rsyslog forwarding (AU-4/AU-6) SKIPPED — rsyslogd not
+      installed (/usr/sbin/rsyslogd absent). Install rsyslog to enable forwarding.
+  when:
+    - vault_rsyslog_enabled | bool
+    - not __vault_rsyslogd_bin.stat.exists
+
 - name: Deploy rsyslog forwarding configuration
   ansible.builtin.template:
     src: rsyslog-vault.conf.j2
@@ -152,5 +193,7 @@
     owner: root
     group: root
     mode: '0644'
-  when: vault_rsyslog_enabled | bool
+  when:
+    - vault_rsyslog_enabled | bool
+    - __vault_rsyslogd_bin.stat.exists | default(false)
   notify: Restart rsyslog

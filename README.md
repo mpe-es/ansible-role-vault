@@ -123,7 +123,7 @@ auto-generation and input validation.
 | `vault_stig_logrotate_days` | `90` | Log retention (min 90 for STIG) |
 | `vault_stig_audit_backup_enabled` | `true` | Deploy audit backup service/timer |
 | `vault_stig_audit_backup_retention_days` | `7` | Audit backup retention in days (injected into the backup service as `RETENTION_DAYS`) |
-| `vault_stig_aide_check_enabled` | `true` | Deploy AIDE integrity check timer |
+| `vault_stig_aide_check_enabled` | `false` | Deploy AIDE integrity check timer (when aide installed) |
 | `vault_auto_unseal_enabled` | `false` | Deploy auto-unseal service |
 | `vault_key_shares` | `5` | Shamir key shares for initialization |
 | `vault_key_threshold` | `3` | Shamir keys required to unseal |
@@ -134,6 +134,11 @@ auto-generation and input validation.
 | `vault_rsyslog_enabled` | `false` | Enable remote syslog forwarding |
 | `vault_rsyslog_host` | `""` | Remote syslog target |
 | `vault_rsyslog_port` | `514` | Remote syslog port |
+
+> **AIDE and rsyslog are host-owned.** The role integrates with them only
+> when their binary is present and never installs them; enabled-but-absent
+> logs a warning and skips. On a STIG host, install `aide` via the host
+> baseline and opt in with `vault_stig_aide_check_enabled: true`.
 
 ### Firewall
 
@@ -272,8 +277,9 @@ unchanged; on the next full role run the directory ownership tightens
 symlink every run and re-enables the unit when the link is missing (a
 plain `enabled: true` cannot refresh `[Install]` symlinks on
 already-enabled hosts, and a notify-based repair would be lost if a run
-aborts). AIDE will report the `/etc/vault.d` ownership change on every
-daily check until the baseline is refreshed — after the upgrade, run
+aborts). When the AIDE check is enabled, AIDE will report the
+`/etc/vault.d` ownership change on every daily check until the baseline is
+refreshed — after the upgrade, run
 `aide --update` and move `/var/lib/aide/aide.db.new.gz` to
 `/var/lib/aide/aide.db.gz` (the file the daily check reads), or delete
 `aide.db.gz` and re-run the role, which re-initializes the baseline.
@@ -406,7 +412,7 @@ scope for this backup job.
 This role implements controls from:
 
 - **DISA STIG**: Application Security and Development STIG, RHEL 9 STIG
-- **NIST SP 800-53 Rev 5**: AC-6, AU-4, AU-6, AU-9 (root-only audit backup staging), CM-7(5) (when a trust.d-capable fapolicyd is installed and enforcing with file trust enabled), SC-7, SC-8, SC-13, SC-23, SC-28, SI-7
+- **NIST SP 800-53 Rev 5**: AC-6, AU-4, AU-6 (remote syslog forwarding when rsyslogd is present), AU-9 (root-only audit backup staging), CM-7(5) (when a trust.d-capable fapolicyd is installed and enforcing with file trust enabled), SC-7, SC-8, SC-13, SC-23, SC-28, SI-7 (AIDE integrity check is opt-in and presence-gated)
 - **CNSSI 1253**: Moderate-Moderate-Moderate dimensional baselines
 - **CNSA 1.0** (CNSSP-15 / APSC-DV-002010): ECDSA P-384, RSA-3072+, SHA-384, AES-256-GCM
 - **FIPS 140-3**: TLS 1.2+ enforcement, FIPS-validated cryptographic modules

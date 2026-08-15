@@ -2,7 +2,10 @@
 ###############################################################################
 # Filename: molecule/default/prepare.yml
 # Role: ansible-role-vault
-# Summary: Prepare container with packages missing from UBI9 minimal
+# Summary: Stand up the mocks the REAL role (import_role in converge.yml,
+#   issue #43) needs in place of an RPM install / running Vault, plus the
+#   "already-enabled host" fixture that exercises the real service.yml
+#   [Install]-link repair.
 # Classification: UNCLASSIFIED
 ###############################################################################
 - name: Prepare
@@ -27,6 +30,101 @@
       register: __prepare_packages
       changed_when: "'Installed:' in __prepare_packages.stdout"
 
+    # Mock the Vault install (no RPM in container). The role runs with
+    # vault_manage_install=false, so install.yml skips only the dnf step;
+    # its post-install validation still asserts against these mocks.
+    - name: Create vault group
+      ansible.builtin.group:
+        name: vault
+        system: true
+
+    - name: Create vault user
+      ansible.builtin.user:
+        name: vault
+        group: vault
+        system: true
+        shell: /bin/false
+        create_home: false
+
+    - name: Create mock vault binary
+      ansible.builtin.copy:
+        content: |
+          #!/bin/bash
+          echo "mock vault binary"
+        dest: /usr/bin/vault
+        owner: root
+        group: root
+        mode: '0755'
+
+    # oneshot + RemainAfterExit so the real "Restart vault" handler restarts
+    # cleanly; CapabilityBoundingSet satisfies install.yml's CAP_IPC_LOCK assert.
+    - name: Create mock vault systemd unit
+      ansible.builtin.copy:
+        content: |
+          [Unit]
+          Description=HashiCorp Vault (mock)
+          [Service]
+          Type=oneshot
+          RemainAfterExit=yes
+          ExecStart=/bin/true
+          User=vault
+          Group=vault
+          CapabilityBoundingSet=CAP_IPC_LOCK
+          [Install]
+          WantedBy=multi-user.target
+        dest: /usr/lib/systemd/system/vault.service
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Create mock TLS material
+      block:
+        - name: Create TLS directory
+          ansible.builtin.file:
+            path: /opt/vault/tls
+            state: directory
+            owner: vault
+            group: vault
+            mode: '0750'
+
+        - name: Create mock cert files
+          ansible.builtin.copy:
+            content: "mock certificate"
+            dest: "{{ item }}"
+            owner: vault
+            group: vault
+            mode: '0640'
+          loop:
+            - /opt/vault/tls/tls.crt
+            - /opt/vault/tls/tls.key
+            - /opt/vault/tls/ca.crt
+
+    # Upgrade-path fixture: seed a LEGACY unseal unit (WantedBy=multi-user
+    # only) and enable it, reproducing an already-enabled host whose
+    # vault.service.wants link is absent. The real role overwrites the unit
+    # and service.yml's reenable must rebuild the link (verify.yml asserts).
+    - name: Seed legacy vault-unseal unit (already-enabled fleet fixture)
+      ansible.builtin.copy:
+        content: |
+          [Unit]
+          Description=Auto-Unseal HashiCorp Vault Service (legacy fixture)
+          [Service]
+          Type=oneshot
+          ExecStart=/bin/true
+          [Install]
+          WantedBy=multi-user.target
+        dest: /usr/lib/systemd/system/vault-unseal.service
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Enable legacy unseal unit (simulates already-enabled host)
+      ansible.builtin.systemd_service:
+        name: vault-unseal.service
+        enabled: true
+        daemon_reload: true
+
+    # fapolicyd mock + exclusion/dedup fixtures (container ships no fapolicyd).
     - name: Create mock fapolicyd binary
       ansible.builtin.copy:
         content: |

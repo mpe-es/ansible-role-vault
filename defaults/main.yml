@@ -39,6 +39,15 @@ vault_package_version: "latest"
 # Options: 'present' (install if missing), 'latest' (upgrade to newest)
 vault_package_state: "present"
 
+# Install the Vault package (the dnf transaction). false when the binary is
+# provided out-of-band (pre-baked image, container test); post-install
+# validation still runs.
+vault_manage_install: true
+
+# Manage SELinux file contexts (sefcontext+restorecon in system.yml). false
+# where SELinux is disabled (containers) or owned by a separate baseline.
+vault_manage_selinux: true
+
 ###############################################################################
 # Vault Server Configuration
 # These map directly to vault.hcl configuration parameters.
@@ -145,7 +154,8 @@ vault_tls_src_ca: ""
 ###############################################################################
 # STIG Compliance Toggles
 # Enable/disable specific STIG hardening categories.
-# All default to true for maximum compliance posture.
+# Most default to true for a strong compliance posture; AIDE defaults off
+# (host-owned, presence-gated — the role never forces an external tool).
 ###############################################################################
 # Deploy logrotate configuration for Vault logs
 vault_stig_logrotate_enabled: true
@@ -162,9 +172,10 @@ vault_stig_audit_backup_enabled: true
 # the backup script falls back to 7 if unset or invalid
 vault_stig_audit_backup_retention_days: 7
 
-# Deploy AIDE file integrity check service and timer
-# RHEL 9 STIG V-257842, Application Security STIG V-263644
-vault_stig_aide_check_enabled: true
+# Deploy AIDE file integrity check service and timer WHEN aide is installed.
+# RHEL 9 STIG V-257842, Application Security STIG V-263644.
+# Default off: AIDE is host-owned; the role integrates but never forces it.
+vault_stig_aide_check_enabled: false
 
 # Deploy vault-unseal service for automatic unsealing after reboot
 vault_auto_unseal_enabled: false

@@ -2,9 +2,10 @@
 ###############################################################################
 # Filename: molecule/default/converge.yml
 # Role: ansible-role-vault
-# Summary: Converge playbook - tests template rendering, file deployment,
-#   and STIG hardening in container environment.
-#   Skips: preflight, repo, install, firewall, SELinux (require real infra)
+# Summary: Execute the REAL role via import_role (issue #43). Host-dependent
+#   phases are gated off in molecule.yml (manage_repo/tls/firewall/install/
+#   selinux=false, initialize=false) and the live-Vault tasks are skipped
+#   via --skip-tags preflight,service_start. Mocks live in prepare.yml.
 # Classification: UNCLASSIFIED
 ###############################################################################
 - name: Converge
@@ -12,405 +13,36 @@
   # Running as root in container - no become needed
 
   vars:
-    # Import role variables
-    vault_config_dir: /etc/vault.d
-    vault_config_file: /etc/vault.d/vault.hcl
-    vault_env_file: /etc/vault.d/vault.env
-    vault_data_dir: /opt/vault/data
-    vault_tls_dir: /opt/vault/tls
-    vault_log_dir: /var/log/vault
-    vault_backup_dir: /opt/vault-backup
-    vault_binary: /usr/bin/vault
-    vault_user: vault
-    vault_group: vault
-    vault_config_dir_mode: '0750'
-    vault_config_file_mode: '0640'
-    vault_env_file_mode: '0640'
-    vault_data_dir_mode: '0750'
-    vault_tls_dir_mode: '0750'
-    vault_tls_file_mode: '0640'
-    vault_log_dir_mode: '0750'
-    vault_log_file_mode: '0600'
-    vault_backup_dir_mode: '0700'
-    vault_service_name: vault
-    # Role defaults
-    vault_edition: vault
-    vault_ui_enabled: true
-    vault_disable_mlock: false
-    vault_disable_performance_standby: true
-    vault_log_level: info
-    vault_listener_address: "0.0.0.0"
-    vault_listener_port: 8205  # non-default: proves the unit templates the port
-    vault_tls_cert_file: /opt/vault/tls/tls.crt
-    vault_tls_key_file: /opt/vault/tls/tls.key
-    vault_tls_ca_file: /opt/vault/tls/ca.crt
-    vault_tls_min_version: tls12
-    vault_tls_max_version: tls13
-    vault_tls_cipher_suites: []
-    vault_tls_require_client_cert: false
-    vault_tls_disable_client_certs: false
-    vault_raft_node_id: vault-el
+    # Test-observability overrides: each is deliberately NON-default so a
+    # verify.yml assertion proves it flowed through the real templates.
+    vault_listener_port: 8205
     vault_api_addr: "https://vault-el:8205"
     vault_cluster_addr: "https://vault-el:8201"
-    vault_cluster_leader_addr: ""
-    vault_manage_tls: false
-    vault_manage_firewall: false
-    vault_manage_repo: false
-    vault_initialize: false
-    vault_hsm_enabled: false
-    vault_stig_logrotate_enabled: true
-    vault_stig_logrotate_days: 90
-    vault_stig_audit_backup_enabled: true
-    # Deliberately non-default (default 7) so verify.yml proves the variable
-    # observably flows into the rendered unit (issue #32)
-    vault_stig_audit_backup_retention_days: 14
-    vault_stig_aide_check_enabled: false
-    vault_auto_unseal_enabled: false
-    vault_rsyslog_enabled: false
-    # fapolicyd trust (Phase 8.5) — hand-copied per this file's convention;
-    # converge loads neither defaults/ nor vars/
-    # vault_manage_fapolicyd is documentation value only here: the replica
-    # reproduces the included file's tasks, not the tasks/main.yml include
-    # gate where the var is actually consumed — do NOT add a
-    # when: vault_manage_fapolicyd to the replica tasks
-    vault_manage_fapolicyd: true
-    vault_package_name: "{{ vault_edition }}"
-    vault_fapolicyd_trust_file: /etc/fapolicyd/trust.d/vault.trust
+    vault_raft_node_id: vault-el
+    vault_stig_audit_backup_retention_days: 14   # non-default (role default 7)
+    # fapolicyd fixture list: extra entries exercise the trust template's
+    # whitespace-exclusion, symlink-exclusion, and dedup logic (fixture files
+    # created in prepare.yml); verify.yml asserts only the 3 valid paths survive.
     vault_fapolicyd_trusted_files:
       - /usr/bin/vault
-      - /usr/local/bin/vault
       - /usr/local/bin/vault-audit-backup.sh
       - /usr/local/bin/vault-unseal.sh
-      - "/usr/local/bin/vault-with space.sh"       # whitespace-exclusion fixture
-      - /usr/local/bin/vault-symlink               # symlink-exclusion fixture
-      - /usr/local/bin/vault-audit-backup.sh       # duplicate — dedupe fixture
-
-  pre_tasks:
-    ###########################################################################
-    # Mock vault installation (no RPM/Satellite available in container)
-    ###########################################################################
-    - name: Create vault group
-      ansible.builtin.group:
-        name: vault
-        system: true
-
-    - name: Create vault user
-      ansible.builtin.user:
-        name: vault
-        group: vault
-        system: true
-        shell: /bin/false
-        create_home: false
-
-    - name: Create mock vault binary
-      ansible.builtin.copy:
-        content: |
-          #!/bin/bash
-          echo "mock vault binary"
-        dest: /usr/bin/vault
-        owner: root
-        group: root
-        mode: '0755'
-
-    - name: Create mock vault systemd unit
-      ansible.builtin.copy:
-        content: |
-          [Unit]
-          Description=HashiCorp Vault
-          [Service]
-          ExecStart=/usr/bin/vault server -config=/etc/vault.d/vault.hcl
-          User=vault
-          Group=vault
-          CapabilityBoundingSet=CAP_IPC_LOCK
-          [Install]
-          WantedBy=multi-user.target
-        dest: /usr/lib/systemd/system/vault.service
-        owner: root
-        group: root
-        mode: '0644'
-
-    - name: Create mock TLS certificates
-      block:
-        - name: Create TLS directory
-          ansible.builtin.file:
-            path: /opt/vault/tls
-            state: directory
-            owner: vault
-            group: vault
-            mode: '0750'
-
-        - name: Create mock cert files
-          ansible.builtin.copy:
-            content: "mock certificate"
-            dest: "{{ item }}"
-            owner: vault
-            group: vault
-            mode: '0640'
-          loop:
-            - /opt/vault/tls/tls.crt
-            - /opt/vault/tls/tls.key
-            - /opt/vault/tls/ca.crt
+      - "/usr/local/bin/vault-with space.sh"
+      - /usr/local/bin/vault-symlink
+      - /usr/local/bin/vault-audit-backup.sh
 
   tasks:
-    ###########################################################################
-    # Phase 4: Directory structure (skip SELinux - disabled in container)
-    ###########################################################################
-    - name: Create Vault directories with STIG permissions
-      ansible.builtin.file:
-        path: "{{ item.path }}"
-        state: directory
-        owner: "{{ item.owner }}"
-        group: "{{ item.group }}"
-        mode: "{{ item.mode }}"
-      loop:
-        # root:vault mirrors tasks/system.yml (issue #30 tokens-file parent)
-        - { path: "{{ vault_config_dir }}", owner: root, group: "{{ vault_group }}", mode: "{{ vault_config_dir_mode }}" }
-        - { path: "{{ vault_data_dir }}", owner: "{{ vault_user }}", group: "{{ vault_group }}", mode: "{{ vault_data_dir_mode }}" }
-        - { path: "{{ vault_tls_dir }}", owner: "{{ vault_user }}", group: "{{ vault_group }}", mode: "{{ vault_tls_dir_mode }}" }
-        - { path: "{{ vault_log_dir }}", owner: "{{ vault_user }}", group: "{{ vault_group }}", mode: "{{ vault_log_dir_mode }}" }
-        - { path: "{{ vault_backup_dir }}", owner: root, group: root, mode: "{{ vault_backup_dir_mode }}" }
-      loop_control:
-        label: "{{ item.path }} ({{ item.mode }})"
+    - name: Execute the ansible-role-vault role
+      ansible.builtin.import_role:
+        name: ansible-role-vault
 
-    ###########################################################################
-    # Phase 6: Vault configuration (template rendering)
-    ###########################################################################
-    - name: Deploy Vault server configuration
-      ansible.builtin.template:
-        src: "{{ playbook_dir }}/../../templates/vault.hcl.j2"
-        dest: "{{ vault_config_file }}"
-        owner: "{{ vault_user }}"
-        group: "{{ vault_group }}"
-        mode: "{{ vault_config_file_mode }}"
-
-    - name: Deploy Vault environment file
-      ansible.builtin.template:
-        src: "{{ playbook_dir }}/../../templates/vault.env.j2"
-        dest: "{{ vault_env_file }}"
-        owner: "{{ vault_user }}"
-        group: "{{ vault_group }}"
-        mode: "{{ vault_env_file_mode }}"
-
-    ###########################################################################
-    # Phase 8: STIG hardening (logrotate, audit backup - skip AIDE, rsyslog)
-    ###########################################################################
-    - name: Deploy logrotate configuration for Vault
-      ansible.builtin.template:
-        src: "{{ playbook_dir }}/../../templates/vault-logrotate.conf.j2"
-        dest: /etc/logrotate.d/vault
-        owner: root
-        group: root
-        mode: '0644'
-
-    - name: Copy vault-audit-backup.sh script
-      ansible.builtin.copy:
-        src: "{{ playbook_dir }}/../../files/vault-audit-backup.sh"
-        dest: /usr/local/bin/vault-audit-backup.sh
-        owner: root
-        group: root
-        mode: '0750'
-
-    - name: Deploy vault-audit-backup.service
-      ansible.builtin.template:
-        src: "{{ playbook_dir }}/../../templates/vault-audit-backup.service.j2"
-        dest: /usr/lib/systemd/system/vault-audit-backup.service
-        owner: root
-        group: root
-        mode: '0644'
-
-    - name: Deploy vault-audit-backup.timer
-      ansible.builtin.template:
-        src: "{{ playbook_dir }}/../../templates/vault-audit-backup.timer.j2"
-        dest: /usr/lib/systemd/system/vault-audit-backup.timer
-        owner: root
-        group: root
-        mode: '0644'
-
-    # root:root by design — mirrors tasks/stig.yml (issue #30 privilege model)
-    - name: Copy vault-unseal.sh script
-      ansible.builtin.copy:
-        src: "{{ playbook_dir }}/../../files/vault-unseal.sh"
-        dest: /usr/local/bin/vault-unseal.sh
-        owner: root
-        group: root
-        mode: '0750'
-
-    # Upgrade-path fixture: seed and enable a LEGACY unit (WantedBy=
-    # multi-user.target only) BEFORE deploying the real template, so the
-    # vault.service.wants link can only come from the state-based
-    # reenable repair — pins the round-5/6 critical class (a fresh
-    # enable would create the link and mask a deleted repair task).
-    # force:false keeps run 2 idempotent (real unit already in place).
-    - name: Seed legacy vault-unseal unit (already-enabled fleet fixture)
-      ansible.builtin.copy:
-        content: |
-          [Unit]
-          Description=Auto-Unseal HashiCorp Vault Service (legacy fixture)
-          [Service]
-          Type=oneshot
-          ExecStart=/bin/true
-          [Install]
-          WantedBy=multi-user.target
-        dest: /usr/lib/systemd/system/vault-unseal.service
-        force: false
-        owner: root
-        group: root
-        mode: '0644'
-
-    - name: Enable legacy unseal unit (simulates already-enabled host)
-      ansible.builtin.systemd_service:
-        name: vault-unseal.service
-        enabled: true
-        daemon_reload: true
-
-    - name: Deploy vault-unseal.service
-      ansible.builtin.template:
-        src: "{{ playbook_dir }}/../../templates/vault-unseal.service.j2"
-        dest: /usr/lib/systemd/system/vault-unseal.service
-        owner: root
-        group: root
-        mode: '0644'
-
-    # --- replica of tasks/service.yml state-based Install-link repair.
-    # Gating omitted DELIBERATELY: this scenario pins
-    # vault_auto_unseal_enabled: false (the role gate would skip every
-    # unseal task) yet still exercises the unseal artifacts to test
-    # template/render/repair behavior ---
-    - name: Check vault.service.wants link for the unseal unit
-      ansible.builtin.stat:
-        path: "/etc/systemd/system/{{ vault_service_name }}.service.wants/vault-unseal.service"
-        get_checksum: false
-        get_mime: false
-        get_attributes: false
-      register: __vault_unseal_wants
-
-    - name: Repair unseal unit Install links (reenable)
-      ansible.builtin.command:
-        cmd: systemctl reenable vault-unseal.service
-      changed_when: true
-      when: >-
-        not (
-          (__vault_unseal_wants.stat.islnk | default(false))
-          and (__vault_unseal_wants.stat.lnk_source | default('')
-               == '/usr/lib/systemd/system/vault-unseal.service')
-        )
-
-    ###########################################################################
-    # Phase 8.5: fapolicyd trust (inline replica of tasks/fapolicyd.yml —
-    # register names, guards, and flags copied verbatim; only the template
-    # src path diverges per the replica convention)
-    ###########################################################################
-    - name: Detect fapolicyd binary
-      ansible.builtin.stat:
-        path: /usr/sbin/fapolicyd
-        get_checksum: false
-        get_mime: false
-        get_attributes: false
-      register: __vault_fapolicyd_bin
-
-    - name: Detect fapolicyd trust.d directory
-      ansible.builtin.stat:
-        path: "{{ vault_fapolicyd_trust_file | dirname }}"
-        get_checksum: false
-        get_mime: false
-        get_attributes: false
-      register: __vault_fapolicyd_trustd
-
-    - name: Note fapolicyd skip reason
-      ansible.builtin.debug:
-        msg: >-
-          Skipping fapolicyd trust management:
-          {{ '/usr/sbin/fapolicyd missing (fapolicyd not installed)'
-             if not __vault_fapolicyd_bin.stat.exists
-             else (vault_fapolicyd_trust_file | dirname) ~ ' missing or not a directory (fapolicyd lacks trust.d support, e.g. early EL8, or a stray file occupies the path)' }}
-      when: >-
-        not __vault_fapolicyd_bin.stat.exists
-        or not (__vault_fapolicyd_trustd.stat.isdir | default(false))
-
-    - name: Read fapolicyd.conf for trust advisory
-      ansible.builtin.slurp:
-        src: /etc/fapolicyd/fapolicyd.conf
-      register: __vault_fapolicyd_conf
-      failed_when: false
-      when:
-        - __vault_fapolicyd_bin.stat.exists
-        - __vault_fapolicyd_trustd.stat.isdir | default(false)
-
-    - name: Warn when fapolicyd trust= excludes file trust
-      ansible.builtin.debug:
-        msg: >-
-          WARNING: /etc/fapolicyd/fapolicyd.conf carries an uncommented trust=
-          line that does not include 'file'. The rendered trust.d file will
-          never be consulted and fapolicyd trust management is inert on this
-          host until the host baseline adds 'file' to trust=.
-      when:
-        - __vault_fapolicyd_bin.stat.exists
-        - __vault_fapolicyd_trustd.stat.isdir | default(false)
-        - __vault_fapolicyd_conf.content is defined
-        - (__vault_fapolicyd_conf.content | b64decode).split('\n') | select('match', '^\s*trust\s*=') | reject('search', 'file') | list | length > 0
-
-    - name: Check fapolicyd service state
-      ansible.builtin.command:
-        cmd: systemctl is-active fapolicyd
-      register: __vault_fapolicyd_svc
-      changed_when: false
-      failed_when: false
-      check_mode: false
-      when:
-        - __vault_fapolicyd_bin.stat.exists
-        - __vault_fapolicyd_trustd.stat.isdir | default(false)
-
-    - name: Stat fapolicyd trusted files
-      ansible.builtin.stat:
-        path: "{{ item }}"
-        checksum_algorithm: sha256
-        get_mime: false
-        get_attributes: false
-      loop: "{{ vault_fapolicyd_trusted_files | unique }}"
-      loop_control:
-        label: "{{ item }}"
-      register: __vault_fapolicyd_stat
-      when:
-        - __vault_fapolicyd_bin.stat.exists
-        - __vault_fapolicyd_trustd.stat.isdir | default(false)
-
-    - name: Query installed Vault package version
-      ansible.builtin.command:
-        cmd: rpm -q --queryformat '%{NAME} %{VERSION}-%{RELEASE}\n' {{ vault_package_name }}
-      register: __vault_fapolicyd_pkg
-      changed_when: false
-      failed_when: false
-      check_mode: false
-      when:
-        - __vault_fapolicyd_bin.stat.exists
-        - __vault_fapolicyd_trustd.stat.isdir | default(false)
-
-    - name: Render fapolicyd trust file
-      ansible.builtin.template:
-        src: "{{ playbook_dir }}/../../templates/fapolicyd-vault.trust.j2"
-        dest: "{{ vault_fapolicyd_trust_file }}"
-        owner: root
-        group: root
-        mode: '0644'
-      register: __vault_fapolicyd_render
-      when:
-        - __vault_fapolicyd_bin.stat.exists
-        - __vault_fapolicyd_trustd.stat.isdir | default(false)
-
-    - name: Refresh fapolicyd trust database
-      ansible.builtin.command:
-        cmd: fapolicyd-cli --update
-      changed_when: true
-      when:
-        - __vault_fapolicyd_bin.stat.exists
-        - __vault_fapolicyd_trustd.stat.isdir | default(false)
-        - (__vault_fapolicyd_svc.stdout | default('') | trim) == 'active'
-        - (__vault_fapolicyd_render is changed) or (__vault_install_pkg is defined and __vault_install_pkg is changed)
-
-    ###########################################################################
-    # rc==0 branch coverage — MUST remain the last tasks (set_fact clobbers
-    # the real __vault_fapolicyd_pkg register)
-    ###########################################################################
+    # Post-role fixture (NOT a role-task replica): render the real fapolicyd
+    # trust template with a synthetic two-version rpm query to exercise the
+    # rc==0 version/dedup branch (the container's mock rpm returns non-zero,
+    # so the role run renders the "unknown" branch). verify.yml asserts both.
+    # set_fact (NOT task vars): the role run REGISTERS __vault_fapolicyd_pkg,
+    # and a registered var outranks task vars — so the override must be at
+    # register/fact precedence. These are the last tasks; the clobber is safe.
     - name: Override package register with synthetic rc0 fixture
       ansible.builtin.set_fact:
         __vault_fapolicyd_pkg:
@@ -420,7 +52,7 @@
             - "vault-enterprise-fips1403 2.0.3-1"
             - "vault-enterprise-fips1403 2.0.2-1"
 
-    - name: Render synthetic rc0 trust file to scratch path
+    - name: Render synthetic rc0 fapolicyd trust file (version-branch fixture)
       ansible.builtin.template:
         src: "{{ playbook_dir }}/../../templates/fapolicyd-vault.trust.j2"
         dest: /root/.molecule-fapolicyd-rc0.trust

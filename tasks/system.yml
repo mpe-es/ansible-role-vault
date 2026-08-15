@@ -57,6 +57,7 @@
   loop: "{{ vault_selinux_contexts }}"
   loop_control:
     label: "{{ item.path }} -> {{ item.seuser }}:{{ item.setype }}"
+  when: vault_manage_selinux | bool
 
 - name: Apply SELinux file contexts
   ansible.builtin.command:
@@ -66,3 +67,4 @@
     label: "{{ item.path }}"
   register: __vault_restorecon
   changed_when: __vault_restorecon.stdout | length > 0
+  when: vault_manage_selinux | bool
