@@ -34,34 +34,23 @@
       register: __prep_pkg
       changed_when: "'Installed:' in __prep_pkg.stdout"
 
-    # /dev/log (journald syslog socket) is required by 'vault audit enable
-    # syslog'. It is socket-activated and not always up in a fresh container,
-    # so start it explicitly; failed_when:false in case the image names it
-    # differently — the tripwire below is the real gate.
-    - name: Ensure journald and its /dev/log socket are active
-      ansible.builtin.systemd_service:
-        name: "{{ item }}"
-        state: started
-        daemon_reload: true
-      loop:
-        - systemd-journald.service
-        - systemd-journald-dev-log.socket
-      failed_when: false
-
-    # /dev/log must exist or 'vault audit enable syslog' fails — a HARNESS
-    # infra issue, not a #33 regression. Fail loudly and distinguishably.
-    - name: Stat /dev/log (syslog socket)
+    # /dev/log must be a working socket or 'vault audit enable syslog' fails —
+    # a HARNESS infra issue, not a #33 regression. In systemd it is a SYMLINK
+    # to /run/systemd/journal/dev-log, so stat with follow:true to resolve to
+    # the underlying datagram socket (without follow, issock is false on the link).
+    - name: Stat /dev/log (follow the symlink to the datagram socket)
       ansible.builtin.stat:
         path: /dev/log
+        follow: true
       register: __devlog
 
-    - name: Assert /dev/log is a live socket
+    - name: Assert /dev/log resolves to a live socket
       ansible.builtin.assert:
         that:
           - __devlog.stat.exists
           - __devlog.stat.issock | default(false)
         fail_msg: >-
-          /dev/log (journald syslog socket) is missing — HARNESS INFRA issue,
+          /dev/log does not resolve to a live socket — HARNESS INFRA issue,
           NOT a #33 regression. 'vault audit enable syslog' requires it.
 
     - name: Create vault group
