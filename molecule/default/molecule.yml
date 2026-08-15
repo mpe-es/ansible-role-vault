@@ -24,8 +24,9 @@ provisioner:
   name: ansible
   connection_options:
     ansible_become: false
-  # Resolve the role by its directory name; requirements.yml is
-  # collections-only so pinning the roles path clobbers no role deps.
+  # Resolve the role by its directory name (assumes the checkout leaf dir is
+  # 'ansible-role-vault' — true under actions/checkout default). requirements.yml
+  # is collections-only so pinning the roles path clobbers no role deps.
   env:
     ANSIBLE_ROLES_PATH: ${MOLECULE_PROJECT_DIRECTORY}/..
   # Skip only tasks that need a real host / running Vault. 'install' is NOT
