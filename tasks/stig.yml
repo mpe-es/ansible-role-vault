@@ -69,6 +69,7 @@
   ansible.builtin.stat:
     path: /usr/sbin/aide
     get_checksum: false
+    get_mime: false
     get_attributes: false
   register: __vault_aide_bin
   when: vault_stig_aide_check_enabled | bool
@@ -171,6 +172,7 @@
   ansible.builtin.stat:
     path: /usr/sbin/rsyslogd
     get_checksum: false
+    get_mime: false
     get_attributes: false
   register: __vault_rsyslogd_bin
   when: vault_rsyslog_enabled | bool

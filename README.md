@@ -412,7 +412,7 @@ scope for this backup job.
 This role implements controls from:
 
 - **DISA STIG**: Application Security and Development STIG, RHEL 9 STIG
-- **NIST SP 800-53 Rev 5**: AC-6, AU-4, AU-6, AU-9 (root-only audit backup staging), CM-7(5) (when a trust.d-capable fapolicyd is installed and enforcing with file trust enabled), SC-7, SC-8, SC-13, SC-23, SC-28, SI-7
+- **NIST SP 800-53 Rev 5**: AC-6, AU-4, AU-6 (remote syslog forwarding when rsyslogd is present), AU-9 (root-only audit backup staging), CM-7(5) (when a trust.d-capable fapolicyd is installed and enforcing with file trust enabled), SC-7, SC-8, SC-13, SC-23, SC-28, SI-7 (AIDE integrity check is opt-in and presence-gated)
 - **CNSSI 1253**: Moderate-Moderate-Moderate dimensional baselines
 - **CNSA 1.0** (CNSSP-15 / APSC-DV-002010): ECDSA P-384, RSA-3072+, SHA-384, AES-256-GCM
 - **FIPS 140-3**: TLS 1.2+ enforcement, FIPS-validated cryptographic modules
