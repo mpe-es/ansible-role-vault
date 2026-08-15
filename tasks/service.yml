@@ -48,6 +48,17 @@
           vault_init_controller_output_path to an absolute controller path.
         success_msg: "Vault initialization handoff destination configured"
 
+    - name: Reject audit-less auto-unseal combination
+      ansible.builtin.assert:
+        that:
+          - (vault_hsm_enabled | bool) or (vault_init_unseal | bool) or not (vault_auto_unseal_enabled | bool)
+        fail_msg: >-
+          vault_init_unseal=false with vault_auto_unseal_enabled=true would
+          auto-unseal Vault on boot with NO audit devices ever enabled (a
+          forbidden end state). Enable vault_init_unseal (unseal + audit as
+          part of init), or disable the boot-time auto-unseal service.
+        success_msg: "Init/unseal/auto-unseal flag combination is valid"
+
     - name: Check Vault initialization status
       ansible.builtin.command:
         cmd: >-
@@ -129,8 +140,8 @@
       loop: "{{ (__vault_init_output.stdout | from_json).unseal_keys_b64[:vault_key_threshold] }}"
       when:
         - __vault_init_output is changed
-        - vault_auto_unseal_enabled | bool
-        - not vault_hsm_enabled | bool
+        - vault_init_unseal | bool
+        - not (vault_hsm_enabled | bool)
       environment:
         VAULT_ADDR: "https://127.0.0.1:{{ vault_listener_port }}"
         VAULT_CACERT: "{{ vault_tls_ca_file }}"
@@ -142,7 +153,9 @@
         cmd: >-
           {{ vault_binary }} audit enable file
           file_path={{ vault_log_dir }}/vault_audit.log
-      when: __vault_init_output is changed
+      when:
+        - __vault_init_output is changed
+        - (vault_hsm_enabled | bool) or (vault_init_unseal | bool)
       environment:
         VAULT_ADDR: "https://127.0.0.1:{{ vault_listener_port }}"
         VAULT_CACERT: "{{ vault_tls_ca_file }}"
@@ -155,13 +168,54 @@
         cmd: >-
           {{ vault_binary }} audit enable syslog
           tag=vault facility=LOCAL1
-      when: __vault_init_output is changed
+      when:
+        - __vault_init_output is changed
+        - (vault_hsm_enabled | bool) or (vault_init_unseal | bool)
       environment:
         VAULT_ADDR: "https://127.0.0.1:{{ vault_listener_port }}"
         VAULT_CACERT: "{{ vault_tls_ca_file }}"
         VAULT_TOKEN: "{{ (__vault_init_output.stdout | from_json).root_token }}"
       no_log: true
       changed_when: true
+
+    - name: Warn that Vault was left sealed (audit devices not enabled)
+      ansible.builtin.debug:
+        msg: >-
+          WARNING: Vault initialized but left SEALED (vault_init_unseal=false).
+          Audit devices were NOT enabled. Run 'vault operator unseal' with the
+          threshold shares, then enable file and syslog audit devices manually.
+      when:
+        - __vault_init_output is changed
+        - not (vault_init_unseal | bool)
+        - not (vault_hsm_enabled | bool)
+
+  rescue:
+    - name: Re-check Vault status for failure context
+      ansible.builtin.command:
+        cmd: "{{ vault_binary }} status -format=json"
+      register: __vault_status_rescue
+      failed_when: false
+      changed_when: false
+      environment:
+        VAULT_ADDR: "https://127.0.0.1:{{ vault_listener_port }}"
+        VAULT_CACERT: "{{ vault_tls_ca_file }}"
+
+    - name: Surface Vault initialization failure state
+      vars:
+        # Defensive: a dead/refused Vault leaves stdout empty OR non-JSON.
+        # Parse ONLY when status returned JSON (rc 0=unsealed, 2=sealed) and
+        # stdout is non-empty; else {} so the message still renders ('unknown').
+        __status: "{{ (__vault_status_rescue.stdout | from_json) if ((__vault_status_rescue.rc | int) in [0, 2] and (__vault_status_rescue.stdout | default('') | length) > 0) else {} }}"
+      ansible.builtin.fail:
+        msg: >-
+          Vault initialization FAILED at task
+          '{{ ansible_failed_task.name | default('unknown') }}'. Current state:
+          initialized={{ __status.initialized | default('unknown') }},
+          sealed={{ __status.sealed | default('unknown') }}
+          (Vault may be down if 'unknown'). If init ran, key material is at
+          {{ '/etc/vault.d/tokens.env' if vault_init_store_target | bool
+             else (vault_init_controller_output_path | default('the configured controller path')) }}.
+          Next: unseal manually and enable audit devices, or destroy the node and re-initialize.
 
 ###############################################################################
 # Enable auto-unseal service (after init completes).
