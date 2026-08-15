@@ -217,6 +217,15 @@ The initialization key-handling variables changed to be secure by default (break
 
 Unknown variables are silently ignored by Ansible, so an old `vault_init_store_target: false` is simply dropped — the new required-`vault_init_capture_dir` assert fails closed until you set it.
 
+**Upgrading an already-initialized node.** The "no key material on the node by
+default" posture is enforced for *new* initializations. On a pre-#34 node that
+already has `/etc/vault.d/tokens.env` (shares + root token), running the role
+with the new secure default (`vault_auto_unseal_enabled: false`) **disables the
+boot auto-unseal service and warns**, but does **NOT delete `tokens.env`** — on
+an already-initialized node it may be your only copy of the keys. Preserve the
+shares and root token to an approved store, then remove `/etc/vault.d/tokens.env`
+from the node yourself.
+
 ### Greenfield Initialization — secure key handling
 
 When `vault_initialize: true`, initialization material is secret-bearing, and
