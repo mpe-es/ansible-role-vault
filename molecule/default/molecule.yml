@@ -24,16 +24,31 @@ provisioner:
   name: ansible
   connection_options:
     ansible_become: false
+  # Resolve the role by its directory name; requirements.yml is
+  # collections-only so pinning the roles path clobbers no role deps.
+  env:
+    ANSIBLE_ROLES_PATH: ${MOLECULE_PROJECT_DIRECTORY}/..
+  # Skip only tasks that need a real host / running Vault. 'install' is NOT
+  # tag-skipped (its tag is shared with fapolicyd); gated by
+  # vault_manage_install instead.
+  options:
+    skip-tags: preflight,service_start
   inventory:
     host_vars:
       vault-el:
         ansible_user: root
         ansible_python_interpreter: ${MOLECULE_PYTHON:-/usr/bin/python3}
-        # Skip phases that require real infrastructure
+        # Gate host-dependent phases; the real role tasks still execute.
         vault_manage_repo: false
         vault_manage_firewall: false
         vault_manage_tls: false
+        vault_manage_install: false
+        vault_manage_selinux: false
         vault_initialize: false
+        # Exercise the real auto-unseal deploy + [Install]-link repair.
+        vault_auto_unseal_enabled: true
+        # Exercise the AIDE presence-gate warn+skip path (no aide in container).
+        vault_stig_aide_check_enabled: true
 
 verifier:
   name: ansible
