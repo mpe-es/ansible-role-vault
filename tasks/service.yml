@@ -43,18 +43,27 @@
 - name: Initialize Vault
   when: vault_initialize | bool
   block:
-    - name: Validate initialization handoff destination
+    - name: Validate initialization capture destination
       ansible.builtin.assert:
         that:
-          - vault_init_store_target | bool or vault_init_controller_capture_enabled | bool
-          - not vault_init_controller_capture_enabled | bool or vault_init_controller_output_path | length > 0
-          - not vault_init_controller_capture_enabled | bool or vault_init_controller_output_path is match('^/')
+          - vault_init_capture_dir | length > 0
+          - vault_init_capture_dir is match('^/')
         fail_msg: >-
-          Vault initialization is enabled, but no valid initialization handoff
-          destination is configured. Enable vault_init_store_target, or enable
-          vault_init_controller_capture_enabled and set
-          vault_init_controller_output_path to an absolute controller path.
-        success_msg: "Vault initialization handoff destination configured"
+          Vault initialization is enabled but vault_init_capture_dir is not set
+          to an absolute controller directory. The role captures the root token
+          and one file per unseal/recovery share there (the root token is NEVER
+          stored on the node); set vault_init_capture_dir.
+        success_msg: "Vault initialization capture destination configured"
+
+    - name: Validate key shares and threshold
+      ansible.builtin.assert:
+        that:
+          - vault_key_threshold | int >= 1
+          - vault_key_threshold | int <= vault_key_shares | int
+        fail_msg: >-
+          vault_key_threshold ({{ vault_key_threshold }}) must be >= 1 and
+          <= vault_key_shares ({{ vault_key_shares }}).
+        success_msg: "Key shares and threshold are valid"
 
     - name: Reject audit-less auto-unseal combination
       ansible.builtin.assert:
@@ -104,7 +113,11 @@
     # the file is source'd by root (vault-unseal.service), and a root-owned
     # parent is what prevents any unprivileged account from replacing it
     # (directory write allows unlink/create regardless of file ownership).
-    - name: Store unseal keys and root token
+    # Shares land on the node ONLY for the Shamir boot auto-unseal service
+    # (root:root 0600 in /etc/vault.d, which Phase 4 owns root:vault 0750: the
+    # file is source'd by root and a root-owned parent prevents replacement).
+    # tokens.env holds shares only — the root token is never on the node (#34).
+    - name: Store unseal shares on the node (for the boot auto-unseal service)
       ansible.builtin.template:
         src: tokens.env.j2
         dest: /etc/vault.d/tokens.env
@@ -113,34 +126,60 @@
         mode: '0600'
       when:
         - __vault_init_output is changed
-        - vault_init_store_target | bool
+        - vault_auto_unseal_enabled | bool
+        - not vault_hsm_enabled | bool
       no_log: true
       vars:
         __vault_init_data: "{{ __vault_init_output.stdout | from_json }}"
 
-    - name: Create controller directory for Vault init capture
+    # Per-file capture on the controller (delegate_to localhost). The root token
+    # ALWAYS lands here (never on the node); shares/recovery keys one file each so
+    # the operator can hand each to a distinct custodian. copy+content (never
+    # shell) so key material is not exposed in argv/execve.
+    - name: Create controller capture directory
       ansible.builtin.file:
-        path: "{{ vault_init_controller_output_path | dirname }}"
+        path: "{{ vault_init_capture_dir }}"
         state: directory
         mode: '0700'
       delegate_to: localhost
       become: false
-      when:
-        - __vault_init_output is changed
-        - vault_init_controller_capture_enabled | bool
-      no_log: true
+      when: __vault_init_output is changed
 
-    - name: Capture Vault init output on controller
+    - name: Capture root token to the controller (never on the node)
       ansible.builtin.copy:
-        content: "{{ __vault_init_output.stdout }}\n"
-        dest: "{{ vault_init_controller_output_path }}"
-        mode: "{{ vault_init_controller_output_mode }}"
+        content: "{{ (__vault_init_output.stdout | from_json).root_token }}\n"
+        dest: "{{ vault_init_capture_dir }}/root-token"
+        mode: "{{ vault_init_capture_mode }}"
       delegate_to: localhost
       become: false
-      when:
-        - __vault_init_output is changed
-        - vault_init_controller_capture_enabled | bool
       no_log: true
+      when: __vault_init_output is changed
+
+    - name: Capture Shamir unseal shares to the controller (one key per file)
+      ansible.builtin.copy:
+        content: "{{ item }}\n"
+        dest: "{{ vault_init_capture_dir }}/unseal-key-{{ idx + 1 }}"
+        mode: "{{ vault_init_capture_mode }}"
+      delegate_to: localhost
+      become: false
+      no_log: true
+      loop: "{{ (__vault_init_output.stdout | from_json).unseal_keys_b64 | default([]) }}"
+      loop_control:
+        index_var: idx
+      when: __vault_init_output is changed
+
+    - name: Capture HSM recovery keys to the controller (one key per file)
+      ansible.builtin.copy:
+        content: "{{ item }}\n"
+        dest: "{{ vault_init_capture_dir }}/recovery-key-{{ idx + 1 }}"
+        mode: "{{ vault_init_capture_mode }}"
+      delegate_to: localhost
+      become: false
+      no_log: true
+      loop: "{{ (__vault_init_output.stdout | from_json).recovery_keys_b64 | default([]) }}"
+      loop_control:
+        index_var: idx
+      when: __vault_init_output is changed
 
     - name: Unseal Vault after initialization (Shamir)
       ansible.builtin.command:
@@ -220,9 +259,10 @@
           '{{ ansible_failed_task.name | default('unknown') }}'. Current state:
           initialized={{ __status.initialized | default('unknown') }},
           sealed={{ __status.sealed | default('unknown') }}
-          (Vault may be down if 'unknown'). If init ran, key material is at
-          {{ '/etc/vault.d/tokens.env' if vault_init_store_target | bool
-             else (vault_init_controller_output_path | default('the configured controller path')) }}.
+          (Vault may be down if 'unknown'). If init ran, the root token and
+          unseal/recovery shares were captured to the controller directory
+          {{ vault_init_capture_dir | default('the configured vault_init_capture_dir') }}
+          (and shares also to /etc/vault.d/tokens.env if vault_auto_unseal_enabled).
           Next: unseal manually and enable audit devices, or destroy the node and re-initialize.
 
 ###############################################################################
