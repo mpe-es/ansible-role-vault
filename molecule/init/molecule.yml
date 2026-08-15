@@ -51,9 +51,11 @@ provisioner:
         vault_disable_mlock: true
         # Run the real init transaction.
         vault_initialize: true
-        vault_init_store_target: true
-        # Parameterized: CI runs the scenario with true AND false.
+        # Required controller directory for per-file key capture (#34).
+        vault_init_capture_dir: /tmp/vault-init-capture
+        # Parameterized: CI runs secure / autounseal / sealed modes.
         vault_init_unseal: ${MOLECULE_INIT_UNSEAL:-true}
+        vault_auto_unseal_enabled: ${MOLECULE_AUTO_UNSEAL:-false}
         # Consistent ports for a single lone bootstrapping node.
         vault_listener_port: 8200
         vault_api_addr: "https://127.0.0.1:8200"
