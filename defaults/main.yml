@@ -241,15 +241,15 @@ vault_pki_role: ""
 ###############################################################################
 vault_initialize: false
 
-# Store unseal keys and the root token on the target host.
-vault_init_store_target: true
+# Controller-side directory for per-file init-key capture. REQUIRED when
+# vault_initialize is true. The role always writes the root token here (it is
+# NEVER stored on the node) plus one file per unseal/recovery share (0600 each);
+# the operator distributes to custodians / an approved store, then deletes it.
+# Whether unseal shares ALSO land on the node is gated by vault_auto_unseal_enabled.
+vault_init_capture_dir: ""
 
-# Capture the raw vault operator init JSON on the Ansible controller/AAP
-# execution environment. This file is secret-bearing and should be treated as a
-# temporary handoff artifact.
-vault_init_controller_capture_enabled: false
-vault_init_controller_output_path: ""
-vault_init_controller_output_mode: '0600'
+# File mode for the per-file captured key material on the controller.
+vault_init_capture_mode: '0600'
 
 ###############################################################################
 # HSM / PKCS#11 Seal Configuration (Enterprise Only)

@@ -2,23 +2,28 @@
 ###############################################################################
 # Filename: molecule/init/verify.yml
 # Role: ansible-role-vault
-# Summary: Assert the real init transaction (issue #33). Branches on the
-#   expected unseal mode: default true  -> initialized, UNSEALED, file+syslog
-#   audit devices present; false (opt-out) -> initialized, SEALED, converge
-#   still green (no mid-block failure). The debug warning is not asserted
-#   (not observable post-converge).
+# Summary: Assert the real init transaction + secure key handling (#33/#34).
+#   Branches on expected unseal (init_unseal) AND on-node keys (auto_unseal):
+#   - unseal expected: initialized, UNSEALED, file+syslog audit devices (auth
+#     via the CONTROLLER-captured root token, #34 — never on the node).
+#   - sealed (opt-out): initialized, SEALED, converge green.
+#   Key-location invariants (#34): root token is ALWAYS captured per-file to the
+#   controller and NEVER on the node; unseal shares land on the node only when
+#   auto_unseal=true (shares only, no root token).
 # Classification: UNCLASSIFIED
 ###############################################################################
-- name: Verify (real-Vault init transaction)
+- name: Verify (real-Vault init transaction + secure key handling)
   hosts: all
   vars:
     __vault: /usr/bin/vault
     __env:
       VAULT_ADDR: "https://127.0.0.1:8200"
       VAULT_CACERT: /opt/vault/tls/ca.crt
-    # Robust to either source: the molecule.yml host_var if the verifier
-    # exposes it, else the MOLECULE_INIT_UNSEAL env the CI job passes.
+    # host_var/env hedges (verifier may expose host_vars, else the CI env).
     __unseal_expected: "{{ (vault_init_unseal | default(lookup('env', 'MOLECULE_INIT_UNSEAL') | default('true', true))) | bool }}"
+    __auto_unseal: "{{ (vault_auto_unseal_enabled | default(lookup('env', 'MOLECULE_AUTO_UNSEAL') | default('false', true))) | bool }}"
+    __capture_dir: "{{ (vault_init_capture_dir | default('/tmp/vault-init-capture')) }}/{{ inventory_hostname }}"
+    __key_shares: "{{ vault_key_shares | default(5) | int }}"
 
   tasks:
     - name: Query Vault status
@@ -40,7 +45,94 @@
         fail_msg: "Vault is not initialized (status: {{ __vstatus.stdout | default(__vstatus.stderr) }})"
 
     ###########################################################################
-    # Default path: unseal expected -> unsealed + both audit devices
+    # #34 key-location invariants (both legs)
+    ###########################################################################
+    - name: Stat controller capture root-token file (delegated to controller)
+      ansible.builtin.stat:
+        path: "{{ __capture_dir }}/root-token"
+      register: __cap_rt
+      delegate_to: localhost
+
+    - name: Assert root token captured per-file to the controller (0600)
+      ansible.builtin.assert:
+        that:
+          - __cap_rt.stat.exists
+          - __cap_rt.stat.mode == '0600'
+        fail_msg: "root-token not captured to the controller at {{ __capture_dir }}/root-token (0600)"
+
+    - name: Stat controller capture directory
+      ansible.builtin.stat:
+        path: "{{ __capture_dir }}"
+      register: __cap_dir
+      delegate_to: localhost
+
+    - name: Assert capture directory mode 0700
+      ansible.builtin.assert:
+        that:
+          - __cap_dir.stat.isdir | default(false)
+          - __cap_dir.stat.mode == '0700'
+        fail_msg: "capture dir {{ __capture_dir }} is not a 0700 directory"
+
+    - name: Stat per-file unseal shares on the controller
+      ansible.builtin.stat:
+        path: "{{ __capture_dir }}/unseal-key-{{ item }}"
+      register: __cap_keys
+      delegate_to: localhost
+      loop: "{{ range(1, __key_shares | int + 1) | list }}"
+
+    - name: Assert every unseal share captured per-file (0600)
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.mode == '0600'
+        fail_msg: "unseal share {{ item.item }} not captured per-file at 0600"
+      loop: "{{ __cap_keys.results }}"
+      loop_control:
+        label: "unseal-key-{{ item.item }}"
+
+    - name: Grep /etc/vault.d for any plaintext root token
+      ansible.builtin.command:
+        cmd: grep -rl VAULT_ROOT_TOKEN /etc/vault.d
+      register: __rt_grep
+      changed_when: false
+      failed_when: false
+
+    - name: Assert NO plaintext root token anywhere under /etc/vault.d (both legs)
+      ansible.builtin.assert:
+        that:
+          - __rt_grep.rc != 0
+        fail_msg: "A plaintext VAULT_ROOT_TOKEN was found on the node: {{ __rt_grep.stdout }}"
+
+    - name: Stat on-node tokens.env
+      ansible.builtin.stat:
+        path: /etc/vault.d/tokens.env
+      register: __tokens_env
+
+    - name: Assert NO tokens.env on the node (secure default — no auto-unseal)
+      ansible.builtin.assert:
+        that:
+          - not __tokens_env.stat.exists
+        fail_msg: "tokens.env must be absent on the node when auto-unseal is off (secure default)"
+      when: not __auto_unseal
+
+    - name: Read tokens.env (availability leg only)
+      ansible.builtin.slurp:
+        src: /etc/vault.d/tokens.env
+      register: __tenv
+      no_log: true
+      when: __auto_unseal
+
+    - name: Assert tokens.env holds unseal shares and NOT the root token
+      ansible.builtin.assert:
+        that:
+          - "'VAULT_UNSEAL_KEY_' in (__tenv.content | b64decode)"
+          - "'VAULT_ROOT_TOKEN' not in (__tenv.content | b64decode)"
+        fail_msg: "availability tokens.env must contain unseal shares and no root token"
+      no_log: true
+      when: __auto_unseal
+
+    ###########################################################################
+    # Unseal-expected leg: unsealed + both audit devices (auth via controller token)
     ###########################################################################
     - name: Assert Vault is unsealed after init
       ansible.builtin.assert:
@@ -49,21 +141,17 @@
         fail_msg: "Vault should be unsealed after init but sealed={{ __status.sealed | default('unknown') }}"
       when: __unseal_expected
 
-    - name: Read tokens.env (shell KEY=VALUE file)
+    - name: Read the root token from the controller capture (never the node)
       ansible.builtin.slurp:
-        src: /etc/vault.d/tokens.env
-      register: __tokens
+        src: "{{ __capture_dir }}/root-token"
+      register: __rt
+      delegate_to: localhost
       no_log: true
       when: __unseal_expected
 
-    - name: Extract the root token (^VAULT_ROOT_TOKEN=)
+    - name: Set root token fact
       ansible.builtin.set_fact:
-        # splitlines() (NOT split('\n')): a folded/plain YAML scalar does not
-        # process the \n escape, so split('\n') would be a no-op here.
-        __root_token: >-
-          {{ (__tokens.content | b64decode).splitlines()
-             | select('match', '^VAULT_ROOT_TOKEN=') | first
-             | regex_replace('^VAULT_ROOT_TOKEN=', '') }}
+        __root_token: "{{ (__rt.content | b64decode) | trim }}"
       no_log: true
       when: __unseal_expected
 
@@ -85,7 +173,7 @@
       when: __unseal_expected
 
     ###########################################################################
-    # Opt-out path: unseal NOT expected -> sealed, converge still green
+    # Sealed opt-out leg: sealed, converge still green
     ###########################################################################
     - name: Assert Vault is left sealed (opt-out)
       ansible.builtin.assert:

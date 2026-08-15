@@ -423,30 +423,16 @@ argument_specs:
         type: bool
         default: false
 
-      vault_init_store_target:
+      vault_init_capture_dir:
         description:
-          - Store unseal keys and the root token on the target in /etc/vault.d/tokens.env (root:root 0600; directory root:vault 0750).
-          - Disable only when a controller/AAP capture path or another approved handoff is configured.
-        type: bool
-        default: true
-
-      vault_init_controller_capture_enabled:
-        description:
-          - Capture raw vault operator init JSON on the Ansible controller/AAP execution environment.
-          - The artifact contains unseal keys and the root token and must be moved to an approved secret store.
-        type: bool
-        default: false
-
-      vault_init_controller_output_path:
-        description:
-          - Controller-side path for captured Vault initialization JSON.
-          - Required when vault_init_controller_capture_enabled is true.
+          - Controller-side directory for per-file init-key capture. Required when vault_initialize is true.
+          - The role writes the root token (NEVER stored on the node) plus one file per Shamir unseal share (or HSM recovery key), 0600 each. Distribute to custodians / an approved store, then delete.
         type: path
         default: ""
 
-      vault_init_controller_output_mode:
+      vault_init_capture_mode:
         description:
-          - File mode for controller-side captured Vault initialization JSON.
+          - File mode for the per-file captured key material on the controller.
         type: str
         default: "0600"
 
