@@ -63,7 +63,9 @@
 - name: Assert CAP_IPC_LOCK is available for mlock
   ansible.builtin.assert:
     that:
-      - "'CAP_IPC_LOCK' in __vault_cap_check.stdout"
+      # systemd reports capabilities lowercase (CapabilityBoundingSet=cap_ipc_lock);
+      # normalize so the check is case-insensitive.
+      - "'cap_ipc_lock' in (__vault_cap_check.stdout | lower)"
     fail_msg: >-
       vault.service does not have CAP_IPC_LOCK capability.
       mlock is enabled (vault_disable_mlock=false) but the systemd unit
