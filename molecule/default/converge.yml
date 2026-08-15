@@ -40,14 +40,19 @@
     # trust template with a synthetic two-version rpm query to exercise the
     # rc==0 version/dedup branch (the container's mock rpm returns non-zero,
     # so the role run renders the "unknown" branch). verify.yml asserts both.
-    - name: Render synthetic rc0 fapolicyd trust file (version-branch fixture)
-      vars:
+    # set_fact (NOT task vars): the role run REGISTERS __vault_fapolicyd_pkg,
+    # and a registered var outranks task vars — so the override must be at
+    # register/fact precedence. These are the last tasks; the clobber is safe.
+    - name: Override package register with synthetic rc0 fixture
+      ansible.builtin.set_fact:
         __vault_fapolicyd_pkg:
           rc: 0
           stdout: "vault-enterprise-fips1403 2.0.3-1\nvault-enterprise-fips1403 2.0.2-1\n"
           stdout_lines:
             - "vault-enterprise-fips1403 2.0.3-1"
             - "vault-enterprise-fips1403 2.0.2-1"
+
+    - name: Render synthetic rc0 fapolicyd trust file (version-branch fixture)
       ansible.builtin.template:
         src: "{{ playbook_dir }}/../../templates/fapolicyd-vault.trust.j2"
         dest: /root/.molecule-fapolicyd-rc0.trust
