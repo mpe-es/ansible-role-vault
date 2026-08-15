@@ -1,0 +1,149 @@
+---
+###############################################################################
+# Filename: molecule/init/prepare.yml
+# Role: ansible-role-vault
+# Summary: Stand up a REAL Vault (issue #33) - fetch the binary (airgap-
+#   overridable), real self-signed TLS, and a real systemd unit - so the
+#   role's actual init -> unseal -> enable-audit transaction can run.
+# Classification: UNCLASSIFIED
+###############################################################################
+- name: Prepare (real-Vault init scenario)
+  hosts: all
+  gather_facts: false
+  vars:
+    __vault_version: "{{ lookup('env', 'MOLECULE_VAULT_VERSION') | default('1.18.5', true) }}"
+    __vault_url: >-
+      {{ lookup('env', 'MOLECULE_VAULT_URL')
+         | default('https://releases.hashicorp.com/vault/' ~ __vault_version
+                   ~ '/vault_' ~ __vault_version ~ '_linux_amd64.zip', true) }}
+
+  tasks:
+    - name: Bootstrap requested Python interpreter
+      ansible.builtin.raw: >-
+        sh -c 'test -x {{ ansible_python_interpreter }}
+        || dnf install -y {{ ansible_python_interpreter | basename }}'
+      register: __prep_py
+      changed_when: "'Installed:' in __prep_py.stdout"
+
+    - name: Gather facts
+      ansible.builtin.setup:
+
+    - name: Install scenario dependencies
+      ansible.builtin.raw: >-
+        dnf install -y openssl unzip python3-libselinux policycoreutils-python-utils
+      register: __prep_pkg
+      changed_when: "'Installed:' in __prep_pkg.stdout"
+
+    # /dev/log must be a working socket or 'vault audit enable syslog' fails —
+    # a HARNESS infra issue, not a #33 regression. In systemd it is a SYMLINK
+    # to /run/systemd/journal/dev-log, so stat with follow:true to resolve to
+    # the underlying datagram socket (without follow, issock is false on the link).
+    - name: Stat /dev/log (follow the symlink to the datagram socket)
+      ansible.builtin.stat:
+        path: /dev/log
+        follow: true
+      register: __devlog
+
+    - name: Assert /dev/log resolves to a live socket
+      ansible.builtin.assert:
+        that:
+          - __devlog.stat.exists
+          - __devlog.stat.issock | default(false)
+        fail_msg: >-
+          /dev/log does not resolve to a live socket — HARNESS INFRA issue,
+          NOT a #33 regression. 'vault audit enable syslog' requires it.
+
+    - name: Create vault group
+      ansible.builtin.group:
+        name: vault
+        system: true
+
+    - name: Create vault user
+      ansible.builtin.user:
+        name: vault
+        group: vault
+        system: true
+        shell: /bin/false
+        create_home: false
+
+    - name: Fetch the real Vault binary (airgap-overridable via MOLECULE_VAULT_URL)
+      ansible.builtin.get_url:
+        url: "{{ __vault_url }}"
+        dest: /tmp/vault.zip
+        mode: '0644'
+
+    - name: Unzip the Vault binary to /usr/bin
+      ansible.builtin.unarchive:
+        src: /tmp/vault.zip
+        dest: /usr/bin
+        remote_src: true
+        creates: /usr/bin/vault
+
+    - name: Ensure vault binary ownership/mode
+      ansible.builtin.file:
+        path: /usr/bin/vault
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Create TLS directory
+      ansible.builtin.file:
+        path: /opt/vault/tls
+        state: directory
+        owner: vault
+        group: vault
+        mode: '0750'
+
+    # SAN extfile (portable across openssl 1.1.1 el8 and 3.x el9/10 —
+    # -extfile at signing works on both; -addext/-copy_extensions do not).
+    - name: Write openssl SAN extfile
+      ansible.builtin.copy:
+        content: "subjectAltName=IP:127.0.0.1,DNS:localhost,DNS:vault-el\n"
+        dest: /tmp/vault-san.ext
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Generate self-signed TLS (CA + SAN server cert)
+      ansible.builtin.shell: |
+        set -e
+        cd /opt/vault/tls
+        openssl req -x509 -newkey rsa:2048 -nodes -keyout ca.key -out ca.crt \
+          -days 3650 -subj "/CN=vault-test-ca"
+        openssl req -newkey rsa:2048 -nodes -keyout tls.key -out server.csr \
+          -subj "/CN=vault-el"
+        openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key \
+          -CAcreateserial -out tls.crt -days 3650 -extfile /tmp/vault-san.ext
+      args:
+        creates: /opt/vault/tls/tls.crt
+
+    - name: Own + mode the TLS files so User=vault can read them
+      ansible.builtin.file:
+        path: "/opt/vault/tls/{{ item }}"
+        owner: vault
+        group: vault
+        mode: '0640'
+      loop:
+        - ca.crt
+        - tls.crt
+        - tls.key
+
+    # Type=simple (not exec): exec needs systemd >=240; RHEL 8 ships 239.
+    # The role's wait_for on the listener port handles readiness either way.
+    - name: Deploy a real vault.service unit
+      ansible.builtin.copy:
+        content: |
+          [Unit]
+          Description=HashiCorp Vault (init scenario)
+          After=network-online.target
+          [Service]
+          Type=simple
+          ExecStart=/usr/bin/vault server -config=/etc/vault.d/vault.hcl
+          User=vault
+          Group=vault
+          [Install]
+          WantedBy=multi-user.target
+        dest: /usr/lib/systemd/system/vault.service
+        owner: root
+        group: root
+        mode: '0644'

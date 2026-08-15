@@ -308,10 +308,17 @@ argument_specs:
 
       vault_auto_unseal_enabled:
         description:
-          - Deploy vault-unseal systemd service for automatic unsealing after reboot.
+          - Deploy the BOOT-TIME vault-unseal systemd service (a key-at-rest decision). Does NOT control post-init unseal - see vault_init_unseal.
           - Uses Shamir key shares stored in /etc/vault.d/tokens.env (root:root 0600; the directory is root:vault 0750) and validates TLS with vault_tls_ca_file. The unseal service runs as root by design so key material stays root-only.
         type: bool
         default: false
+
+      vault_init_unseal:
+        description:
+          - Unseal via the Shamir threshold immediately after init, as part of the init transaction, so audit devices can be enabled. Independent of the boot-time auto-unseal service (vault_auto_unseal_enabled).
+          - Set false only for the rare "initialize but leave sealed" case; audit devices then require manual unseal. Non-HSM only (an HSM seal auto-unseals regardless). Combining false with vault_auto_unseal_enabled=true is rejected.
+        type: bool
+        default: true
 
       vault_key_shares:
         description:

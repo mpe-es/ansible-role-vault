@@ -124,7 +124,8 @@ auto-generation and input validation.
 | `vault_stig_audit_backup_enabled` | `true` | Deploy audit backup service/timer |
 | `vault_stig_audit_backup_retention_days` | `7` | Audit backup retention in days (injected into the backup service as `RETENTION_DAYS`) |
 | `vault_stig_aide_check_enabled` | `false` | Deploy AIDE integrity check timer (when aide installed) |
-| `vault_auto_unseal_enabled` | `false` | Deploy auto-unseal service |
+| `vault_init_unseal` | `true` | Unseal after init as part of the init transaction (so audit devices enable); non-HSM |
+| `vault_auto_unseal_enabled` | `false` | Deploy the boot-time auto-unseal service (key-at-rest decision; not post-init unseal) |
 | `vault_key_shares` | `5` | Shamir key shares for initialization |
 | `vault_key_threshold` | `3` | Shamir keys required to unseal |
 | `vault_init_store_target` | `true` | Store init output on the target in `/etc/vault.d/tokens.env` (root:root 0600) |
@@ -231,9 +232,44 @@ The role uses `no_log: true` for initialization tasks and never prints the root
 token or unseal keys. Treat the controller-side artifact as temporary key
 material and remove it after transfer to the approved credential store.
 
+## Initialization Transaction
+
+When `vault_initialize: true`, the role runs a single init **transaction**:
+`vault operator init` → **unseal** (Shamir threshold, from the in-memory init
+output) → **enable the file and syslog audit devices**. It is all-or-nothing:
+an initialized-but-sealed Vault with no audit devices is not a valid end
+state of this role.
+
+Two distinct flags control unsealing — do not confuse them:
+
+- **`vault_init_unseal`** (default `true`) — unseal immediately after init,
+  as **part of the init transaction**, so audit devices can be enabled. This
+  is what makes the transaction complete on a fresh node; it is independent
+  of the boot-time service below. (Non-HSM only; an HSM seal auto-unseals
+  regardless.)
+- **`vault_auto_unseal_enabled`** (default `false`) — deploy the **boot-time**
+  `vault-unseal.service` (next section). A standing key-at-rest decision, NOT
+  about completing initialization.
+
+**Rare opt-out.** Set `vault_init_unseal: false` only to "initialize but leave
+sealed" (e.g. a manual key ceremony). The role then skips unseal **and** audit
+enablement and prints a warning that audit devices must be enabled manually
+after the first `vault operator unseal` — it does **not** fail mid-run.
+Combining `vault_init_unseal: false` with `vault_auto_unseal_enabled: true`
+**in the same run is rejected** (it would auto-unseal on boot into a
+never-audited state).
+
+**Known limitation.** The audit-before-auto-unseal invariant is enforced at
+init time only. If you initialize-without-unseal in one run and later enable
+the boot-time auto-unseal service in a **separate** run, the role cannot
+detect the missing audit devices — enable audit devices before enabling the
+boot-time service.
+
 ## Auto-Unseal (Community Edition, Shamir Keys)
 
-When `vault_auto_unseal_enabled` is `true` (and `vault_hsm_enabled` is
+This section covers the **boot-time** auto-unseal service, distinct from the
+post-init unseal (`vault_init_unseal`) described above. When
+`vault_auto_unseal_enabled` is `true` (and `vault_hsm_enabled` is
 `false`), the role deploys `vault-unseal.service`, a oneshot unit
 (`RemainAfterExit=yes`) that runs after `vault.service` on boot and applies
 the Shamir key shares stored in `/etc/vault.d/tokens.env`. Explicit

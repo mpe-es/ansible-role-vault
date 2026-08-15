@@ -1,0 +1,64 @@
+---
+###############################################################################
+# Filename: molecule/init/molecule.yml
+# Role: ansible-role-vault
+# Summary: Real-Vault init scenario (issue #33) - fetches an actual Vault
+#   binary (airgap-configurable via MOLECULE_VAULT_URL) and drives the real
+#   init -> unseal -> enable-audit transaction against a live server.
+# Classification: UNCLASSIFIED
+###############################################################################
+dependency:
+  name: galaxy
+  options:
+    requirements-file: requirements.yml
+
+driver:
+  name: podman
+
+platforms:
+  - name: vault-el
+    image: ${MOLECULE_IMAGE:-registry.access.redhat.com/ubi9/ubi-init:latest}
+    pre_build_image: true
+    privileged: true
+    command: /usr/sbin/init
+
+provisioner:
+  name: ansible
+  connection_options:
+    ansible_become: false
+  # Resolve the role by its directory name (MOLECULE_PROJECT_DIRECTORY is the
+  # repo root for every scenario). Collections-only requirements.yml.
+  env:
+    ANSIBLE_ROLES_PATH: ${MOLECULE_PROJECT_DIRECTORY}/..
+  # Skip preflight (RHSM/real-infra); KEEP service_start - we want the real
+  # Vault to start so the init transaction runs.
+  options:
+    skip-tags: preflight
+  inventory:
+    host_vars:
+      vault-el:
+        ansible_user: root
+        ansible_python_interpreter: ${MOLECULE_PYTHON:-/usr/bin/python3}
+        # Host-dependent phases off; the binary/TLS/unit come from prepare.yml.
+        vault_manage_repo: false
+        vault_manage_firewall: false
+        vault_manage_tls: false
+        vault_manage_install: false
+        vault_manage_selinux: false
+        vault_manage_fapolicyd: false
+        # Vault cannot mlock() as a dropped User=vault in a container without
+        # AmbientCapabilities+LimitMEMLOCK; disable it (we test init, not mlock).
+        vault_disable_mlock: true
+        # Run the real init transaction.
+        vault_initialize: true
+        vault_init_store_target: true
+        # Parameterized: CI runs the scenario with true AND false.
+        vault_init_unseal: ${MOLECULE_INIT_UNSEAL:-true}
+        # Consistent ports for a single lone bootstrapping node.
+        vault_listener_port: 8200
+        vault_api_addr: "https://127.0.0.1:8200"
+        vault_cluster_addr: "https://127.0.0.1:8201"
+        vault_raft_node_id: vault-init
+
+verifier:
+  name: ansible
