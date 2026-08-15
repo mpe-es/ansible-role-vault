@@ -128,10 +128,8 @@ auto-generation and input validation.
 | `vault_auto_unseal_enabled` | `false` | Deploy the boot-time auto-unseal service (key-at-rest decision; not post-init unseal) |
 | `vault_key_shares` | `5` | Shamir key shares for initialization |
 | `vault_key_threshold` | `3` | Shamir keys required to unseal |
-| `vault_init_store_target` | `true` | Store init output on the target in `/etc/vault.d/tokens.env` (root:root 0600) |
-| `vault_init_controller_capture_enabled` | `false` | Capture init output back to the Ansible controller/AAP execution environment |
-| `vault_init_controller_output_path` | `""` | Controller-side path for captured init JSON |
-| `vault_init_controller_output_mode` | `0600` | File mode for controller-side captured init JSON |
+| `vault_init_capture_dir` | `""` | **Required** controller directory for per-file init-key capture (root token + one file per unseal/recovery share). Root token is never stored on the node |
+| `vault_init_capture_mode` | `0600` | File mode for the per-file captured key material on the controller |
 | `vault_rsyslog_enabled` | `false` | Enable remote syslog forwarding |
 | `vault_rsyslog_host` | `""` | Remote syslog target |
 | `vault_rsyslog_port` | `514` | Remote syslog port |
@@ -206,15 +204,21 @@ for Python library dependencies. No other Ansible role dependencies.
         vault_rsyslog_host: "syslog.enclave.mil"
 ```
 
-### Greenfield Initialization with AAP Capture
+### Greenfield Initialization — secure key handling
 
-When `vault_initialize` is enabled, initialization material is secret-bearing.
-By default, the role preserves existing behavior and writes
-`/etc/vault.d/tokens.env` on the target, `root:root` mode `0600`. The
-config directory itself is `root:vault 0750`, so the vault service account
-can read its configs but cannot create or replace entries. For Ansible
-Automation Platform workflows, capture the raw init JSON back to the execution
-environment and immediately move it into an approved secret store:
+When `vault_initialize: true`, initialization material is secret-bearing, and
+the role is **secure by default**:
+
+- **No key material on the node by default.** Unseal shares land in
+  `/etc/vault.d/tokens.env` **only** when `vault_auto_unseal_enabled: true`
+  (they feed the boot-time unseal service), and even then the file holds
+  **shares only** — never the root token.
+- **The root token always leaves the node.** It is captured to the controller,
+  never persisted on the Vault node.
+- **Per-file capture.** The role writes, to the **required** controller
+  directory `vault_init_capture_dir`, one file each: `root-token`, and
+  `unseal-key-1 … unseal-key-N` (Shamir) or `recovery-key-*` (HSM), `0600`
+  each — so you hand each share to a distinct key custodian.
 
 ```yaml
 - hosts: vault
@@ -223,14 +227,24 @@ environment and immediately move it into an approved secret store:
     - role: darkhonor.vault
       vars:
         vault_initialize: true
-        vault_init_store_target: false
-        vault_init_controller_capture_enabled: true
-        vault_init_controller_output_path: "/runner/artifacts/vault-init-{{ inventory_hostname }}.json"
+        # REQUIRED controller directory for per-file key capture:
+        vault_init_capture_dir: "/runner/artifacts/vault-init-{{ inventory_hostname }}"
+        # Secure default: no keys on the node. Set true ONLY to accept
+        # on-node shares for boot-time auto-unseal (availability trade-off).
+        vault_auto_unseal_enabled: false
 ```
 
-The role uses `no_log: true` for initialization tasks and never prints the root
-token or unseal keys. Treat the controller-side artifact as temporary key
-material and remove it after transfer to the approved credential store.
+The role uses `no_log: true` for all key-handling tasks and never prints key
+material. Distribute each `unseal-key-*` to a custodian / an approved store and
+move the `root-token` to your approved secret store, then delete the capture
+directory.
+
+> **⚠ Reboot → sealed (secure default).** With `vault_auto_unseal_enabled: false`
+> the node has no on-node keys and no boot-unseal service, so **the first reboot
+> leaves Vault sealed** — you must run `vault operator unseal` with the
+> custodian-held threshold shares. This is the intended secure trade-off. **Do
+> NOT delete the capture directory until the shares are preserved** in an
+> approved store / with custodians, or the Raft data becomes unrecoverable.
 
 ## Initialization Transaction
 
@@ -293,8 +307,8 @@ service account cannot edit what root executes, and the script itself
 refuses to run if the directory is untrusted (not root-owned, or
 group/other-writable) or if the tokens file carries ANY group/other
 access bits (key material must be `0600`). An operator-placed tokens
-file (the AAP flow with `vault_init_store_target: false`) goes at the
-same path with the same `root:root 0600` posture — the script refuses
+file (when the unseal shares are managed out-of-band rather than written by
+the role) goes at the same path with the same `root:root 0600` posture — the script refuses
 anything looser. Do not add a service-account directive to the unit
 without changing that model. Note the model's residual scope:
 `vault.hcl`/`vault.env` file ownership remains `vault:vault` pending
