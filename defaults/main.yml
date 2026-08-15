@@ -177,8 +177,16 @@ vault_stig_audit_backup_retention_days: 7
 # Default off: AIDE is host-owned; the role integrates but never forces it.
 vault_stig_aide_check_enabled: false
 
-# Deploy vault-unseal service for automatic unsealing after reboot
+# Deploy the BOOT-TIME auto-unseal systemd service (a key-at-rest decision).
+# This does NOT control post-init unseal — see vault_init_unseal.
 vault_auto_unseal_enabled: false
+
+# Unseal via the Shamir threshold immediately after init, as PART OF the init
+# transaction (so audit devices can be enabled). Independent of the boot-time
+# auto-unseal service above. Set false only for the rare "initialize but leave
+# sealed" case (audit devices then require manual unseal). Non-HSM only; with
+# an HSM seal, Vault auto-unseals regardless.
+vault_init_unseal: true
 
 # Vault initialization parameters (used during initial setup)
 vault_key_shares: 5

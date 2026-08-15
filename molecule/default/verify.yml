@@ -228,8 +228,11 @@
     - name: Assert unseal service runs as root with vault.service coupling
       ansible.builtin.assert:
         that:
+          # splitlines() (NOT split('\n')): a folded/plain scalar does not
+          # process the \n escape, so split('\n') would silently no-op and
+          # this absence check would pass vacuously (#33 review, same class).
           - >-
-            (__verify_unseal_service_content.content | b64decode).split('\n')
+            (__verify_unseal_service_content.content | b64decode).splitlines()
             | select('match', '^(User|Group)=')
             | list | length == 0
           - "'Requires=vault.service' in (__verify_unseal_service_content.content | b64decode)"

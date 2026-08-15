@@ -1,0 +1,15 @@
+---
+###############################################################################
+# Filename: molecule/init/converge.yml
+# Role: ansible-role-vault
+# Summary: Execute the real role (issue #33) so the init -> unseal ->
+#   enable-audit transaction runs against the live Vault started by the
+#   role's service phase. All init vars come from molecule.yml host_vars.
+# Classification: UNCLASSIFIED
+###############################################################################
+- name: Converge (real-Vault init)
+  hosts: all
+  tasks:
+    - name: Execute the ansible-role-vault role
+      ansible.builtin.import_role:
+        name: ansible-role-vault

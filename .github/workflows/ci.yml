@@ -198,6 +198,83 @@ jobs:
           MOLECULE_PYTHON: ${{ matrix.el.python }}
 
   ###########################################################
+  # Molecule Init Stage (real Vault init transaction, issue #33)
+  # Separate job so a binary-fetch/network issue does not mask the
+  # default-scenario molecule results. Vault binary source is
+  # airgap-overridable via the MOLECULE_VAULT_URL repo/org variable.
+  ###########################################################
+  molecule-init:
+    name: Molecule Init (${{ matrix.el.name }} unseal=${{ matrix.unseal }})
+    runs-on: ubuntu-latest
+    needs: syntax
+    strategy:
+      fail-fast: false
+      matrix:
+        unseal:
+          - 'true'
+          - 'false'
+        el:
+          - name: el8
+            image: registry.access.redhat.com/ubi8/ubi-init:latest
+            python: /usr/bin/python3.11
+          - name: el9
+            image: registry.access.redhat.com/ubi9/ubi-init:latest
+            python: /usr/bin/python3
+          - name: el10
+            image: registry.access.redhat.com/ubi10/ubi-init:latest
+            python: /usr/bin/python3
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install \
+            ansible-core \
+            molecule \
+            molecule-plugins[podman] \
+            ansible-lint \
+            yamllint
+          pip install -r requirements.txt
+
+      - name: Install required Ansible collections
+        run: ansible-galaxy collection install -r requirements.yml
+
+      - name: Install Podman
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y podman
+
+      - name: Configure Podman for systemd containers
+        run: |
+          mkdir -p ~/.config/containers
+          cat > ~/.config/containers/registries.conf << 'EOF'
+          unqualified-search-registries = ["registry.access.redhat.com", "docker.io"]
+          EOF
+          podman info
+
+      - name: Run Molecule init scenario
+        run: molecule test --scenario-name init
+        env:
+          PY_COLORS: '1'
+          ANSIBLE_FORCE_COLOR: '1'
+          ANSIBLE_VERBOSITY: '3'
+          MOLECULE_IMAGE: ${{ matrix.el.image }}
+          MOLECULE_PYTHON: ${{ matrix.el.python }}
+          MOLECULE_INIT_UNSEAL: ${{ matrix.unseal }}
+          # Enclave CI overrides MOLECULE_VAULT_URL (repo/org variable) to an
+          # internal web server; public default constructed from the version.
+          MOLECULE_VAULT_URL: ${{ vars.MOLECULE_VAULT_URL }}
+          MOLECULE_VAULT_VERSION: ${{ vars.MOLECULE_VAULT_VERSION || '1.18.5' }}
+
+  ###########################################################
   # Security Scan Stage
   ###########################################################
   security:
@@ -243,6 +320,7 @@ jobs:
       - lint
       - syntax
       - molecule
+      - molecule-init
       - security
     runs-on: ubuntu-latest
     steps:
@@ -251,6 +329,7 @@ jobs:
           if [[ "${{ needs.lint.result }}" != "success" ]] || \
              [[ "${{ needs.syntax.result }}" != "success" ]] || \
              [[ "${{ needs.molecule.result }}" != "success" ]] || \
+             [[ "${{ needs['molecule-init'].result }}" != "success" ]] || \
              [[ "${{ needs.security.result }}" != "success" ]]; then
             echo "One or more required jobs did not succeed"
             exit 1
