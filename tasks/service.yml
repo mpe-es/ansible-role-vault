@@ -312,3 +312,48 @@
   when:
     - vault_auto_unseal_enabled | bool
     - not vault_hsm_enabled | bool
+
+###############################################################################
+# Secure-default upgrade safety (issue #34).
+# When boot auto-unseal is OFF (the secure default), stop auto-unsealing on
+# boot and warn about any legacy on-node key material a pre-#34 install left in
+# tokens.env. The role does NOT auto-delete tokens.env — on an already-
+# initialized node it may be the ONLY copy of the keys (init does not re-run,
+# so nothing re-captures them). The operator must preserve then remove it.
+###############################################################################
+- name: Check for the boot auto-unseal unit (secure default)
+  ansible.builtin.stat:
+    path: /usr/lib/systemd/system/vault-unseal.service
+    get_checksum: false
+    get_attributes: false
+  register: __vault_unseal_unit
+  when: not (vault_auto_unseal_enabled | bool)
+
+- name: Disable the boot auto-unseal service (secure default)
+  ansible.builtin.systemd_service:
+    name: vault-unseal.service
+    enabled: false
+    daemon_reload: true
+  when:
+    - not (vault_auto_unseal_enabled | bool)
+    - __vault_unseal_unit.stat.exists | default(false)
+
+- name: Check for legacy on-node key material (secure default)
+  ansible.builtin.stat:
+    path: /etc/vault.d/tokens.env
+    get_checksum: false
+    get_attributes: false
+  register: __vault_legacy_tokens
+  when: not (vault_auto_unseal_enabled | bool)
+
+- name: Warn about legacy on-node key material (secure default)
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: /etc/vault.d/tokens.env exists on this node but boot auto-unseal
+      is disabled (secure default). It holds unseal shares (and, if written by a
+      pre-#34 role, the root token). The role does NOT delete it automatically —
+      it may be your only copy. Preserve the keys to an approved store, then
+      remove /etc/vault.d/tokens.env from the node.
+  when:
+    - not (vault_auto_unseal_enabled | bool)
+    - __vault_legacy_tokens.stat.exists | default(false)
