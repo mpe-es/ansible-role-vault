@@ -9,6 +9,14 @@
 ###############################################################################
 # Service Startup
 ###############################################################################
+# Flush any pending "Restart vault" (notified by configure.yml when vault.hcl/
+# vault.env changed) BEFORE the init transaction. Otherwise the end-of-play
+# handler restart runs AFTER post-init unseal and re-seals a Shamir Vault,
+# leaving the node initialized-but-sealed despite vault_init_unseal=true
+# (codex). No-op on idempotent re-runs (config unchanged -> nothing notified).
+- name: Flush pending handlers before the init transaction
+  ansible.builtin.meta: flush_handlers
+
 # service_start: needs a live Vault; molecule skips this tag (the rest of
 # service.yml — incl. the state-based [Install]-link repair — still runs).
 - name: Enable and start Vault service
