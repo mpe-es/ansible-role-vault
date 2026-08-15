@@ -22,7 +22,7 @@
     # host_var/env hedges (verifier may expose host_vars, else the CI env).
     __unseal_expected: "{{ (vault_init_unseal | default(lookup('env', 'MOLECULE_INIT_UNSEAL') | default('true', true))) | bool }}"
     __auto_unseal: "{{ (vault_auto_unseal_enabled | default(lookup('env', 'MOLECULE_AUTO_UNSEAL') | default('false', true))) | bool }}"
-    __capture_dir: "{{ vault_init_capture_dir | default('/tmp/vault-init-capture') }}"
+    __capture_dir: "{{ (vault_init_capture_dir | default('/tmp/vault-init-capture')) }}/{{ inventory_hostname }}"
     __key_shares: "{{ vault_key_shares | default(5) | int }}"
 
   tasks:

@@ -48,11 +48,13 @@
         that:
           - vault_init_capture_dir | length > 0
           - vault_init_capture_dir is match('^/')
+          - vault_init_capture_mode is match('^0?[0-7]00$')
         fail_msg: >-
-          Vault initialization is enabled but vault_init_capture_dir is not set
-          to an absolute controller directory. The role captures the root token
-          and one file per unseal/recovery share there (the root token is NEVER
-          stored on the node); set vault_init_capture_dir.
+          Vault initialization is enabled but vault_init_capture_dir is not an
+          absolute controller directory, or vault_init_capture_mode grants
+          group/other access (must be owner-only, e.g. 0600). The role captures
+          the root token and one file per unseal/recovery share there, under a
+          per-host subdirectory (the root token is NEVER stored on the node).
         success_msg: "Vault initialization capture destination configured"
 
     - name: Validate key shares and threshold
@@ -136,9 +138,9 @@
     # ALWAYS lands here (never on the node); shares/recovery keys one file each so
     # the operator can hand each to a distinct custodian. copy+content (never
     # shell) so key material is not exposed in argv/execve.
-    - name: Create controller capture directory
+    - name: Create controller capture directory (per host — avoids cross-host key clobber)
       ansible.builtin.file:
-        path: "{{ vault_init_capture_dir }}"
+        path: "{{ vault_init_capture_dir }}/{{ inventory_hostname }}"
         state: directory
         mode: '0700'
       delegate_to: localhost
@@ -148,7 +150,7 @@
     - name: Capture root token to the controller (never on the node)
       ansible.builtin.copy:
         content: "{{ (__vault_init_output.stdout | from_json).root_token }}\n"
-        dest: "{{ vault_init_capture_dir }}/root-token"
+        dest: "{{ vault_init_capture_dir }}/{{ inventory_hostname }}/root-token"
         mode: "{{ vault_init_capture_mode }}"
       delegate_to: localhost
       become: false
@@ -158,7 +160,7 @@
     - name: Capture Shamir unseal shares to the controller (one key per file)
       ansible.builtin.copy:
         content: "{{ item }}\n"
-        dest: "{{ vault_init_capture_dir }}/unseal-key-{{ idx + 1 }}"
+        dest: "{{ vault_init_capture_dir }}/{{ inventory_hostname }}/unseal-key-{{ idx + 1 }}"
         mode: "{{ vault_init_capture_mode }}"
       delegate_to: localhost
       become: false
@@ -171,7 +173,7 @@
     - name: Capture HSM recovery keys to the controller (one key per file)
       ansible.builtin.copy:
         content: "{{ item }}\n"
-        dest: "{{ vault_init_capture_dir }}/recovery-key-{{ idx + 1 }}"
+        dest: "{{ vault_init_capture_dir }}/{{ inventory_hostname }}/recovery-key-{{ idx + 1 }}"
         mode: "{{ vault_init_capture_mode }}"
       delegate_to: localhost
       become: false
@@ -261,7 +263,7 @@
           sealed={{ __status.sealed | default('unknown') }}
           (Vault may be down if 'unknown'). If init ran, the root token and
           unseal/recovery shares were captured to the controller directory
-          {{ vault_init_capture_dir | default('the configured vault_init_capture_dir') }}
+          {{ vault_init_capture_dir | default('the configured vault_init_capture_dir') }}/{{ inventory_hostname }}
           (and shares also to /etc/vault.d/tokens.env if vault_auto_unseal_enabled).
           Next: unseal manually and enable audit devices, or destroy the node and re-initialize.
 
