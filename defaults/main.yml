@@ -39,6 +39,15 @@ vault_package_version: "latest"
 # Options: 'present' (install if missing), 'latest' (upgrade to newest)
 vault_package_state: "present"
 
+# Install the Vault package (the dnf transaction). false when the binary is
+# provided out-of-band (pre-baked image, container test); post-install
+# validation still runs.
+vault_manage_install: true
+
+# Manage SELinux file contexts (sefcontext+restorecon in system.yml). false
+# where SELinux is disabled (containers) or owned by a separate baseline.
+vault_manage_selinux: true
+
 ###############################################################################
 # Vault Server Configuration
 # These map directly to vault.hcl configuration parameters.
