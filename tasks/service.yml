@@ -183,19 +183,54 @@
         index_var: idx
       when: __vault_init_output is changed
 
-    - name: Unseal Vault after initialization (Shamir)
-      ansible.builtin.command:
-        cmd: "{{ vault_binary }} operator unseal {{ item }}"
+    # Unseal via the API (key in the request body), NOT `vault operator unseal
+    # <key>` — the CLI form records each share in auditd execve argv on a STIG
+    # host (issue #31). ansible.builtin.uri runs ON THE NODE (no delegate_to), so
+    # 127.0.0.1 is the node's loopback, identical locus to the former command.
+    - name: Unseal Vault after initialization (Shamir — key in API body, never argv)
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:{{ vault_listener_port }}/v1/sys/unseal"
+        method: POST
+        body_format: json
+        body:
+          key: "{{ item }}"
+        ca_path: "{{ vault_tls_ca_file }}"
+        status_code: [200]
       loop: "{{ (__vault_init_output.stdout | from_json).unseal_keys_b64[:vault_key_threshold] }}"
       when:
         - __vault_init_output is changed
         - vault_init_unseal | bool
         - not (vault_hsm_enabled | bool)
-      environment:
-        VAULT_ADDR: "https://127.0.0.1:{{ vault_listener_port }}"
-        VAULT_CACERT: "{{ vault_tls_ca_file }}"
-      no_log: true
+      no_log: true          # body carries the key; response unusable for verify
       changed_when: true
+
+    # Happy-path unseal verification (there is no such check elsewhere on the
+    # success path — only audit-enable implicitly requires an unsealed Vault).
+    # uri GET returns HTTP 200 sealed-or-not, avoiding the `vault status` rc-2 ->
+    # rescue footgun. Seal status carries NO key material, so this is NOT no_log.
+    - name: Verify Vault is unsealed after the Shamir threshold (seal status — no key material)
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:{{ vault_listener_port }}/v1/sys/seal-status"
+        method: GET
+        ca_path: "{{ vault_tls_ca_file }}"
+        status_code: [200]
+      register: __vault_seal_status
+      when:
+        - __vault_init_output is changed
+        - vault_init_unseal | bool
+        - not (vault_hsm_enabled | bool)
+      changed_when: false
+
+    - name: Assert the unseal succeeded (fail fast if still sealed)
+      ansible.builtin.assert:
+        that:
+          - not (__vault_seal_status.json.sealed | bool)
+        success_msg: "Vault is unsealed (Shamir threshold reached via API)"
+        fail_msg: "Vault is STILL SEALED after applying the threshold shares via the API"
+      when:
+        - __vault_init_output is changed
+        - vault_init_unseal | bool
+        - not (vault_hsm_enabled | bool)
 
     - name: Enable file audit device
       ansible.builtin.command:

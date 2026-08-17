@@ -67,6 +67,9 @@ jobs:
       - name: Run vault-audit-backup behavioral tests
         run: bash tests/vault-audit-backup-test.sh
 
+      - name: Assert no CLI-argv unseal form (issue #31 regression lock)
+        run: bash tests/assert-no-unseal-argv.sh
+
   ###########################################################
   # Syntax Check Stage
   ###########################################################
