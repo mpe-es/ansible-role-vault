@@ -66,7 +66,9 @@
   ansible.builtin.template:
     src: vault.hcl.j2
     dest: "{{ vault_config_file }}"
-    owner: "{{ vault_user }}"
+    # root:{{ vault_group }} — vault READS its config via the group but must not
+    # own it (a compromised process could rewrite tls_min_version / cert paths) (#38)
+    owner: root
     group: "{{ vault_group }}"
     mode: "{{ vault_config_file_mode }}"
   notify: Restart vault
@@ -75,8 +77,11 @@
   ansible.builtin.template:
     src: vault.env.j2
     dest: "{{ vault_env_file }}"
-    owner: "{{ vault_user }}"
-    group: "{{ vault_group }}"
+    # root:root — only the systemd manager (root) reads vault.env via
+    # EnvironmentFile before dropping to User=vault; it holds the HSM PIN (#41).
+    # The vault process never reads the file, so it needs no access at all (#38).
+    owner: root
+    group: root
     mode: "{{ vault_env_file_mode }}"
   diff: false          # this file can carry VAULT_HSM_PIN — keep it out of --diff (#41)
   notify: Restart vault
