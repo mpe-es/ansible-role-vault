@@ -4,7 +4,15 @@ Thank you for your interest in contributing to this Ansible role!
 
 ## Code of Conduct
 
-Please be respectful and constructive in all interactions.
+This project follows the [Contributor Covenant](CODE_OF_CONDUCT.md). Please be
+respectful and constructive in all interactions.
+
+## Reporting a Security Vulnerability
+
+Do not open a public issue or pull request for a security vulnerability, and
+never paste real key material (unseal shares, root tokens, HSM PINs, TLS
+private keys) into either. See [SECURITY.md](SECURITY.md) for the private
+disclosure process.
 
 ## Development Environment Setup
 

@@ -1,0 +1,19 @@
+---
+###############################################################################
+# Filename: .github/ISSUE_TEMPLATE/config.yml
+# Role: ansible-role-vault
+# Summary: Issue template chooser configuration and contact links
+# Last Updated: 17 Aug 2026
+# Classification: UNCLASSIFIED
+###############################################################################
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/mpe-es/ansible-role-vault/security/advisories/new
+    about: Report vulnerabilities privately through GitHub. Do not open a public issue.
+  - name: Contributing guide
+    url: https://github.com/mpe-es/ansible-role-vault/blob/main/CONTRIBUTING.md
+    about: Read the contribution and development-environment guidance first.
+  - name: Ask a question
+    url: https://github.com/mpe-es/ansible-role-vault/issues/new?labels=question
+    about: Open an issue with the question label.
