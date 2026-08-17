@@ -57,7 +57,11 @@
           Type=oneshot
           RemainAfterExit=yes
           EnvironmentFile=/tmp/rt.env
-          ExecStart=/bin/sh -c 'printf %s "$VAULT_HSM_PIN" > /tmp/rt.out'
+          # %%s: escape the systemd specifier so printf gets a literal %s (a bare
+          # %s in a unit is systemd's "user shell" specifier -> /bin/bash).
+          # $VAULT_HSM_PIN (single $) is left for the shell to expand from the
+          # EnvironmentFile-loaded environment — which is exactly what we test.
+          ExecStart=/bin/sh -c 'printf %%s "$VAULT_HSM_PIN" > /tmp/rt.out'
 
     - name: Start the round-trip probe
       ansible.builtin.systemd_service:
