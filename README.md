@@ -322,10 +322,20 @@ file is `root:root` mode `0600`, and `/etc/vault.d` itself is
 service account can read its own configs via group access but can neither
 read the keys at rest nor replace the tokens file — the parent directory
 matters because the file is `source`d by root, and write access to a
-directory allows file replacement regardless of file ownership. During
-the unseal window itself the keys currently transit
-`vault operator unseal` argv, which is visible in the process table;
-closing that channel by moving unseal to the API is tracked as issue #31.
+directory allows file replacement regardless of file ownership. Unseal
+never places key material on the command line: the Ansible init path submits
+each share to `POST /v1/sys/unseal` via `ansible.builtin.uri` (key in the request
+body), and the boot-time `vault-unseal.sh` pipes each share to
+`vault operator unseal -` over stdin. Neither channel exposes the key in a
+process argument vector, so it cannot be captured by auditd `execve` records
+(issue #31). **Do not "simplify" either path back to
+`vault operator unseal <key>` — that reintroduces the leak** (a CI gate,
+`tests/assert-no-unseal-argv.sh`, blocks the Ansible form).
+**Verifying on a real host:** after an unseal cycle, run `ausearch -x vault`
+(and, if applicable, `ausearch -x curl`) — no unseal key should appear in any
+recorded argument. This confirmation is manual: CI proves argv-cleanliness
+structurally (API body / stdin) and via the boot-script argv-capture test, but
+the molecule/UBI-init container cannot run auditd.
 The script at `/usr/local/bin/vault-unseal.sh` is `root:root` so the
 service account cannot edit what root executes, and the script itself
 refuses to run if the directory is untrusted (not root-owned, or
