@@ -344,10 +344,26 @@ access bits (key material must be `0600`). An operator-placed tokens
 file (when the unseal shares are managed out-of-band rather than written by
 the role) goes at the same path with the same `root:root 0600` posture — the script refuses
 anything looser. Do not add a service-account directive to the unit
-without changing that model. Note the model's residual scope:
-`vault.hcl`/`vault.env` file ownership remains `vault:vault` pending
-issue #38, and an out-of-band `dnf update vault` may revert
-`/etc/vault.d` to the RPM's shipped ownership until the next role run —
+without changing that model.
+
+**Least-privilege ownership (issue #38).** The vault service account READS what
+it needs and OWNS nothing that defines its posture. The role sets:
+
+| Artifact | Owner:group | Mode | Why |
+|---|---|---|---|
+| `vault.hcl` | `root:vault` | `0640` | process reads config via the group; cannot rewrite it |
+| `vault.env` | `root:root` | `0600` | only systemd (root) reads it via `EnvironmentFile`; holds the HSM PIN (#41) — the process needs no access |
+| TLS cert / key / CA | `root:vault` | `0640` | process reads the key via the group; cannot swap its trust anchors |
+| `/opt/vault/tls` (dir) | `root:vault` | `0750` | root-owned dir blocks the process from unlink/replacing cert files (dir write ≠ file ownership) |
+| `vault.hcl`/`vault.env` dir `/etc/vault.d` | `root:vault` | `0750` | (already; #30/#34) |
+| helper scripts | `root:root` | `0750` | (already; #30) — the process cannot edit what root executes |
+| `/opt/vault/data`, `/var/log/vault` | `vault:vault` | `0750` | the process legitimately WRITES its data and audit logs |
+
+A CI gate (`tests/assert-root-owned-posture.sh`) and a molecule negative test
+(`runuser -u vault` writes to the posture files are denied; writes to the data dir
+succeed) enforce this. The fapolicyd trust file pins size+sha256, which ownership
+does not change, so trust stays valid. Note: an out-of-band `dnf update vault` may
+revert `/etc/vault.d` to the RPM's shipped ownership until the next role run —
 the unseal script fails closed (refuses to unseal) rather than trusting
 an unexpected parent, so re-run the **full** role after out-of-band
 package updates. A `--tags system` run does not suffice: the role's
