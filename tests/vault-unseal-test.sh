@@ -57,6 +57,8 @@ setup_scenario() { # listening_after seal_state keys_needed
     printf '%s\n' "$3" > "$MOCK_DIR/keys_needed"
     printf '0\n' > "$MOCK_DIR/call_count"
     : > "$MOCK_DIR/keys.log"
+    : > "$MOCK_DIR/argv.log"
+    : > "$MOCK_DIR/stdin.log"
 
     cat > "$MOCK_DIR/bin/vault" <<'MOCK'
 #!/usr/bin/env bash
@@ -82,8 +84,16 @@ case "${1:-}" in
         exit 2
         ;;
     operator)
-        # argv: operator unseal <key>
-        printf '%s\n' "${3:-MISSING_KEY_ARG}" >> "$MOCK_DIR/keys.log"
+        # Record full argv + any stdin so the argv-cleanliness assertion can prove
+        # the key travels via stdin (post-#31), never argv. `-` = stdin sentinel.
+        printf '%s\n' "$*" >> "$MOCK_DIR/argv.log"
+        if [ "${3:-}" = "-" ]; then
+            key="$(cat)"                              # key from stdin, never argv
+            printf '%s\n' "$key" >> "$MOCK_DIR/stdin.log"
+        else
+            key="${3:-MISSING_KEY_ARG}"               # legacy: key from argv
+        fi
+        printf '%s\n' "$key" >> "$MOCK_DIR/keys.log"
         applied=$(wc -l < "$MOCK_DIR/keys.log" | tr -d ' ')
         if [ "$state" = "sealed" ] && [ "$applied" -ge "$(cat "$MOCK_DIR/keys_needed")" ]; then
             printf 'unsealed\n' > "$MOCK_DIR/seal_state"
@@ -132,7 +142,7 @@ run_script() { # timing overrides via VAULT_UNSEAL_* set by caller
     VAULT_TOKENS_FILE="$MOCK_DIR/tokens.env" \
     VAULT_UNSEAL_TIMEOUT="$timeout_v" \
     VAULT_UNSEAL_RETRY_INTERVAL="$interval_v" \
-        bash "$SCRIPT_UNDER_TEST" > "$MOCK_DIR/output.log" 2>&1 || RC=$?
+        bash "$SCRIPT_UNDER_TEST" > "$MOCK_DIR/output.log" 2>&1 < /dev/null || RC=$?
 }
 
 keys_applied() { wc -l < "$MOCK_DIR/keys.log" | tr -d ' '; }
@@ -160,6 +170,27 @@ if grep -q 'MISSING_KEY_ARG' "$MOCK_DIR/keys.log"; then
     fail "seal-then-unseal: no empty key arguments passed to vault"
 else
     pass "seal-then-unseal: no empty key arguments passed to vault"
+fi
+cleanup_scenario
+
+###############################################################################
+# Scenario 2b (issue #31): the unseal key travels via STDIN, never argv.
+# Pre-fix (`vault operator unseal "$key"`) the key lands in argv -> RED.
+# Post-fix (`... unseal -` + stdin) the key is only on stdin -> GREEN.
+# This is the mutate-then-observe discriminator for the auditd-argv leak.
+###############################################################################
+setup_scenario 0 sealed 1
+run_script
+assert_eq "$RC" "0" "issue#31: script exits 0 after unsealing"
+if grep -q 'key-one' "$MOCK_DIR/stdin.log"; then
+    pass "issue#31: unseal key present in STDIN capture"
+else
+    fail "issue#31: unseal key MUST reach vault via stdin"
+fi
+if grep -q 'key-one' "$MOCK_DIR/argv.log"; then
+    fail "issue#31: unseal key LEAKED into argv ($(cat "$MOCK_DIR/argv.log"))"
+else
+    pass "issue#31: no unseal key in argv (argv is 'operator unseal -')"
 fi
 cleanup_scenario
 
