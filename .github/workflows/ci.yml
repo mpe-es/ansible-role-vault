@@ -357,11 +357,20 @@ jobs:
           # template task WOULD create it and — without diff:false — print
           # VAULT_HSM_PIN in the diff. diff:false must suppress it. Grep of stdout
           # is the sound test (a diff:false task's .diff attr is always empty).
+          # `-- <args>` forwards to ansible-playbook. If a molecule version does
+          # NOT forward, fall back to:
+          #   ansible-playbook -i "$(molecule --scenario-name hsm reset >/dev/null; \
+          #     ls molecule/hsm/../../.cache 2>/dev/null)" ... --check --diff
           out="$(molecule converge --scenario-name hsm -- --check --diff 2>&1)" || { echo "$out"; exit 1; }
+          # ANTI-VACUOUS GUARD: if --check did NOT take effect (arg-forwarding
+          # broken), the converge wrote vault.env for real. It MUST still be absent.
+          if podman exec vault-el test -f /etc/vault.d/vault.env; then
+            echo "FAIL: --check did not take effect (vault.env exists) — molecule did not forward --check; restore the ansible-playbook fallback"; exit 1
+          fi
           if printf '%s' "$out" | grep -q 'S3NTINEL-hsm-pin'; then
             echo "FAIL: PIN leaked into --check --diff output"; exit 1
           fi
-          echo "ok: no PIN in --check --diff output (vault.env task suppressed)"
+          echo "ok: --check took effect (vault.env absent) and no PIN in diff"
         env:
           MOLECULE_IMAGE: ${{ matrix.el.image }}
           MOLECULE_PYTHON: ${{ matrix.el.python }}
