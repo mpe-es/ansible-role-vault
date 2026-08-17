@@ -20,7 +20,7 @@
       loop:
         - { path: /etc/vault.d, mode: '0750', owner: root, group: vault }
         - { path: /opt/vault/data, mode: '0750', owner: vault, group: vault }
-        - { path: /opt/vault/tls, mode: '0750', owner: vault, group: vault }
+        - { path: /opt/vault/tls, mode: '0750', owner: root, group: vault }
         - { path: /var/log/vault, mode: '0750', owner: vault, group: vault }
         # Root-only backup staging: contains root-only auditd extracts, so
         # the vault service account must have no read access (issue #32)
@@ -62,9 +62,9 @@
         that:
           - __verify_vault_hcl.stat.exists
           - __verify_vault_hcl.stat.mode == '0640'
-          - __verify_vault_hcl.stat.pw_name == 'vault'
+          - __verify_vault_hcl.stat.pw_name == 'root'
           - __verify_vault_hcl.stat.gr_name == 'vault'
-        fail_msg: "vault.hcl has incorrect permissions or ownership"
+        fail_msg: "vault.hcl has incorrect permissions or ownership (expect root:vault 0640, #38)"
 
     - name: Verify vault.env exists with correct permissions
       ansible.builtin.stat:
@@ -76,9 +76,9 @@
         that:
           - __verify_vault_env.stat.exists
           - __verify_vault_env.stat.mode == '0600'
-          - __verify_vault_env.stat.pw_name == 'vault'
-          - __verify_vault_env.stat.gr_name == 'vault'
-        fail_msg: "vault.env has incorrect permissions or ownership"
+          - __verify_vault_env.stat.pw_name == 'root'
+          - __verify_vault_env.stat.gr_name == 'root'
+        fail_msg: "vault.env has incorrect permissions or ownership (expect root:root 0600, #38/#41)"
 
     ###########################################################################
     # vault.hcl content validation
@@ -364,3 +364,47 @@
         fail_msg: >-
           vault-aide-check.service was deployed even though aide is not
           installed — the presence gate did not fire.
+
+    ###########################################################################
+    # Least-privilege ownership (issue #38): the vault process must NOT be able
+    # to write the artifacts that define its posture, but MUST still write its
+    # own data. Run writes AS the vault user via `runuser` (util-linux) — NOT
+    # `become_user: vault` (the image has no sudo and vault's shell is /bin/false).
+    ###########################################################################
+    - name: Confirm runuser is available (mechanism sanity)
+      ansible.builtin.command: command -v runuser
+      changed_when: false
+
+    - name: Attempt writes AS the vault user (must be DENIED post-#38)
+      ansible.builtin.command: "runuser -u vault -- sh -c '{{ item.cmd }}'"
+      register: __vault_write
+      changed_when: false
+      failed_when: false
+      loop:
+        - { label: "append vault.hcl", cmd: "echo x >> /etc/vault.d/vault.hcl" }
+        - { label: "append vault.env", cmd: "echo x >> /etc/vault.d/vault.env" }
+        - { label: "create in /opt/vault/tls", cmd: "echo x > /opt/vault/tls/attack.crt" }
+      loop_control:
+        label: "{{ item.label }}"
+
+    - name: Assert every write AS vault was DENIED (rc != 0)
+      ansible.builtin.assert:
+        that:
+          - item.rc != 0
+        fail_msg: "vault user could WRITE {{ item.item.label }} (rc {{ item.rc }}) — #38 not enforced"
+        success_msg: "denied: {{ item.item.label }}"
+      loop: "{{ __vault_write.results }}"
+      loop_control:
+        label: "{{ item.item.label }}"
+
+    - name: Regression guard — vault cannot create in /etc/vault.d (already root:vault; GREEN throughout)
+      ansible.builtin.command: "runuser -u vault -- sh -c 'echo x > /etc/vault.d/probe'"
+      register: __vaultd_create
+      changed_when: false
+      failed_when: __vaultd_create.rc == 0
+
+    - name: Regression guard — vault CAN still write its own data dir (must SUCCEED)
+      ansible.builtin.command: "runuser -u vault -- sh -c 'echo x > {{ vault_data_dir }}/probe'"
+      register: __data_write
+      changed_when: false
+      failed_when: __data_write.rc != 0
