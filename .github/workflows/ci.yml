@@ -361,7 +361,13 @@ jobs:
           # NOT forward, fall back to:
           #   ansible-playbook -i "$(molecule --scenario-name hsm reset >/dev/null; \
           #     ls molecule/hsm/../../.cache 2>/dev/null)" ... --check --diff
-          out="$(molecule converge --scenario-name hsm -- --check --diff 2>&1)" || { echo "$out"; exit 1; }
+          # Skip 'stig' in the CHECK-mode run: the STIG phase enables the
+          # vault-audit-backup.timer, and systemd can't enable a unit that
+          # check-mode never actually wrote ("Could not find the requested
+          # service") — a pre-existing check-mode limitation unrelated to the PIN.
+          # The real converge below keeps STIG for full coverage. (Full skip list
+          # passed so it wins regardless of how molecule's own --skip-tags merges.)
+          out="$(molecule converge --scenario-name hsm -- --check --diff --skip-tags preflight,service_start,stig 2>&1)" || { echo "$out"; exit 1; }
           # ANTI-VACUOUS GUARD: if --check did NOT take effect (arg-forwarding
           # broken), the converge wrote vault.env for real. It MUST still be absent.
           if podman exec vault-el test -f /etc/vault.d/vault.env; then
