@@ -182,7 +182,10 @@ echo "Found ${#UNSEAL_KEYS[@]} unseal key(s); unsealing Vault..."
 # iteration re-checks status and the final error comes from it.
 ###############################################################################
 for key in "${UNSEAL_KEYS[@]}"; do
-    if ! vault operator unseal "$key" >/dev/null 2>&1; then
+    # Key via stdin (the "-" sentinel), NEVER argv: auditd execve records only
+    # "vault operator unseal -", not the key. Do NOT revert to `unseal "$key"`
+    # (issue #31). `printf '%s'` — no trailing newline into the key reader.
+    if ! printf '%s' "$key" | vault operator unseal - >/dev/null 2>&1; then
         echo "Warning: unseal call failed; trying next key" >&2
     fi
     rc=0
