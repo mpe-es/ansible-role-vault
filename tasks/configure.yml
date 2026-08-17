@@ -45,7 +45,12 @@
 - name: Fail closed if vault.service will not load vault.env
   ansible.builtin.assert:
     that:
-      - vault_env_file in (__vault_unit_envfiles.stdout | default(''))
+      # Match the EXACT entry, not a substring: systemctl renders each entry as
+      # "<path> (ignore_errors=<bool>)", so require the path immediately followed
+      # by " (ignore_errors=". A bare `vault_env_file in stdout` would false-pass
+      # on e.g. "/etc/vault.d/vault.env.disabled (ignore_errors=no)" — a DIFFERENT
+      # file the unit does not consume (codex review).
+      - (vault_env_file ~ ' (ignore_errors=') in (__vault_unit_envfiles.stdout | default(''))
     fail_msg: >-
       The installed vault.service has no EnvironmentFile referencing
       {{ vault_env_file }}, so VAULT_HSM_PIN would never reach Vault. Check the

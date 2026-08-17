@@ -78,8 +78,8 @@
           systemd EnvironmentFile did NOT preserve the quoted value
           (got '{{ __rt.content | b64decode }}') — double-quoting assumption wrong.
 
-    # --- Test 3: §2a charset assert fails CLOSED on an unsafe PIN ---------
-    - name: Prove the charset assert rejects an embedded-quote PIN (negative)
+    # --- Test 3a: §2a charset assert fails CLOSED via the REAL assert path -
+    - name: Prove the charset assert aborts the play on an embedded-quote PIN
       block:
         - name: Run the charset assert with an unsafe PIN (must fail)
           ansible.builtin.assert:
@@ -99,3 +99,36 @@
               - "'REJECT_UNSAFE_PIN' in ansible_failed_result.msg"
             fail_msg: "failed, but not at the charset assert"
             success_msg: "charset assert correctly rejected the unsafe PIN"
+
+    # --- Test 3b: table-driven — the regex rejects EVERY prohibited family
+    #     and accepts safe values (durable against a char-class regression) --
+    - name: The charset regex REJECTS every prohibited character family
+      ansible.builtin.assert:
+        that:
+          - item | regex_search('[\x00-\x1f\x7f"\\\\]') is not none
+        fail_msg: "charset regex FAILED to reject: {{ item | to_json }}"
+        quiet: true
+      loop:
+        - 'embed"quote'      # double-quote
+        - 'back\slash'       # backslash
+        - "line\nfeed"       # LF
+        - "carriage\rret"    # CR
+        - "tab\tchar"        # tab
+        - "del\x7fchar"      # DEL
+        - "null\x00byte"     # C0
+      loop_control:
+        label: "reject {{ item | to_json }}"
+
+    - name: "The charset regex ACCEPTS safe values (incl. #, =, $, spaces)"
+      ansible.builtin.assert:
+        that:
+          - item | regex_search('[\x00-\x1f\x7f"\\\\]') is none
+        fail_msg: "charset regex WRONGLY rejected safe value: {{ item | to_json }}"
+        quiet: true
+      loop:
+        - 'plainPIN123'
+        - ' leading-and-trailing '
+        - 'has#hash=eq$dollar'
+        - "unicode-café-ok"
+      loop_control:
+        label: "accept {{ item | to_json }}"
