@@ -6,6 +6,62 @@
 # Classification: UNCLASSIFIED
 ###############################################################################
 
+# --- issue #41: fail closed BEFORE rendering the PIN into vault.env ----------
+# Co-located here (Phase 6, after install) so the PIN is validated on every
+# execution path that reaches the render (the role uses dynamic include_tasks
+# whose tags do not propagate — see tasks/main.yml). PIN checks run before the
+# delivery check so a bad PIN fails fast without touching systemd. The asserts
+# use bare expressions (no {{ }}-interpolation of the value), so an assert
+# failure surfaces the expression, NOT the PIN — hence no no_log needed.
+- name: Assert HSM PIN is present (not empty or whitespace-only)
+  ansible.builtin.assert:
+    that:
+      - vault_hsm_pin | trim | length > 0
+    fail_msg: >-
+      vault_hsm_pin is empty or whitespace-only but vault_hsm_enabled is true.
+      Provide the PKCS#11 PIN (AAP credential / vault-encrypted var).
+  when: vault_hsm_enabled | bool
+
+- name: Assert HSM PIN contains no character unsafe for systemd EnvironmentFile
+  ansible.builtin.assert:
+    that:
+      # reject embedded " backslash or a control char (C0 0x00-0x1F incl.
+      # newline/tab, or DEL 0x7F); leading/trailing SPACES are allowed
+      # (double-quoting preserves them). 4 backslashes -> \\ in Jinja -> \ in re.
+      - vault_hsm_pin | regex_search('[\x00-\x1f\x7f"\\\\]') is none
+    fail_msg: >-
+      vault_hsm_pin contains a character that systemd EnvironmentFile
+      double-quoting cannot carry (double-quote, backslash, newline/tab, or a
+      C0/DEL control character). Use a PIN without those characters.
+  when: vault_hsm_enabled | bool
+
+- name: Assert the installed unit delivers vault.env (EnvironmentFile present)
+  ansible.builtin.command: systemctl show -p EnvironmentFiles vault.service
+  register: __vault_unit_envfiles
+  changed_when: false
+  check_mode: false          # command is skipped under --check by default
+  when: vault_hsm_enabled | bool
+
+- name: Fail closed if vault.service will not load vault.env
+  ansible.builtin.assert:
+    that:
+      # Match the EXACT entry with BOTH boundaries (codex review, 2 rounds).
+      # systemctl renders each entry as "<path> (ignore_errors=<bool>)". Replacing
+      # the "EnvironmentFiles=" property prefix with a space makes every entry
+      # space-preceded, so requiring " <path> (ignore_errors=" enforces a left AND
+      # right boundary. A bare substring test would false-pass on a suffix
+      # ("…/vault.env.disabled") OR a prefix ("/backup/etc/vault.d/vault.env") —
+      # both DIFFERENT files the unit does not consume.
+      - (' ' ~ vault_env_file ~ ' (ignore_errors=') in
+        (__vault_unit_envfiles.stdout | default('') | replace('EnvironmentFiles=', ' '))
+    fail_msg: >-
+      The installed vault.service has no EnvironmentFile referencing
+      {{ vault_env_file }}, so VAULT_HSM_PIN would never reach Vault. Check the
+      packaged unit / drop-ins (an out-of-band 'dnf update vault' may have
+      changed it).
+  when: vault_hsm_enabled | bool
+# ----------------------------------------------------------------------------
+
 - name: Deploy Vault server configuration
   ansible.builtin.template:
     src: vault.hcl.j2
@@ -22,4 +78,5 @@
     owner: "{{ vault_user }}"
     group: "{{ vault_group }}"
     mode: "{{ vault_env_file_mode }}"
+  diff: false          # this file can carry VAULT_HSM_PIN — keep it out of --diff (#41)
   notify: Restart vault

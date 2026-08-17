@@ -482,8 +482,10 @@ argument_specs:
         description:
           - HSM PIN for PKCS#11 login.
           - Should be provided via AAP credential, not stored in playbook.
+          - Delivered to Vault via VAULT_HSM_PIN in vault.env, never vault.hcl (#41).
         type: str
         default: ""
+        no_log: true
 
       vault_hsm_key_label:
         description:

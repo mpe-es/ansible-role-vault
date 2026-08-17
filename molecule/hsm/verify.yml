@@ -1,0 +1,138 @@
+---
+###############################################################################
+# Filename: molecule/hsm/verify.yml
+# Role: ansible-role-vault
+# Summary: Verify HSM PIN handling (issue #41), no real HSM:
+#   Test 1 - vault.hcl has NO PIN; vault.env HAS the double-quoted PIN; the
+#            vault.env deploy task carries diff:false (static guard). The real
+#            --check --diff suppression is grepped in the CI job (Task 6).
+#   Test 2 - systemd EnvironmentFile preserves a double-quoted value verbatim
+#            (leading/trailing whitespace) on the target systemd.
+#   Test 3 - the §2a charset assert fails CLOSED on an unsafe PIN.
+# Classification: UNCLASSIFIED
+###############################################################################
+- name: "Verify (HSM PIN handling, issue #41)"
+  hosts: all
+  vars:
+    __core: "S3NTINEL-hsm-pin"
+    __env_line: 'VAULT_HSM_PIN=" S3NTINEL-hsm-pin "'
+  tasks:
+    # --- Test 1: render — FILE CONTENTS (sound; not vacuous) --------------
+    - name: Slurp rendered vault.hcl and vault.env
+      ansible.builtin.slurp:
+        src: "{{ item }}"
+      loop:
+        - /etc/vault.d/vault.hcl
+        - /etc/vault.d/vault.env
+      register: __files
+
+    - name: Assert vault.hcl has NO PIN and vault.env HAS the double-quoted PIN
+      ansible.builtin.assert:
+        that:
+          - __core not in (__files.results[0].content | b64decode)
+          - "'pin ' not in (__files.results[0].content | b64decode)"
+          - __env_line in (__files.results[1].content | b64decode)
+        fail_msg: "PIN placement wrong (see #41)"
+        success_msg: "PIN is in vault.env (double-quoted) and absent from vault.hcl"
+
+    - name: Assert the vault.env deploy task carries diff:false (static guard)
+      ansible.builtin.assert:
+        that:
+          - "'diff: false' in lookup('file', playbook_dir ~ '/../../tasks/configure.yml')"
+        fail_msg: "configure.yml lost diff:false — PIN could leak into --diff"
+
+    # --- Test 2: systemd EnvironmentFile quote round-trip (no HSM) --------
+    - name: Write a round-trip probe EnvironmentFile (quoted, leading/trailing space)
+      ansible.builtin.copy:
+        dest: /tmp/rt.env
+        content: "VAULT_HSM_PIN=\" abc \"\n"
+        mode: '0600'
+
+    - name: Deploy a oneshot unit that echoes the env var to a file
+      ansible.builtin.copy:
+        dest: /usr/lib/systemd/system/rt-probe.service
+        mode: '0644'
+        content: |
+          [Service]
+          Type=oneshot
+          RemainAfterExit=yes
+          EnvironmentFile=/tmp/rt.env
+          # %%s: escape the systemd specifier so printf gets a literal %s (a bare
+          # %s in a unit is systemd's "user shell" specifier -> /bin/bash).
+          # $VAULT_HSM_PIN (single $) is left for the shell to expand from the
+          # EnvironmentFile-loaded environment — which is exactly what we test.
+          ExecStart=/bin/sh -c 'printf %%s "$VAULT_HSM_PIN" > /tmp/rt.out'
+
+    - name: Start the round-trip probe
+      ansible.builtin.systemd_service:
+        name: rt-probe
+        state: started
+        daemon_reload: true
+
+    - name: Read back the delivered value
+      ansible.builtin.slurp:
+        src: /tmp/rt.out
+      register: __rt
+
+    - name: Assert systemd preserved the quoted value byte-for-byte (incl. spaces)
+      ansible.builtin.assert:
+        that:
+          - (__rt.content | b64decode) == ' abc '
+        fail_msg: >-
+          systemd EnvironmentFile did NOT preserve the quoted value
+          (got '{{ __rt.content | b64decode }}') — double-quoting assumption wrong.
+
+    # --- Test 3a: §2a charset assert fails CLOSED via the REAL assert path -
+    - name: Prove the charset assert aborts the play on an embedded-quote PIN
+      block:
+        - name: Run the charset assert with an unsafe PIN (must fail)
+          ansible.builtin.assert:
+            that:
+              - vault_hsm_pin | regex_search('[\x00-\x1f\x7f"\\\\]') is none
+            fail_msg: "REJECT_UNSAFE_PIN"
+          vars:
+            vault_hsm_pin: 'embed"quote'
+
+        - name: This must be unreachable (charset assert is a no-op)
+          ansible.builtin.fail:
+            msg: "charset assert did NOT reject an embedded quote — §2a is a no-op"
+      rescue:
+        - name: Confirm the failure was the charset assert (not something else)
+          ansible.builtin.assert:
+            that:
+              - "'REJECT_UNSAFE_PIN' in ansible_failed_result.msg"
+            fail_msg: "failed, but not at the charset assert"
+            success_msg: "charset assert correctly rejected the unsafe PIN"
+
+    # --- Test 3b: table-driven — the regex rejects EVERY prohibited family
+    #     and accepts safe values (durable against a char-class regression) --
+    - name: The charset regex REJECTS every prohibited character family
+      ansible.builtin.assert:
+        that:
+          - item | regex_search('[\x00-\x1f\x7f"\\\\]') is not none
+        fail_msg: "charset regex FAILED to reject: {{ item | to_json }}"
+        quiet: true
+      loop:
+        - 'embed"quote'      # double-quote
+        - 'back\slash'       # backslash
+        - "line\nfeed"       # LF
+        - "carriage\rret"    # CR
+        - "tab\tchar"        # tab
+        - "del\x7fchar"      # DEL
+        - "ctrl\x01char"     # C0 low-end (SOH; avoid a literal NUL, which Ansible chokes on)
+      loop_control:
+        label: "reject {{ item | to_json }}"
+
+    - name: "The charset regex ACCEPTS safe values (incl. #, =, $, spaces)"
+      ansible.builtin.assert:
+        that:
+          - item | regex_search('[\x00-\x1f\x7f"\\\\]') is none
+        fail_msg: "charset regex WRONGLY rejected safe value: {{ item | to_json }}"
+        quiet: true
+      loop:
+        - 'plainPIN123'
+        - ' leading-and-trailing '
+        - 'has#hash=eq$dollar'
+        - "unicode-café-ok"
+      loop_control:
+        label: "accept {{ item | to_json }}"
