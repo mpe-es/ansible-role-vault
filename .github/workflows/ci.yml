@@ -70,6 +70,9 @@ jobs:
       - name: Assert no CLI-argv unseal form (issue #31 regression lock)
         run: bash tests/assert-no-unseal-argv.sh
 
+      - name: Assert least-privilege ownership posture (issue #38)
+        run: bash tests/assert-root-owned-posture.sh
+
   ###########################################################
   # Syntax Check Stage
   ###########################################################
