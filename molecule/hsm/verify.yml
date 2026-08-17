@@ -115,7 +115,7 @@
         - "carriage\rret"    # CR
         - "tab\tchar"        # tab
         - "del\x7fchar"      # DEL
-        - "null\x00byte"     # C0
+        - "ctrl\x01char"     # C0 low-end (SOH; avoid a literal NUL, which Ansible chokes on)
       loop_control:
         label: "reject {{ item | to_json }}"
 
