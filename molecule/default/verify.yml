@@ -372,7 +372,11 @@
     # `become_user: vault` (the image has no sudo and vault's shell is /bin/false).
     ###########################################################################
     - name: Confirm runuser is available (mechanism sanity)
-      ansible.builtin.command: command -v runuser
+      # `runuser --version` execs the real binary (util-linux). Do NOT use
+      # `command -v runuser`: `command` is a shell builtin, and
+      # ansible.builtin.command execvp's a literal binary named `command`
+      # (absent on RHEL/UBI) → "Unable to find executable" (branch-review RC3).
+      ansible.builtin.command: runuser --version
       changed_when: false
 
     - name: Attempt writes AS the vault user (must be DENIED post-#38)
