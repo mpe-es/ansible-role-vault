@@ -387,6 +387,33 @@ adversary with root or disk access. Prefer the HSM PKCS#11 seal
 (`vault_hsm_enabled`, Enterprise) or manual unseal where operationally
 feasible; see issue #34 for the planned secure-by-default init handoff.
 
+### HSM PKCS#11 seal PIN (`vault_hsm_pin`)
+
+The PKCS#11 seal PIN is **never written to `vault.hcl`** (issue #41). The role
+omits the `pin` attribute from the `seal "pkcs11"` stanza and supplies it via the
+**`VAULT_HSM_PIN` environment variable** in `/etc/vault.d/vault.env`, which the
+packaged `vault.service` unit reads through `EnvironmentFile=` — HashiCorp's
+[documented and *strongly recommended*](https://developer.hashicorp.com/vault/docs/configuration/seal/pkcs11)
+channel for the PIN. This keeps the PIN out of `vault.hcl` (which lands in config
+backups and support bundles), out of `--diff`/check-mode output (`diff: false` on
+the env-file render), and out of AAP surveys/logs (`no_log` on `vault_hsm_pin`).
+
+- **Provide the PIN via an AAP credential or a vault-encrypted variable** — never
+  in plain inventory.
+- **PIN character constraint (fail-closed):** the PIN must not contain a
+  double-quote (`"`), a backslash (`\`), a newline/tab, or any C0/DEL control
+  character — the residue systemd `EnvironmentFile` double-quoting cannot carry.
+  Leading/trailing spaces *are* preserved. The role asserts this (and that the PIN
+  is non-empty, and that the installed unit exposes `EnvironmentFile`) before
+  rendering, so a bad PIN fails the play loudly instead of silently corrupting the
+  value into a failed unseal.
+- **Version basis:** delivery relies on systemd's surrounding-quote-pair removal
+  (stable on EL8/9/10, systemd ≥239) and Vault 2.0.0+'s `VAULT_HSM_PIN` contract.
+  (Vault ≥1.16 also supports a `pin = "env://VAULT_HSM_PIN"` indirect reference;
+  the direct env-var form was chosen for universal version support.)
+- **`vault.env` is mode `0600`** (owner-only; only the systemd manager, as root,
+  reads it to populate the environment).
+
 ## fapolicyd File Trust
 
 When `vault_manage_fapolicyd` is `true` (the default) and a
