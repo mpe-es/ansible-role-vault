@@ -75,7 +75,7 @@
       ansible.builtin.assert:
         that:
           - __verify_vault_env.stat.exists
-          - __verify_vault_env.stat.mode == '0640'
+          - __verify_vault_env.stat.mode == '0600'
           - __verify_vault_env.stat.pw_name == 'vault'
           - __verify_vault_env.stat.gr_name == 'vault'
         fail_msg: "vault.env has incorrect permissions or ownership"

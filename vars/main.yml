@@ -48,7 +48,7 @@ vault_group: vault
 ###############################################################################
 vault_config_dir_mode: '0750'
 vault_config_file_mode: '0640'
-vault_env_file_mode: '0640'
+vault_env_file_mode: '0600'
 vault_data_dir_mode: '0750'
 vault_tls_dir_mode: '0750'
 vault_tls_file_mode: '0640'
