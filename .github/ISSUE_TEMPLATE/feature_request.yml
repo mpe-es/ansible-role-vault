@@ -1,0 +1,88 @@
+---
+###############################################################################
+# Filename: .github/ISSUE_TEMPLATE/feature_request.yml
+# Role: ansible-role-vault
+# Summary: Issue form for proposing new coverage or an enhancement
+# Last Updated: 17 Aug 2026
+# Classification: UNCLASSIFIED
+###############################################################################
+name: Feature request
+description: Propose new coverage or an enhancement
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This role manages the most sensitive material on the host. Proposals
+        that reduce the number of places a secret can appear are the most
+        likely to be accepted. See CONTRIBUTING.md.
+  - type: checkboxes
+    attributes:
+      label: Preconditions
+      options:
+        - label: I searched existing issues and this is not a duplicate
+          required: true
+  - type: dropdown
+    id: category
+    attributes:
+      label: Category
+      options:
+        - New STIG or NIST 800-53 control coverage
+        - Seal, unseal, or key-handling behavior
+        - TLS or listener configuration
+        - HA Raft cluster behavior
+        - New or changed role variable
+        - Change to an existing default
+        - New platform or Vault version support
+        - CI, testing, or supply chain
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / motivation
+      description: What gap or need does this address?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What should the role do?
+    validations:
+      required: true
+  - type: input
+    id: control-reference
+    attributes:
+      label: Control reference
+      description: NIST 800-53 control or STIG rule ID, if applicable
+      placeholder: SC-8 / V-XXXXXX
+    validations:
+      required: false
+  - type: checkboxes
+    id: security-impact
+    attributes:
+      label: Security impact
+      description: >
+        Confirm whether the proposal touches any of the following. A "yes" is
+        not disqualifying, but it must be stated up front and justified.
+      options:
+        - label: This proposal does NOT introduce a new location where key material is written or logged
+        - label: This proposal does NOT pass any secret as a command-line argument
+        - label: This proposal does NOT grant the vault service account write access to a posture-defining file
+        - label: This proposal does NOT lower vault_tls_min_version or weaken the cipher list
+        - label: This proposal does NOT change whether the node holds unseal shares at rest
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: false
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+    validations:
+      required: false

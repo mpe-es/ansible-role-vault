@@ -1,0 +1,149 @@
+---
+###############################################################################
+# Filename: .github/ISSUE_TEMPLATE/bug_report.yml
+# Role: ansible-role-vault
+# Summary: Issue form for reporting a defect in the role's behavior
+# Last Updated: 17 Aug 2026
+# Classification: UNCLASSIFIED
+###############################################################################
+name: Bug report
+description: Report a defect in the role's behavior
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug. Please do **not** report
+        security vulnerabilities here. Use private reporting per SECURITY.md.
+
+        **Never paste real key material.** Unseal shares, recovery keys, root
+        tokens, HSM PINs, and TLS private keys must be redacted before you
+        submit. Redact internal hostnames and enclave identifiers too; this is
+        a public repository.
+  - type: checkboxes
+    attributes:
+      label: Preconditions
+      options:
+        - label: I searched existing issues and this is not a duplicate
+          required: true
+        - label: This is not a security vulnerability (those go through private reporting)
+          required: true
+        - label: I have redacted all key material, hostnames, and operational identifiers
+          required: true
+  - type: input
+    id: role-version
+    attributes:
+      label: Role version
+      description: Release tag or git commit hash
+      placeholder: v0.1.0 (or commit sha)
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Target platform
+      options:
+        - RHEL 8
+        - RHEL 9
+        - RHEL 10
+        - Other (describe below)
+    validations:
+      required: true
+  - type: input
+    id: vault-version
+    attributes:
+      label: Vault version
+      placeholder: "1.18.5"
+    validations:
+      required: true
+  - type: input
+    id: ansible-version
+    attributes:
+      label: ansible-core version
+      placeholder: "2.21.3"
+    validations:
+      required: true
+  - type: dropdown
+    id: seal-type
+    attributes:
+      label: Seal configuration
+      description: >
+        Which seal is in use. This determines which unseal path the role takes
+        and is the single most useful fact for triage.
+      options:
+        - Shamir, unsealed by the role at init (vault_init_unseal true)
+        - Shamir, boot-time auto-unseal service (vault_auto_unseal_enabled true)
+        - Shamir, deliberately left sealed (vault_init_unseal false)
+        - PKCS#11 HSM (vault_hsm_enabled true)
+        - Not yet initialized
+        - Other or unsure (describe below)
+    validations:
+      required: true
+  - type: dropdown
+    id: topology
+    attributes:
+      label: Topology
+      options:
+        - Single node
+        - HA Raft cluster
+    validations:
+      required: true
+  - type: textarea
+    id: role-variables
+    attributes:
+      label: Relevant role variables
+      description: >
+        The non-default variables you set. Redact any secret values, including
+        vault_hsm_pin and TLS paths that reveal internal structure.
+      render: yaml
+      placeholder: |
+        vault_initialize: true
+        vault_init_unseal: true
+        vault_hsm_enabled: false
+        vault_tls_source: file
+    validations:
+      required: true
+  - type: checkboxes
+    id: environment
+    attributes:
+      label: Environment
+      description: >
+        These conditions account for a large share of reports that present as
+        role defects. Please confirm before filing.
+      options:
+        - label: The host is airgapped (no internet egress)
+        - label: SELinux is enforcing
+        - label: fapolicyd is active
+        - label: The node was previously initialized by something other than this role
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What went wrong?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Run the role against ...
+        2. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior and logs
+      description: >
+        Include relevant Ansible output, and `vault status` or
+        `journalctl -u vault` where applicable. Redact all key material.
+      render: shell
+    validations:
+      required: false
