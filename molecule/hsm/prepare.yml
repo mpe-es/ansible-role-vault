@@ -1,0 +1,105 @@
+---
+###############################################################################
+# Filename: molecule/hsm/prepare.yml
+# Role: ansible-role-vault
+# Summary: Mocks for the HSM PIN scenario (issue #41). Modeled on
+#   molecule/default (no-Vault): mock vault binary (install.yml asserts it
+#   exists, ungated), mock oneshot unit — with the hsm-specific
+#   EnvironmentFile=/etc/vault.d/vault.env so §2a-b's delivery assert passes —
+#   and mock TLS. No legacy-unseal / fapolicyd fixtures (unused under HSM).
+# Classification: UNCLASSIFIED
+###############################################################################
+- name: Prepare (HSM PIN scenario)
+  hosts: all
+  gather_facts: false
+
+  tasks:
+    - name: Bootstrap requested Python interpreter
+      ansible.builtin.raw: >-
+        sh -c 'test -x {{ ansible_python_interpreter }}
+        || dnf install -y {{ ansible_python_interpreter | basename }}'
+      register: __prepare_python
+      changed_when: "'Installed:' in __prepare_python.stdout"
+
+    - name: Gather facts after Python bootstrap
+      ansible.builtin.setup:
+
+    - name: Install packages needed for role testing
+      ansible.builtin.raw: >-
+        dnf install -y python3-libselinux policycoreutils-python-utils
+      register: __prepare_packages
+      changed_when: "'Installed:' in __prepare_packages.stdout"
+
+    - name: Create vault group
+      ansible.builtin.group:
+        name: vault
+        system: true
+
+    - name: Create vault user
+      ansible.builtin.user:
+        name: vault
+        group: vault
+        system: true
+        shell: /bin/false
+        create_home: false
+
+    # REQUIRED: install.yml:44-54 stat+asserts /usr/bin/vault exists, ungated
+    # (even with vault_manage_install: false). Without it the converge aborts.
+    - name: Create mock vault binary
+      ansible.builtin.copy:
+        content: |
+          #!/bin/bash
+          echo "mock vault binary"
+        dest: /usr/bin/vault
+        owner: root
+        group: root
+        mode: '0755'
+
+    # Mock unit MIRRORS molecule/default (oneshot + RemainAfterExit + /bin/true)
+    # so the flushed "Restart vault" handler restarts cleanly. The ONLY
+    # hsm-specific addition is EnvironmentFile — what §2a-b asserts is present.
+    - name: "Create mock vault systemd unit with EnvironmentFile (issue #41)"
+      ansible.builtin.copy:
+        content: |
+          [Unit]
+          Description=HashiCorp Vault (hsm mock)
+          [Service]
+          Type=oneshot
+          RemainAfterExit=yes
+          EnvironmentFile=/etc/vault.d/vault.env
+          ExecStart=/bin/true
+          User=vault
+          Group=vault
+          CapabilityBoundingSet=CAP_IPC_LOCK
+          [Install]
+          WantedBy=multi-user.target
+        dest: /usr/lib/systemd/system/vault.service
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Reload systemd so `systemctl show` reflects the EnvironmentFile
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+
+    - name: Create mock TLS material
+      block:
+        - name: Create TLS directory
+          ansible.builtin.file:
+            path: /opt/vault/tls
+            state: directory
+            owner: vault
+            group: vault
+            mode: '0750'
+
+        - name: Create mock cert files
+          ansible.builtin.copy:
+            content: "mock certificate"
+            dest: "{{ item }}"
+            owner: vault
+            group: vault
+            mode: '0640'
+          loop:
+            - /opt/vault/tls/tls.crt
+            - /opt/vault/tls/tls.key
+            - /opt/vault/tls/ca.crt
