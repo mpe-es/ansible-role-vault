@@ -1,0 +1,15 @@
+---
+###############################################################################
+# Filename: molecule/hsm/converge.yml
+# Role: ansible-role-vault
+# Summary: Execute the real role with HSM enabled (issue #41) so configure.yml
+#   renders vault.hcl (no PIN) + vault.env (double-quoted VAULT_HSM_PIN) and the
+#   §2a fail-closed validation runs. All HSM vars come from molecule.yml.
+# Classification: UNCLASSIFIED
+###############################################################################
+- name: Converge (HSM PIN handling)
+  hosts: all
+  tasks:
+    - name: Execute the ansible-role-vault role
+      ansible.builtin.import_role:
+        name: ansible-role-vault
