@@ -80,7 +80,7 @@ seal "pkcs11" {
 {% if vault_hsm_token_label | default('') | length > 0 %}
   token_label    = "{{ vault_hsm_token_label }}"
 {% endif %}
-  pin            = "{{ vault_hsm_pin }}"
+  # PIN is supplied via VAULT_HSM_PIN in vault.env (issue #41) — NEVER here.
   key_label      = "{{ vault_hsm_key_label }}"
   hmac_key_label = "{{ vault_hsm_hmac_key_label }}"
 {% if vault_hsm_mechanism | default('') | length > 0 %}
