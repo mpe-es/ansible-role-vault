@@ -1,0 +1,34 @@
+---
+###############################################################################
+# Filename: tests/hsm-validate-probe.yml
+# Role: ansible-role-vault
+# Summary: Local fast-loop for issue #41 — runs ONLY the two PIN validation
+#   asserts (charset + non-empty) so a bad PIN can be shown to fail closed
+#   without a container. The EnvironmentFile-delivery assert needs live systemd
+#   and is covered by the molecule hsm scenario, not here.
+# Usage: ansible-playbook -i localhost, -c local tests/hsm-validate-probe.yml \
+#          -e vault_hsm_enabled=true -e "vault_hsm_pin=<pin>"
+# Classification: UNCLASSIFIED
+###############################################################################
+- name: "Issue #41 HSM PIN validation fast-loop"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Assert HSM PIN is present (not empty or whitespace-only)
+      ansible.builtin.assert:
+        that:
+          - vault_hsm_pin | trim | length > 0
+        fail_msg: >-
+          vault_hsm_pin is empty or whitespace-only but vault_hsm_enabled is true.
+      when: vault_hsm_enabled | bool
+
+    - name: Assert HSM PIN contains no character unsafe for systemd EnvironmentFile
+      ansible.builtin.assert:
+        that:
+          - vault_hsm_pin | regex_search('[\x00-\x1f\x7f"\\\\]') is none
+        fail_msg: >-
+          vault_hsm_pin contains a character that systemd EnvironmentFile
+          double-quoting cannot carry (double-quote, backslash, newline/tab, or a
+          C0/DEL control character).
+      when: vault_hsm_enabled | bool
