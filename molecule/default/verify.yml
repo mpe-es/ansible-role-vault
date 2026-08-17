@@ -408,7 +408,9 @@
       failed_when: __vaultd_create.rc == 0
 
     - name: Regression guard — vault CAN still write its own data dir (must SUCCEED)
-      ansible.builtin.command: "runuser -u vault -- sh -c 'echo x > {{ vault_data_dir }}/probe'"
+      # Hardcode the path: verify.yml does NOT load the role's vars/main.yml, so
+      # {{ vault_data_dir }} is undefined here (the other tests use literal paths).
+      ansible.builtin.command: "runuser -u vault -- sh -c 'echo x > /opt/vault/data/probe'"
       register: __data_write
       changed_when: false
       failed_when: __data_write.rc != 0
