@@ -30,8 +30,11 @@
       owner: "{{ vault_user }}"
       group: "{{ vault_group }}"
       mode: "{{ vault_data_dir_mode }}"
+    # root:{{ vault_group }} — root-owning the DIRECTORY stops the vault process
+    # replacing its cert files (dir write allows unlink/create regardless of file
+    # ownership); group r-x keeps it traversable so vault reads the key (#38).
     - path: "{{ vault_tls_dir }}"
-      owner: "{{ vault_user }}"
+      owner: root
       group: "{{ vault_group }}"
       mode: "{{ vault_tls_dir_mode }}"
     - path: "{{ vault_log_dir }}"
