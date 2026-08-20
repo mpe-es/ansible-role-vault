@@ -4,17 +4,17 @@
 # Role: ansible-role-vault
 # Summary: Ansible Role metadata for HashiCorp Vault installation and STIG
 #   compliance on RHEL systems
-# Last Updated: 03 Apr 2026
+# Last Updated: 20 Aug 2026
 # Classification: UNCLASSIFIED
 ###############################################################################
 galaxy_info:
-  namespace: darkhonor
+  namespace: mpe-es
   role_name: vault
   author: Alex Ackerman
   description: >-
-    Install and configure HashiCorp Vault on RHEL with STIG compliance.
-    Supports single-node and HA (3/5-node) Raft clusters in airgap or
-    internet-connected environments.
+    Install and configure HashiCorp Vault on RHEL with STIG compliance in
+    airgap or internet-connected environments. Single-node deployments are
+    fully supported; multi-node Raft HA is developmental (see README).
   license: Apache-2.0
   min_ansible_version: '2.17'
   platforms:

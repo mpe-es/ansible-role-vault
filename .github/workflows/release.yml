@@ -3,10 +3,15 @@
 # Filename: .github/workflows/release.yml
 # Role: ansible-role-vault
 # Summary: Publish role to Ansible Galaxy on release
-# Last Updated: 03 Apr 2026
+# Last Updated: 20 Aug 2026
 # Classification: UNCLASSIFIED
 ###############################################################################
 name: Release to Galaxy
+
+# Least-privilege default for GITHUB_TOKEN. This workflow only reads the
+# repository and pushes to Ansible Galaxy using GALAXY_API_KEY.
+permissions:
+  contents: read
 
 on:
   release:

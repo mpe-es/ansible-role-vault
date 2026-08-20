@@ -111,8 +111,13 @@ vault_raft_node_id: "{{ inventory_hostname_short }}"
 
 ###############################################################################
 # Cluster / HA Configuration
-# Single-node: leave vault_cluster_members empty or undefined
-# HA cluster: provide a list of cluster member FQDNs or IPs
+# Single-node: leave vault_cluster_leader_addr empty (the default). No
+#   retry_join stanza is rendered and the node stands alone.
+# Multi-node: set vault_cluster_leader_addr to the address a joining node
+#   should contact. NOTE: the template renders exactly ONE retry_join block
+#   from this single scalar, which is not a complete Raft HA join contract
+#   (Raft expects a retry_join per peer). Multi-node HA is developmental --
+#   see "Known Limitations" in the README and issue #44.
 ###############################################################################
 # API address advertised to clients
 # Format: https://<fqdn_or_ip>:8200

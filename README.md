@@ -1,13 +1,44 @@
 # Ansible Role: HashiCorp Vault
 
-Install and configure HashiCorp Vault on RHEL systems with DISA STIG compliance.
-Supports single-node and HA (3/5-node) Raft clusters in airgap or internet-connected environments.
+Install and configure HashiCorp Vault on RHEL systems with DISA STIG compliance,
+in airgap or internet-connected environments.
+
+> **Maturity.** Single-node deployments are the supported, CI-exercised path.
+> **Multi-node Raft HA is developmental** — the role renders cluster
+> configuration but does not yet implement a complete cluster standup. Read
+> [Known Limitations](#known-limitations) before planning a cluster.
 
 ## Requirements
 
 ### Platform
 
-- RHEL 8, 9, or 10 (or compatible EL distribution)
+- RHEL 8, 9, or 10.
+- **Red Hat proper, not a rebuild.** Preflight hard-fails when
+  `subscription-manager identity` returns non-zero, so Rocky, AlmaLinux and
+  CentOS Stream do not currently pass even though the OS-family assert admits
+  them. Relaxing this gate is tracked in
+  [#36](https://github.com/mpe-es/ansible-role-vault/issues/36).
+
+### Target Host Prerequisites
+
+`tasks/preflight.yml` **hard-fails the play** if any of the following is not
+already true on the target. These are gates, not things the role configures for
+you — provision them in your image or an earlier play:
+
+| Gate | Requirement | Why |
+|------|-------------|-----|
+| FIPS mode | `/proc/sys/crypto/fips_enabled` is `1` | FIPS 140-3 validated modules (SC-13). Enable with `fips-mode-setup --enable && reboot` |
+| SELinux | `enabled` **and** `enforcing` | The role sets SELinux fcontexts; permissive/disabled hosts are rejected |
+| Time sync | `chronyc tracking` reports `Leap status : Normal` | Raft consensus and TLS validity windows need accurate time. **chrony must be installed** — a missing `chronyc` fails the task rather than the assert |
+| firewalld | service `ActiveState == active` | Enforced unconditionally, **even when `vault_manage_firewall: false`** ([#36](https://github.com/mpe-es/ansible-role-vault/issues/36)) |
+| RHSM | `subscription-manager identity` returns 0 | Satellite repository access |
+
+Two further checks are advisory, not gates:
+
+- **DNS resolution** of `ansible_fqdn` — prints a warning only.
+- **API port availability** — this assert is currently inert and cannot fail
+  ([#36](https://github.com/mpe-es/ansible-role-vault/issues/36)). Do not rely
+  on it to catch a port conflict; Vault will instead fail at service start.
 
 ### Ansible
 
@@ -52,7 +83,11 @@ auto-generation and input validation.
 
 ### Other
 
-- TLS certificates for the Vault listener (provided externally or via this role)
+- TLS certificates for the Vault listener (provided externally or via this
+  role). **Preflight does not verify that these exist.** When
+  `vault_manage_tls: false`, a missing or wrong-SAN certificate at
+  `vault_tls_cert_file` surfaces as a Vault service-start failure, not as a
+  preflight error ([#36](https://github.com/mpe-es/ansible-role-vault/issues/36)).
 - For airgap: a local RPM mirror (e.g., Red Hat Satellite content view) hosting the HashiCorp Vault package and GPG key
 
 ## Role Variables
@@ -166,7 +201,7 @@ for Python library dependencies. No other Ansible role dependencies.
 - hosts: vault
   become: true
   roles:
-    - role: darkhonor.vault
+    - role: mpe-es.vault
       vars:
         vault_manage_tls: true
         vault_tls_src_cert: "files/vault-tls.crt"
@@ -180,28 +215,39 @@ for Python library dependencies. No other Ansible role dependencies.
 - hosts: vault
   become: true
   roles:
-    - role: darkhonor.vault
+    - role: mpe-es.vault
       vars:
-        vault_repo_url: "https://repo.internal.mil/hashicorp/RHEL/$releasever/$basearch/stable"
-        vault_repo_gpg_key: "https://repo.internal.mil/hashicorp/gpg"
+        vault_repo_url: "https://repo.closednetwork.local/hashicorp/RHEL/$releasever/$basearch/stable"
+        vault_repo_gpg_key: "https://repo.closednetwork.local/hashicorp/gpg"
         vault_package_version: "1.18.3-1"
 ```
 
-### HA Cluster (3-Node with Load Balancer)
+### HA Cluster (3-Node with Load Balancer) — developmental
+
+> **This example configures nodes; it does not stand up a working cluster.**
+> The role renders a single `retry_join` block pointing at
+> `vault_cluster_leader_addr`, and stops there. It performs no leader election
+> ordering, no per-peer join, and no follower unseal. Running this playbook
+> across three hosts unchanged will **initialize each node as its own
+> independent Vault**, not form one Raft cluster. See
+> [Known Limitations](#known-limitations) and
+> [#44](https://github.com/mpe-es/ansible-role-vault/issues/44) for the full
+> gap analysis and the manual steps currently required.
 
 ```yaml
 - hosts: vault_cluster
   become: true
   roles:
-    - role: darkhonor.vault
+    - role: mpe-es.vault
       vars:
-        vault_cluster_leader_addr: "vault-lb.enclave.mil"
+        # Renders exactly one retry_join block. Raft expects one per peer.
+        vault_cluster_leader_addr: "vault-lb.closednetwork.local"
         vault_manage_tls: true
         vault_tls_src_cert: "files/{{ inventory_hostname }}-tls.crt"
         vault_tls_src_key: "files/{{ inventory_hostname }}-tls.key"
         vault_tls_src_ca: "files/ca.crt"
         vault_rsyslog_enabled: true
-        vault_rsyslog_host: "syslog.enclave.mil"
+        vault_rsyslog_host: "syslog.closednetwork.local"
 ```
 
 ### Migrating from the pre-#34 key-handling variables
@@ -246,7 +292,7 @@ the role is **secure by default**:
 - hosts: vault
   become: true
   roles:
-    - role: darkhonor.vault
+    - role: mpe-es.vault
       vars:
         vault_initialize: true
         # REQUIRED base controller directory for per-file key capture. The role
@@ -533,6 +579,58 @@ plaintext on the same host, and integrity checking is limited to
 `gzip -t`. Off-host transfer is the enclave's log-forwarding path (see the
 `vault_rsyslog_*` variables for remote syslog forwarding); it is out of
 scope for this backup job.
+
+## Known Limitations
+
+Current, deliberate gaps. Each is tracked; none is a surprise. Read this before
+committing the role to a production design.
+
+### Multi-node Raft HA is developmental ([#44](https://github.com/mpe-es/ansible-role-vault/issues/44))
+
+The role configures a node; it does not orchestrate a cluster.
+
+- `vault_cluster_leader_addr` is a **single scalar** and renders exactly **one**
+  `retry_join` block. Raft expects a `retry_join` per peer, so a joining node
+  has one fixed contact point and no fallback.
+- There is **no init orchestration**. With `vault_initialize: true` across a
+  play, every host initializes itself — you get N independent single-node
+  Vaults, each with its own root token and key shares, not one cluster.
+- There is **no follower unseal step** after join.
+
+Until #44 lands, treat cluster standup as a manual runbook: run the role for
+configuration, then initialize exactly one node, join and unseal followers by
+hand.
+
+### Tag-scoped runs execute zero tasks ([#28](https://github.com/mpe-es/ansible-role-vault/issues/28))
+
+`tasks/main.yml` composes the role with `include_tasks`, which does not
+propagate tags to the included file's tasks. A run such as `--tags stig`
+therefore matches nothing and **completes successfully having done nothing**.
+This fails silently, which is the dangerous part — do not use tag-scoped runs
+to apply a subset of hardening until this is fixed.
+
+### Preflight gaps ([#36](https://github.com/mpe-es/ansible-role-vault/issues/36))
+
+- The API port-availability assert is inert and cannot fail.
+- firewalld is required to be running even when `vault_manage_firewall: false`.
+- TLS certificate existence and SAN correctness are never validated.
+- The RHSM gate blocks compatible EL rebuilds that the OS-family assert admits.
+
+### Other tracked gaps
+
+| Area | Status | Issue |
+|------|--------|-------|
+| Raft snapshot backup | Not implemented — the role has no Vault **data** backup, only audit-log backup | [#35](https://github.com/mpe-es/ansible-role-vault/issues/35) |
+| rsyslog audit forwarding | Plaintext TCP; no TLS | [#40](https://github.com/mpe-es/ansible-role-vault/issues/40) |
+| Vault Enterprise editions | Cannot start unlicensed; no license management | [#42](https://github.com/mpe-es/ansible-role-vault/issues/42) |
+| Cluster port 8201 | Opened unconditionally, not scoped by source or gated on clustering | [#39](https://github.com/mpe-es/ansible-role-vault/issues/39) |
+| Compliance citations | Several control/STIG IDs are pending verification against authoritative sources | [#45](https://github.com/mpe-es/ansible-role-vault/issues/45) |
+
+### Distribution
+
+The role is **not yet published to Ansible Galaxy** and has no tagged release.
+Install from git until a `v*` tag exists. Metadata targets the `mpe-es`
+namespace; examples in this README use `mpe-es.vault` accordingly.
 
 ## Compliance
 

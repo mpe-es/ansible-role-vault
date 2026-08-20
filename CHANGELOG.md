@@ -47,6 +47,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so the boot-time key-at-rest decision is distinct from the init-time unseal
   behavior. (#51, closes #33)
 - `vault.env` tightened from `0640` to `0600`. (#55)
+- Galaxy namespace changed from `darkhonor` to `mpe-es`; the role is now
+  referenced as `mpe-es.vault` and all README examples updated to match.
+- Role description no longer advertises HA cluster support unqualified.
+  Single-node is the supported path; multi-node Raft HA is labelled
+  developmental. (#44)
+- Placeholder hostnames in README examples now use the `closednetwork.local`
+  convention shared with the sibling MPE-ES roles, replacing `*.internal.mil`
+  and `*.enclave.mil`.
+
+### Documentation
+
+- Added a **Known Limitations** section covering developmental multi-node HA
+  (#44), the silent no-op on tag-scoped runs (#28), the preflight gaps (#36),
+  and the tracked functional gaps (#35, #39, #40, #42, #45).
+- Requirements now document every prerequisite `tasks/preflight.yml` actually
+  hard-fails on — FIPS mode, SELinux enforcing, chrony synchronization,
+  firewalld running, and RHSM registration — none of which were previously
+  listed. Records that the port-availability assert is inert and that TLS
+  certificate existence is never validated. (#36)
+- Corrected the "or compatible EL distribution" platform claim: the RHSM gate
+  structurally rejects Rocky, AlmaLinux and CentOS Stream today. (#36)
+- HA example playbook now states plainly that running it unchanged across
+  three hosts produces three independent Vaults, not one Raft cluster. (#44)
+
+### Removed
+
+- `vault_log_file_mode` from `vars/main.yml` — defined but never consumed by
+  any task or template. (#37)
 
 ### Fixed
 
@@ -80,8 +108,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   directory permits unlink and replace regardless of file ownership.
   `/opt/vault/data` and `/var/log/vault` deliberately remain `vault:vault`.
   (#56, closes #38)
-- Least-privilege `permissions` set explicitly on all CI and release workflow
-  jobs, resolving the CodeQL `actions/missing-workflow-permissions` findings.
+- Least-privilege `GITHUB_TOKEN` scope declared on the CI and release
+  workflows. Both default to `contents: read` at workflow level, inherited by
+  every job; the security-scan job additionally declares
+  `security-events: write`, the scope the (still-commented) SARIF upload will
+  require once the repository is public and Advanced Security is available.
+  Resolves `actions/missing-workflow-permissions`. This matters specifically
+  because fork pull requests will run CI once the repository is public.
 
 ### Dependencies
 
