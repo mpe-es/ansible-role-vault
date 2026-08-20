@@ -53,7 +53,6 @@ vault_data_dir_mode: '0750'
 vault_tls_dir_mode: '0750'
 vault_tls_file_mode: '0640'
 vault_log_dir_mode: '0750'
-vault_log_file_mode: '0600'
 # Backup tree is root-only: it stages root-only auditd extracts, so the
 # vault service account must have no read access (dirs 0700, files 0600).
 # Do not loosen: files/vault-audit-backup.sh re-enforces 0700 on every run.

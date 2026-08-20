@@ -3,8 +3,8 @@
 # Filename: .github/dependabot.yml
 # Role: ansible-role-vault
 # Summary: Dependabot configuration for automated dependency updates.
-#          Conventions mirrored from the Microkosmos project.
-# Last Updated: 14 Jul 2026
+#          Conventions are shared across the MPE-ES Ansible role family.
+# Last Updated: 20 Aug 2026
 # Classification: UNCLASSIFIED
 ###############################################################################
 # Ecosystems monitored:
