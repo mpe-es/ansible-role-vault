@@ -409,10 +409,9 @@ jobs:
     name: Security Scan
     runs-on: ubuntu-latest
     needs: lint
-    # security-events: write is required by github/codeql-action/upload-sarif.
-    # Staged here deliberately ahead of the SARIF block below, which stays
-    # commented until the repository is public (Advanced Security is a paid
-    # feature on private repositories).
+    # security-events: write is required by github/codeql-action/upload-sarif,
+    # which publishes findings to the repository Security tab. Code scanning is
+    # free on public repositories.
     permissions:
       contents: read
       security-events: write
@@ -428,22 +427,25 @@ jobs:
           format: 'table'
           severity: 'CRITICAL,HIGH'
 
-      # NOTE: SARIF upload to GitHub Security tab requires Advanced Security
-      # (paid feature for private repos). When this repo goes public, uncomment:
-      # - name: Run Trivy (SARIF output)
-      #   uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
-      #   with:
-      #     scan-type: 'fs'
-      #     scan-ref: '.'
-      #     format: 'sarif'
-      #     output: 'trivy-results.sarif'
-      #     severity: 'CRITICAL,HIGH'
-      #
-      # - name: Upload Trivy scan results
-      #   uses: github/codeql-action/upload-sarif@d4b3ca9fa7f69d38bfcd667bdc45bc373d16277e  # v4
-      #   if: always()
-      #   with:
-      #     sarif_file: 'trivy-results.sarif'
+      # Second Trivy invocation, SARIF-formatted, feeding the Security tab.
+      # The table run above stays because it puts findings in the job log where
+      # a reviewer sees them without leaving the PR; this one makes them
+      # trackable, dedupable, and dismissible as code-scanning alerts.
+      - name: Run Trivy (SARIF output)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+
+      # if: always() so a scan that surfaces findings still publishes them.
+      - name: Upload Trivy scan results
+        uses: github/codeql-action/upload-sarif@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd  # v4.37.7
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
 
   ###########################################################
   # Final Status Check
