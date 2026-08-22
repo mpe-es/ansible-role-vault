@@ -1,0 +1,789 @@
+---
+###############################################################################
+# Filename: molecule/preflight/verify.yml
+# Role: ansible-role-vault
+# Summary: Prove each repaired gate FIRES on its own cause and does NOT fire
+#   when its feature is toggled off (issue #36).
+#
+#   A fires-case wraps the gate in block/rescue and asserts the rescue ran AND
+#   that ansible_failed_result.msg carries THAT gate's own remediation text.
+#   Asserting only "it failed" cannot discriminate: the gate under test and an
+#   unrelated defect both produce a failed task. Only the message separates them.
+#
+#   A did-not-fire case asserts the gate's register shows skipped -- not merely
+#   that nothing failed, which is also what a silently deleted gate looks like.
+#
+#   fips.yml and selinux.yml are deliberately NOT exercised: both read state
+#   from the host kernel, so a container inherits the runner's answer. They pass
+#   on a FIPS-enabled host and fail on GitHub's runners -- a test that looks
+#   like proof and is not. Their zero-CI-coverage is a named gap; closing it
+#   needs a FIPS-enabled self-hosted runner.
+# Classification: UNCLASSIFIED
+###############################################################################
+- name: Verify preflight gates
+  hosts: all
+  gather_facts: true
+
+  vars:
+    fx: /tmp/preflight-fixtures
+
+  tasks:
+    ###########################################################################
+    # Row 8 - repo source coherence
+    ###########################################################################
+    - name: "FIRES - satellite mode on a non-RHEL host"
+      block:
+        - name: Run repo_source with a simulated EL rebuild
+          ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/repo_source.yml
+          vars:
+            vault_manage_repo: true
+            vault_repo_source: satellite
+            ansible_distribution: Rocky
+        - name: Satellite-on-rebuild should not have passed
+          ansible.builtin.fail:
+            msg: "repo_source did not fire for satellite on a non-RHEL host"
+      rescue:
+        - name: Assert the rebuild message names the cause
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg is search('does not manage EL rebuilds')
+            fail_msg: "wrong cause: {{ ansible_failed_result.msg | default('') }}"
+
+    - name: "FIRES - mirror mode still pointing at the public GPG key"
+      block:
+        - name: Run repo_source with an internal URL but upstream key
+          ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/repo_source.yml
+          vars:
+            vault_manage_repo: true
+            vault_repo_source: mirror
+            vault_repo_url: https://repo.closednetwork.local/hashicorp
+        - name: Upstream GPG key should not have passed
+          ansible.builtin.fail:
+            msg: "repo_source did not fire for an upstream GPG key"
+      rescue:
+        - name: Assert the GPG message names the key, not the URL
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg is search('vault_repo_gpg_key')
+            fail_msg: "wrong cause: {{ ansible_failed_result.msg | default('') }}"
+
+    - name: "DID NOT FIRE - master switch off suppresses row 8 entirely"
+      ansible.builtin.include_role:
+        name: ansible-role-vault
+        tasks_from: preflight/repo_source.yml
+      vars:
+        vault_manage_repo: false
+        vault_repo_source: satellite
+        ansible_distribution: Rocky
+
+    - name: Assert the row 8 marker was skipped, not merely non-failing
+      ansible.builtin.assert:
+        that:
+          - __vault_repo_source_marker is defined
+          - __vault_repo_source_marker.skipped | default(false)
+        fail_msg: >-
+          repo_source ran with vault_manage_repo false. A suppressed gate must
+          register skipped; "nothing failed" is also what a deleted gate looks
+          like.
+
+    - name: "EXECUTES - hashicorp source enters row 8 but fires no cause"
+      ansible.builtin.include_role:
+        name: ansible-role-vault
+        tasks_from: preflight/repo_source.yml
+      vars:
+        vault_manage_repo: true
+        vault_repo_source: hashicorp
+
+    - name: Assert the marker ran while every cause-assert skipped
+      ansible.builtin.assert:
+        that:
+          - not (__vault_repo_source_marker.skipped | default(false))
+          - __vault_repo_source_rhel.skipped | default(false)
+          - __vault_repo_source_url.skipped | default(false)
+          - __vault_repo_source_gpg.skipped | default(false)
+        fail_msg: >-
+          Row 8's marker must EXECUTE under a non-firing source while its cause
+          asserts skip. Without that distinction, "suppressed by
+          vault_manage_repo" and "this source has no checks" are byte-identical.
+
+    ###########################################################################
+    # Row 10 - TLS trio (inverted polarity: the switch being OFF turns it ON)
+    ###########################################################################
+    - name: "FIRES - staged certificate is missing"
+      block:
+        - name: Run tls with a missing certificate
+          ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/tls.yml
+          vars:
+            vault_manage_tls: false
+            vault_tls_cert_file: /tmp/preflight-fixtures/absent.crt
+            vault_tls_key_file: /tmp/preflight-fixtures/good.key
+            vault_tls_ca_file: /tmp/preflight-fixtures/good.ca
+        - name: Missing certificate should not have passed
+          ansible.builtin.fail:
+            msg: "tls did not fire for a missing certificate"
+      rescue:
+        - name: Assert the message names the missing file
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.results | default([])
+                | map(attribute='msg', default='') | join(' ') is search('but it is missing')
+            fail_msg: "wrong cause: {{ ansible_failed_result | default('') }}"
+
+    - name: "FIRES - staged path is a directory, not a regular file"
+      block:
+        - name: Run tls against a directory
+          ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/tls.yml
+          vars:
+            vault_manage_tls: false
+            vault_tls_cert_file: /tmp/preflight-fixtures/isdir.crt
+            vault_tls_key_file: /tmp/preflight-fixtures/good.key
+            vault_tls_ca_file: /tmp/preflight-fixtures/good.ca
+        - name: Directory should not have passed
+          ansible.builtin.fail:
+            msg: "tls did not fire for a directory in place of a certificate"
+      rescue:
+        - name: Assert the message names the file-type cause
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.results | default([])
+                | map(attribute='msg', default='') | join(' ') is search('not a regular file')
+            fail_msg: "wrong cause: {{ ansible_failed_result | default('') }}"
+
+    - name: Assert the TLS pass-case actually evaluated all three files
+      ansible.builtin.assert:
+        that:
+          - __vault_tls_ok is defined
+          - __vault_tls_ok.results | default([]) | length == 3
+        fail_msg: "TLS pass-case did not evaluate three files"
+
+    - name: "PASSES - a symlinked certificate is accepted"
+      ansible.builtin.include_role:
+        name: ansible-role-vault
+        tasks_from: preflight/tls.yml
+      vars:
+        vault_manage_tls: false
+        vault_tls_cert_file: /tmp/preflight-fixtures/link.crt
+        vault_tls_key_file: /tmp/preflight-fixtures/good.key
+        vault_tls_ca_file: /tmp/preflight-fixtures/good.ca
+
+    # Staged-material checks are suppressed when the role manages TLS, but the
+    # managed branch now validates its OWN inputs, so this case has to supply
+    # them. Leaving them empty is a separate case below.
+    # On the CONTROLLER, deliberately: first_found resolves where copy reads
+    # from, not on the target. Staging it in the container is what a fixture
+    # that tested nothing would look like.
+    - name: "DID NOT FIRE - firewalld absent but management disabled"
+      ansible.builtin.include_role:
+        name: ansible-role-vault
+        tasks_from: preflight/firewalld.yml
+      vars:
+        vault_manage_firewall: false
+
+    - name: Assert row 6 was suppressed by its toggle
+      ansible.builtin.assert:
+        that:
+          - __vault_firewalld_ok is defined
+          - __vault_firewalld_ok.skipped | default(false)
+        fail_msg: >-
+          The firewalld gate ran with vault_manage_firewall false, which is
+          issue #36 defect 3: the feature toggle must reach preflight.
+
+    - name: "FIRES - firewalld absent while management is enabled"
+      block:
+        - name: Run firewalld gate with management on
+          ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/firewalld.yml
+          vars:
+            vault_manage_firewall: true
+        - name: Absent firewalld should not have passed
+          ansible.builtin.fail:
+            msg: "firewalld gate did not fire on a host without firewalld"
+      rescue:
+        - name: Assert the message says not installed, not "start it"
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg is search('is not installed')
+            fail_msg: "wrong cause: {{ ansible_failed_result.msg | default('') }}"
+
+    ###########################################################################
+    # Row 5 - chrony absent (measured: chronyc ships on none of ubi8/9/10)
+    ###########################################################################
+    - name: "FIRES - chronyc absent fails the ASSERT, not the task"
+      block:
+        - name: Run chrony gate without chronyc installed
+          ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/chrony.yml
+        - name: Absent chronyc should not have passed
+          ansible.builtin.fail:
+            msg: "chrony gate did not fire on a host without chronyc"
+      rescue:
+        - name: Assert remediation text was reached, not a crash
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg is search('chronyc is not installed')
+            fail_msg: "wrong cause: {{ ansible_failed_result.msg | default('') }}"
+
+
+    ###########################################################################
+    # R4 suppressor oracles. One per (suppressor, gate) pair: without these,
+    # any single conjunct of a gate's when: can be deleted with the suite green
+    # -- and deleting row 7's is_rhel conjunct puts subscription-manager back on
+    # Rocky, which is the #36 defect this PR closes.
+    ###########################################################################
+    - name: "DID NOT FIRE - row 7 suppressed by vault_manage_repo"
+      ansible.builtin.include_role:
+        name: ansible-role-vault
+        tasks_from: preflight/rhsm.yml
+      vars:
+        vault_manage_repo: false
+        vault_repo_source: satellite
+
+    - name: Assert row 7 marker skipped under the master switch
+      ansible.builtin.assert:
+        that:
+          - __vault_rhsm_marker is defined
+          - __vault_rhsm_marker.skipped | default(false)
+        fail_msg: "row 7 ran with vault_manage_repo false"
+
+    - name: "DID NOT FIRE - row 7 suppressed on a non-RHEL host"
+      ansible.builtin.include_role:
+        name: ansible-role-vault
+        tasks_from: preflight/rhsm.yml
+      vars:
+        vault_manage_repo: true
+        vault_repo_source: satellite
+        ansible_distribution: Rocky
+
+    - name: Assert row 7 marker skipped on an EL rebuild
+      ansible.builtin.assert:
+        that:
+          - __vault_rhsm_marker is defined
+          - __vault_rhsm_marker.skipped | default(false)
+        fail_msg: >-
+          row 7 ran on Rocky. subscription-manager does not exist there; this
+          is the #36 defect that rejected every compatible EL distribution.
+
+    - name: "DID NOT FIRE - row 7 suppressed under the mirror source"
+      ansible.builtin.include_role:
+        name: ansible-role-vault
+        tasks_from: preflight/rhsm.yml
+      vars:
+        vault_manage_repo: true
+        vault_repo_source: mirror
+
+    - name: "FIRES - a foreign process holds the Vault API port"
+      block:
+        - name: Run the port gate against a foreign listener
+          ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/port.yml
+        - name: A foreign holder should not have passed
+          ansible.builtin.fail:
+            msg: "port gate did not fire against a foreign listener"
+      rescue:
+        - name: Assert the message names foreign ownership
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg is search('not the ' ~ vault_service_name ~ ' service')
+            fail_msg: "wrong cause: {{ ansible_failed_result.msg | default('') }}"
+
+    - name: "PASSES - the port is held by the Vault service itself"
+      ansible.builtin.include_role:
+        name: ansible-role-vault
+        tasks_from: preflight/port.yml
+      vars:
+        vault_listener_port: 18200
+
+    - name: Assert the ownership check actually ran and passed
+      ansible.builtin.assert:
+        that:
+          - __vault_port_owner is defined
+          - not (__vault_port_owner.skipped | default(false))
+        fail_msg: >-
+          The port pass-case skipped the ownership block, so the cgroup logic
+          was never evaluated. "Nothing failed" is not proof for a pass case.
+
+    - name: "FIRES - the socket query tool is unusable"
+      block:
+        - name: Shim a failing ss ahead of the real one
+          ansible.builtin.copy:
+            content: |
+              #!/bin/sh
+              echo "shimmed failure" >&2
+              exit 1
+            dest: /usr/local/bin/ss
+            mode: '0755'
+
+        - name: Run the port gate with a failing query tool
+          ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/port.yml
+          vars:
+            vault_listener_port: 19999
+
+        - name: A failing query should not have passed
+          ansible.builtin.fail:
+            msg: >-
+              port gate passed while ss failed. A failed query with empty output
+              is indistinguishable from a free port, so this must fail closed.
+      rescue:
+        - name: Assert the message names the query failure
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg is search('Querying listeners')
+            fail_msg: "wrong cause: {{ ansible_failed_result.msg | default('') }}"
+      always:
+        - name: Remove the ss shim
+          ansible.builtin.file:
+            path: /usr/local/bin/ss
+            state: absent
+
+
+    - name: "PASSES - a genuinely free port skips the ownership block"
+      ansible.builtin.include_role:
+        name: ansible-role-vault
+        tasks_from: preflight/port.yml
+      vars:
+        vault_listener_port: 19998
+
+    - name: Assert a free port does NOT reach the attribution assert
+      ansible.builtin.assert:
+        that:
+          - __vault_port_attrib is defined
+          - __vault_port_attrib.skipped | default(false)
+        fail_msg: >-
+          A free port reached the attribution assert with an empty PID list,
+          which hard-fails. Changing the ownership block's when: to something
+          always-true would block every fresh Vault install while CI stayed
+          green -- this case exists to catch exactly that.
+
+    - name: "FIRES - a listener with no attributable PID fails closed"
+      block:
+        - name: Shim ss to report a listener with no owning PID
+          ansible.builtin.copy:
+            content: |
+              #!/bin/sh
+              echo "LISTEN 0 4096 0.0.0.0:19995 0.0.0.0:*"
+            dest: /usr/local/bin/ss
+            mode: '0755'
+
+        - name: Run the port gate against an unattributable listener
+          ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/port.yml
+          vars:
+            vault_listener_port: 19995
+
+        - name: An unattributable listener should not have passed
+          ansible.builtin.fail:
+            msg: >-
+              port gate passed on a listener with no owning PID. The CHANGELOG
+              claims this fails closed; assuming such a holder is Vault would
+              reintroduce the defect being repaired.
+      rescue:
+        - name: Assert the message names the attribution failure
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg is search('ss omits that field')
+            fail_msg: "wrong cause: {{ ansible_failed_result.msg | default('') }}"
+      always:
+        - name: Remove the unattributable-listener shim
+          ansible.builtin.file:
+            path: /usr/local/bin/ss
+            state: absent
+
+    - name: "FIRES - a unit outside /system.slice does not satisfy the anchor"
+      block:
+        - name: Run the port gate against a non-system-slice holder
+          ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/port.yml
+          vars:
+            vault_listener_port: 19996
+            vault_service_name: fakevault
+        - name: A non-system-slice holder should not have passed
+          ansible.builtin.fail:
+            msg: >-
+              The gate accepted a listener whose cgroup is /app.slice/
+              fakevault.service. An unprivileged user can define
+              ~/.config/systemd/user/vault.service on a port above 1024; the
+              /system.slice/ anchor exists to reject exactly that, and this
+              case is what discriminates its removal.
+      rescue:
+        - name: Assert the message names foreign ownership
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg is search('not the fakevault service')
+            fail_msg: "wrong cause: {{ ansible_failed_result.msg | default('') }}"
+
+
+    - name: "FIRES - one Vault listener plus one foreign listener on the same port"
+      block:
+        - name: Run the port gate where only SOME listeners are Vault
+          ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/port.yml
+          vars:
+            vault_listener_port: 19995
+            vault_service_name: vault-shared
+        - name: A partially-foreign port should not have passed
+          ansible.builtin.fail:
+            msg: >-
+              The gate accepted a port where one listener is Vault and another
+              is not. Relaxing the cardinality comparison from "all listeners"
+              to "any listener" is a fail-open, and this case is what
+              discriminates it.
+      rescue:
+        - name: Assert the message names foreign ownership
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg is search('not the vault-shared service')
+            fail_msg: "wrong cause: {{ ansible_failed_result.msg | default('') }}"
+
+    # C2 -- row 8's mirror-URL cause had no fires oracle, so its predicate was
+    # tautologizable; only the GPG-key cause was proven.
+    - name: "FIRES - mirror mode with the URL still pointing upstream"
+      block:
+        - name: Run repo_source with an upstream URL and an internal key
+          ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/repo_source.yml
+          vars:
+            vault_manage_repo: true
+            vault_repo_source: mirror
+            vault_repo_gpg_key: https://repo.closednetwork.local/hashicorp/gpg
+        - name: An upstream mirror URL should not have passed
+          ansible.builtin.fail:
+            msg: "repo_source did not fire for an upstream vault_repo_url"
+      rescue:
+        - name: Assert the message names the URL, not the key
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg is search('still resolves to')
+            fail_msg: "wrong cause: {{ ansible_failed_result.msg | default('') }}"
+
+    # C1 -- every row 9 oracle set vault_manage_install: true, so the HSM half
+    # of the firing disjunct short-circuited and was never load-bearing.
+    - name: "FIRES - an unattributed row alongside a Vault-owned listener"
+      block:
+        - name: Shim ss to emit one Vault row and one unattributable row
+          ansible.builtin.copy:
+            content: |
+              #!/bin/sh
+              MP=$(systemctl show -p MainPID --value vault.service 2>/dev/null)
+              echo "LISTEN 0 4096 0.0.0.0:19994 0.0.0.0:* users:((\"ncat\",pid=${MP},fd=8))"
+              echo "LISTEN 0 4096 [::]:19994 [::]:*"
+            dest: /usr/local/bin/ss
+            mode: '0755'
+
+        - name: Run the port gate against a mixed attributed/unattributed pair
+          ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/port.yml
+          vars:
+            vault_listener_port: 19994
+
+        - name: A partially unattributed port should not have passed
+          ansible.builtin.fail:
+            msg: >-
+              The gate passed with one socket attributable to Vault and one
+              carrying no owning PID. Counting PIDs globally reduces "every
+              listener is attributable" to "at least one PID exists", so an
+              SO_REUSEPORT pair of one Vault socket and one foreign socket
+              slips through.
+      rescue:
+        - name: Assert the message names the attribution shortfall
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg is search('carry an owning PID')
+            fail_msg: "wrong cause: {{ ansible_failed_result.msg | default('') }}"
+      always:
+        - name: Remove the mixed-attribution shim
+          ansible.builtin.file:
+            path: /usr/local/bin/ss
+            state: absent
+
+    ###########################################################################
+    # Codex round 5 - normalisation, signature policy, and effective readability
+    ###########################################################################
+
+    - name: "FIRES - mirror URL uses the absolute (root-dot) public hostname"
+      block:
+        - name: Run repo_source with a trailing-dot upstream host
+          ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/repo_source.yml
+          vars:
+            vault_manage_repo: true
+            vault_repo_source: mirror
+            vault_repo_url: https://rpm.releases.hashicorp.com./RHEL/9/x86_64/stable
+            vault_repo_gpg_key: https://repo.closednetwork.local/hashicorp/gpg
+        - name: A root-dot FQDN should not have passed
+          ansible.builtin.fail:
+            msg: >-
+              'rpm.releases.hashicorp.com.' resolves to the same public endpoint
+              as the bare name, so comparing the hostname literally lets a
+              declared internal mirror fetch from HashiCorp.
+      rescue:
+        - name: Assert the message names the URL, not the key
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg is search('vault_repo_url')
+            fail_msg: "wrong cause: {{ ansible_failed_result.msg | default('') }}"
+
+    - name: "PASSES - a synchronised chronyd satisfies the gate"
+      block:
+        # The absent-tool case was the ONLY chrony coverage, and it fires for a
+        # different reason -- so nothing here ever exercised a HEALTHY host, and
+        # no test could have told a working sync predicate from a broken one.
+        # (An earlier version of this comment said the predicate "could never
+        # match". That was false: measured, the pre-fix plain-scalar expression
+        # matches correctly. The gap was coverage, not the regex.)
+        - name: Shim chronyc to emit a synchronised tracking report
+          ansible.builtin.copy:
+            content: |
+              #!/bin/sh
+              cat <<'OUT'
+              Reference ID    : C0248F98 (time.example.net)
+              Stratum         : 3
+              Ref time (UTC)  : Fri Aug 22 11:00:00 2026
+              System time     : 0.000012345 seconds slow of NTP time
+              Leap status     : Normal
+              OUT
+            dest: /usr/local/bin/chronyc
+            mode: '0755'
+
+        - name: Run the chrony gate against a synchronised daemon
+          ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/chrony.yml
+      always:
+        - name: Remove the chronyc shim
+          ansible.builtin.file:
+            path: /usr/local/bin/chronyc
+            state: absent
+
+    - name: "FIRES - chronyd running but not synchronised"
+      block:
+        - name: Shim chronyc to report an unsynchronised daemon
+          ansible.builtin.copy:
+            content: |
+              #!/bin/sh
+              cat <<'OUT'
+              Reference ID    : 00000000 ()
+              Stratum         : 0
+              Leap status     : Not synchronised
+              OUT
+            dest: /usr/local/bin/chronyc
+            mode: '0755'
+
+        - name: Run the chrony gate against an unsynchronised daemon
+          ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/chrony.yml
+
+        - name: An unsynchronised clock should not have passed
+          ansible.builtin.fail:
+            msg: >-
+              Vault leases, token TTLs and audit timestamps all depend on the
+              clock; a daemon that is running but has never synchronised is the
+              case this gate exists for.
+      rescue:
+        - name: Assert the message names the synchronisation state
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg is search('not synchronised')
+            fail_msg: "wrong cause: {{ ansible_failed_result.msg | default('') }}"
+      always:
+        - name: Remove the unsynchronised shim
+          ansible.builtin.file:
+            path: /usr/local/bin/chronyc
+            state: absent
+
+    ###########################################################################
+    # Row 5 / Row 6 - non-primary cause arms, via PATH shims
+    ###########################################################################
+    - name: "FIRES - chronyd unreachable is distinguished from unsynchronised"
+      block:
+        - name: Shim chronyc to report an unreachable daemon
+          ansible.builtin.copy:
+            content: |
+              #!/bin/sh
+              echo "506 Cannot talk to daemon"
+              exit 1
+            dest: /usr/local/bin/chronyc
+            mode: '0755'
+
+        - name: Run the chrony gate against an unreachable daemon
+          ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/chrony.yml
+
+        - name: An unreachable daemon should not have passed
+          ansible.builtin.fail:
+            msg: "chrony gate did not fire for an unreachable daemon"
+      rescue:
+        - name: Assert the daemon-unreachable remediation, not the sync one
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg is search('cannot reach chronyd')
+            fail_msg: "wrong cause: {{ ansible_failed_result.msg | default('') }}"
+
+    - name: "FIRES - a running but unsynchronised clock names the sync cause"
+      block:
+        - name: Shim chronyc to report an unsynchronised clock
+          ansible.builtin.copy:
+            content: |
+              #!/bin/sh
+              echo "Leap status     : Not synchronised"
+            dest: /usr/local/bin/chronyc
+            mode: '0755'
+
+        - name: Run the chrony gate against an unsynchronised clock
+          ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/chrony.yml
+
+        - name: An unsynchronised clock should not have passed
+          ansible.builtin.fail:
+            msg: "chrony gate did not fire for an unsynchronised clock"
+      rescue:
+        - name: Assert the not-synchronised remediation
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg is search('not synchronised')
+            fail_msg: "wrong cause: {{ ansible_failed_result.msg | default('') }}"
+      always:
+        - name: Remove the chronyc shim
+          ansible.builtin.file:
+            path: /usr/local/bin/chronyc
+            state: absent
+
+    ###########################################################################
+    # tasks/repo.yml - executed by NO scenario before this case. The satellite
+    # branch and its leftover-removal are fail-open controls otherwise.
+    ###########################################################################
+    - name: Write a repo file as the hashicorp source would
+      ansible.builtin.include_role:
+        name: ansible-role-vault
+        tasks_from: repo.yml
+      vars:
+        vault_repo_source: hashicorp
+
+    - name: Confirm the hashicorp source wrote the repo file
+      ansible.builtin.stat:
+        path: /etc/yum.repos.d/hashicorp.repo
+      register: __repo_after_hashicorp
+
+    - name: Re-run under the satellite source
+      ansible.builtin.include_role:
+        name: ansible-role-vault
+        tasks_from: repo.yml
+      vars:
+        vault_repo_source: satellite
+
+    - name: "FIRES - Satellite source on an unregistered host"
+      block:
+        - name: Run the RHSM gate for Satellite-sourced content
+          ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/rhsm.yml
+          vars:
+            vault_manage_repo: true
+            vault_repo_source: satellite
+        - name: An unregistered host should not have passed
+          ansible.builtin.fail:
+            msg: "rhsm gate did not fire on an unregistered host"
+      rescue:
+        - name: Assert the message names the registration state, not something else
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg is search('This host is not registered')
+            fail_msg: "wrong cause: {{ ansible_failed_result.msg | default('') }}"
+
+    - name: "DID NOT FIRE - unregistered host, but source is not satellite"
+      ansible.builtin.include_role:
+        name: ansible-role-vault
+        tasks_from: preflight/rhsm.yml
+      vars:
+        vault_manage_repo: true
+        vault_repo_source: hashicorp
+
+    - name: Assert row 7 was suppressed by the sourcing mode
+      ansible.builtin.assert:
+        that:
+          - __vault_rhsm_registered is defined
+          - __vault_rhsm_registered.skipped | default(false)
+        fail_msg: >-
+          RHSM gate ran for a non-satellite source. This is the #36 defect:
+          registration is a prerequisite of the sourcing mode, not of the role.
+    - name: "PASSES - all three staged and readable"
+      ansible.builtin.include_role:
+        name: ansible-role-vault
+        tasks_from: preflight/tls.yml
+      vars:
+        vault_manage_tls: false
+        vault_tls_cert_file: /tmp/preflight-fixtures/good.crt
+        vault_tls_key_file: /tmp/preflight-fixtures/good.key
+        vault_tls_ca_file: /tmp/preflight-fixtures/good.ca
+
+    - name: Assert the TLS pass-case actually evaluated all three files
+      ansible.builtin.assert:
+        that:
+          - __vault_tls_ok is defined
+          - __vault_tls_ok.results | default([]) | length == 3
+        fail_msg: "TLS pass-case did not evaluate three files"
+
+    - name: "FIRES UNDER --check - a foreign listener is not waved through in a dry run"
+      block:
+        - name: Stage a foreign listener on the Vault port
+          ansible.builtin.command:
+            argv: [systemd-run, --unit, checkmode-squatter, --collect,
+                   ncat, -l, "19997"]
+          changed_when: true
+
+        # check_mode is a block keyword, not an include_role one, and only the
+        # GATE belongs in the dry run -- the fixture above has to really run.
+        - name: Drive the port gate as a dry run
+          check_mode: true
+          block:
+            - name: Run the port gate in check mode
+              ansible.builtin.include_role:
+                name: ansible-role-vault
+                tasks_from: preflight/port.yml
+              vars:
+                vault_listener_port: 19997
+
+            - name: A dry run must not green a host it would have rejected
+              ansible.builtin.fail:
+                msg: >-
+                  command and shell are skipped under --check, and a skipped
+                  probe registers rc 0 with empty output. The ownership block
+                  would never run and the gate would report a free port.
+      rescue:
+        - name: Assert the dry run failed on ownership, not on something else
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg is search('not the ' ~ vault_service_name ~ ' service')
+                or ansible_failed_result.msg is search('carry an owning PID')
+            fail_msg: "wrong cause: {{ ansible_failed_result.msg | default('') }}"
+      always:
+        - name: Stop the check-mode squatter
+          ansible.builtin.command:
+            argv: [systemctl, stop, checkmode-squatter.service]
+          failed_when: false
+          changed_when: true
+
+    ###########################################################################
+    # Codex round 9 - named ACL entries, and an indeterminate ACL read
+    ###########################################################################

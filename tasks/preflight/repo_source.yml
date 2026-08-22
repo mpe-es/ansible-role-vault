@@ -1,0 +1,83 @@
+---
+###############################################################################
+# Filename: tasks/preflight/repo_source.yml
+# Role: ansible-role-vault
+# Summary: Preflight gate - repo-source coherence (issue #36).
+#   Fires whenever the role manages repo config, for ALL sources. The marker
+#   below executes unconditionally inside that block so a did-not-fire oracle
+#   can tell "suppressed by vault_manage_repo" from "source has no checks":
+#   without it both states emit an identical skipping: line.
+# NIST 800-53: SI-7 (Software, Firmware, and Information Integrity)
+###############################################################################
+- name: Validate repo source coherence
+  when: vault_manage_repo | bool
+  block:
+    # Plain marker, NOT a second enum gate: argument_specs choices is the
+    # enforcement and runs before any gate on the production path, so a
+    # duplicate assert here would be dead in production and green in test.
+    # This exists only so a did-not-fire oracle can distinguish "suppressed by
+    # vault_manage_repo" from "this source has no checks".
+    - name: "Preflight | repo_source | repo-source checks apply"
+      ansible.builtin.assert:
+        that: [true]
+        success_msg: "Repo source: {{ vault_repo_source }}"
+      register: __vault_repo_source_marker
+
+    # Satellite is a licensed Red Hat product; no organisation buys it to
+    # manage a free OS, and subscription-manager does not exist on rebuilds.
+    - name: "Preflight | repo_source | Satellite mode requires Red Hat Enterprise Linux"
+      ansible.builtin.assert:
+        that:
+          - ansible_distribution == 'RedHat'
+        fail_msg: >-
+          vault_repo_source is 'satellite' but this host is
+          {{ ansible_distribution }} {{ ansible_distribution_major_version }}.
+          Red Hat Satellite is a licensed Red Hat product and does not manage
+          EL rebuilds; subscription-manager is not available here. Use 'mirror'
+          with your internal reposync URL, or 'hashicorp' for an
+          internet-connected host.
+        success_msg: "Satellite mode on RHEL: ok"
+      register: __vault_repo_source_rhel
+      when: vault_repo_source == 'satellite'
+
+    # The host is compared normalised: urlsplit lowercases, but it preserves
+    # the FQDN root dot, so 'rpm.releases.hashicorp.com.' resolves to the same
+    # public endpoint while failing a literal !=. Strip it before comparing.
+    # Both variables are fetched BY THE TARGET HOST - vault_repo_url as the
+    # repo baseurl, vault_repo_gpg_key by both rpm_key and the .repo gpgkey=.
+    # Matching on the parsed HOST, not a substring: a legitimate mirror may
+    # carry the upstream host in its PATH (reposync/Pulp layouts do).
+    #
+    # What this proves and what it does not: it proves the configured host is
+    # not the shipped HashiCorp hostname. It does NOT prove the endpoint is
+    # internal, reachable without egress, or airgap-safe -- an alias, a CNAME,
+    # a different public mirror or an internally-resolved name that redirects
+    # outward all pass. A positive guarantee would need an operator-supplied
+    # allowlist, which is not in this issue's scope.
+    - name: "Preflight | repo_source | mirror URL is not the public HashiCorp host"
+      ansible.builtin.assert:
+        that:
+          - (vault_repo_url | urlsplit('hostname') | default('', true)
+             | lower | regex_replace('\.$', '')) != 'rpm.releases.hashicorp.com'
+        fail_msg: >-
+          vault_repo_source is 'mirror' but vault_repo_url still resolves to
+          rpm.releases.hashicorp.com. An airgapped host cannot reach it. Set
+          vault_repo_url to your internal mirror.
+        success_msg: "Mirror URL: not the shipped HashiCorp host"
+      register: __vault_repo_source_url
+      when: vault_repo_source == 'mirror'
+
+    - name: "Preflight | repo_source | mirror GPG key is not the public HashiCorp host"
+      ansible.builtin.assert:
+        that:
+          - (vault_repo_gpg_key | urlsplit('hostname') | default('', true)
+             | lower | regex_replace('\.$', '')) != 'rpm.releases.hashicorp.com'
+        fail_msg: >-
+          vault_repo_source is 'mirror' but vault_repo_gpg_key still resolves
+          to rpm.releases.hashicorp.com. The target host fetches this key
+          directly (rpm_key, and gpgkey= in the deployed .repo), so an
+          airgapped run hangs here even when vault_repo_url is internal.
+          Set vault_repo_gpg_key to your internal copy.
+        success_msg: "Mirror GPG key: not the shipped HashiCorp host"
+      register: __vault_repo_source_gpg
+      when: vault_repo_source == 'mirror'

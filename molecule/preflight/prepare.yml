@@ -1,0 +1,155 @@
+---
+###############################################################################
+# Filename: molecule/preflight/prepare.yml
+# Role: ansible-role-vault
+# Summary: Establish gate preconditions explicitly (issue #36). Container
+#   defaults differ across the ubi8/9/10 matrix -- measured: chronyc is absent
+#   on all three, ss is absent on ubi8, firewalld is absent on all three.
+#
+#   States this file FORCES are trustworthy. Two are NOT forced and are inherited
+#   from the image: the ABSENCE of chronyc and of firewalld. The absent-tool
+#   cases depend on that absence, and :latest UBI tags are mutable. Their
+#   rescues assert the specific "not installed" wording, so a future image
+#   shipping either package turns the scenario RED rather than falsely green --
+#   the failure is loud, but it is a fixture problem, not a gate problem.
+#   Forcing removal is the fix; it is not done here because removing
+#   firewalld's dependencies perturbs other cases.
+# Classification: UNCLASSIFIED
+###############################################################################
+- name: Prepare
+  hosts: all
+  # ubi8 ships NO python3 at all, so facts cannot be gathered until an
+  # interpreter exists. molecule/default/prepare.yml already had to solve this;
+  # copying that play's structure without its first task is what broke the el8
+  # matrix cell.
+  gather_facts: false
+
+  tasks:
+    - name: Bootstrap requested Python interpreter
+      ansible.builtin.raw: >-
+        sh -c 'test -x {{ ansible_python_interpreter }}
+        || dnf install -y {{ ansible_python_interpreter | basename }}'
+      register: __prepare_python
+      changed_when: "'Installed:' in __prepare_python.stdout"
+
+    - name: Gather facts after Python bootstrap
+      ansible.builtin.setup:
+
+    # ss is absent on ubi8, and row 11's normal cases need it. The query-failure
+    # case in verify.yml shims a failing ss rather than removing the package;
+    # the "tool entirely absent" arm is knowingly untested (removing iproute
+    # mid-scenario would break every later case on ubi9/ubi10).
+    - name: Ensure the socket query tool is present
+      ansible.builtin.dnf:
+        name: iproute
+        # ubi-init ships rhel-* enabled, and they are unreachable without an
+        # entitlement. dnf usually routes around them and occasionally does not,
+        # which failed this scenario in prepare with "All mirrors were tried"
+        # -- a flake with nothing to do with the gates under test. The ubi repos
+        # carry both packages (measured). This is the same class the
+        # skip_if_unavailable fix addresses in the Satellite gate: an operation
+        # must not depend on repositories it never reads.
+        disablerepo: 'rhel-*'
+        state: present
+      changed_when: false
+
+    # /etc/rhsm-host makes subscription-manager report container mode (rc 78)
+    # BEFORE any registration check, so rows 7's real causes are unreachable
+    # while it exists. Measured on ubi8/9/10.
+    - name: Remove the container-mode marker so RHSM causes are reachable
+      ansible.builtin.file:
+        path: /etc/rhsm-host
+        state: absent
+
+    - name: Create a directory where a TLS file is expected
+      ansible.builtin.file:
+        path: /tmp/preflight-fixtures/isdir.crt
+        state: directory
+        mode: '0755'
+
+    # Row 11 needs REAL listeners in real systemd cgroups: ownership is decided
+    # by /proc/<pid>/cgroup, so a bare background process would not exercise the
+    # code path. systemd-run puts each under /system.slice/<unit>.service.
+    - name: Install a listener helper for the port fixtures
+      ansible.builtin.dnf:
+        name: nmap-ncat
+        state: present
+      changed_when: false
+
+    - name: Start a FOREIGN listener on the Vault API port
+      ansible.builtin.command:
+        cmd: >-
+          systemd-run --unit=preflight-foreign --collect
+          /usr/bin/ncat -l -k -p {{ vault_listener_port }}
+      changed_when: true
+
+    - name: Start a listener under the Vault service name on an alternate port
+      ansible.builtin.command:
+        cmd: >-
+          systemd-run --unit={{ vault_service_name }} --collect
+          /usr/bin/ncat -l -k -p 18200
+      changed_when: true
+
+    # A unit in a NON-system slice: its cgroup contains /fakevault.service but
+    # NOT /system.slice/fakevault.service. That is the only way to discriminate
+    # the ownership anchor -- a shimmed PID whose cgroup lacks the name entirely
+    # fails as a foreign holder whether the anchor is present or not, which is
+    # false coverage.
+    - name: Start a listener in a non-system slice
+      ansible.builtin.command:
+        cmd: >-
+          systemd-run --unit=fakevault --slice=app.slice --collect
+          /usr/bin/ncat -l -k -p 19996
+      changed_when: true
+
+    # Two DIFFERENT owners on one port. Without this every port fixture is
+    # single-owner, so "all listeners are Vault" and "any listener is Vault"
+    # behave identically and the cardinality comparison is never exercised.
+    - name: Start a Vault-owned listener on the shared-port fixture
+      ansible.builtin.command:
+        cmd: >-
+          systemd-run --unit=vault-shared --collect
+          /usr/bin/ncat -l -k 127.0.0.1 19995
+      changed_when: true
+
+    - name: Start a foreign listener on the same shared-port fixture
+      ansible.builtin.command:
+        cmd: >-
+          systemd-run --unit=preflight-intruder --collect
+          /usr/bin/ncat -l -k ::1 19995
+      changed_when: true
+
+    - name: Give the listeners a moment to bind
+      ansible.builtin.wait_for:
+        port: "{{ vault_listener_port }}"
+        timeout: 10
+
+    - name: Stage a readable TLS trio for the pass case
+      ansible.builtin.copy:
+        content: "fixture\n"
+        dest: "/tmp/preflight-fixtures/{{ item }}"
+        mode: '0644'
+      loop:
+        - good.crt
+        - good.key
+        - good.ca
+
+    # subscription-manager writes /etc/yum.repos.d/redhat.repo from the host's
+    # content-view bindings; ubi images have none. Stage one by COPYING the
+    # container's own first enabled repo stanza -- baseurl and all -- so the
+    # scoped query resolves for real. Declaring the id without a baseurl only
+    # shadows the real definition and yields "Cannot find a valid baseurl".
+    # A disabled stanza is appended so the enabled-only parse is exercised
+    # against a file that genuinely contains one.
+    #
+    # Deliberately NO creates: guard. The subscription-manager dnf plugin
+    # writes an EMPTY /etc/yum.repos.d/redhat.repo on the first dnf
+    # transaction -- which the iproute install above triggers -- so a creates:
+    # guard silently skips the staging and every row-9 case then fails with
+    # "defines no ENABLED repositories".
+    - name: Symlink a staged certificate (the certmonger/certbot pattern)
+      ansible.builtin.file:
+        src: good.crt
+        dest: /tmp/preflight-fixtures/link.crt
+        state: link
+        force: true

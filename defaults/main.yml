@@ -13,8 +13,20 @@
 # Override these for airgap environments pointing to a local mirror.
 # NIST 800-53: SI-7 (Software, Firmware, and Information Integrity)
 ###############################################################################
-# Whether the role should create /etc/yum.repos.d/hashicorp.repo
+# Master switch: whether the role touches repo configuration at all.
+# When false the role writes nothing AND fires none of the repo gates.
+# Satellite users leave this true and set vault_repo_source: satellite.
 vault_manage_repo: true
+
+# How the Vault RPM reaches the host. Decides which repo gates apply.
+#   hashicorp - public HashiCorp repo (default; today's behaviour)
+#   mirror    - internal reposync/Pulp mirror; airgap assert applies
+#   satellite - Red Hat Satellite content view; the role writes NO repo file
+#               (subscription-manager owns it) and preflight verifies
+#               registration + package reachability instead.
+# satellite is RHEL-only: Satellite is a licensed Red Hat product and does not
+# manage EL rebuilds, so preflight rejects it on Rocky/Alma/CentOS Stream.
+vault_repo_source: "hashicorp"
 
 # HashiCorp RPM repository base URL
 # Internet-connected default; override with local mirror for airgap

@@ -1,0 +1,23 @@
+---
+###############################################################################
+# Filename: tasks/preflight/fips.yml
+# Role: ansible-role-vault
+# Summary: Preflight gate - FIPS mode enabled (SC-13)
+# Classification: UNCLASSIFIED
+###############################################################################
+- name: Check FIPS mode status
+  ansible.builtin.slurp:
+    src: /proc/sys/crypto/fips_enabled
+  register: __vault_fips_status
+
+- name: "Preflight | fips | FIPS mode is enabled"
+  ansible.builtin.assert:
+    that:
+      - (__vault_fips_status.content | b64decode | trim) == '1'
+    fail_msg: >-
+      /proc/sys/crypto/fips_enabled is not 1, so the kernel is not running in
+      FIPS mode. Enable it with: fips-mode-setup --enable && reboot.
+      This gate proves only that kernel flag. It does not establish that a
+      FIPS-validated module version is installed, nor that a FIPS Vault edition
+      was selected (see vault_edition) -- those are separate obligations.
+    success_msg: "FIPS mode: enabled"

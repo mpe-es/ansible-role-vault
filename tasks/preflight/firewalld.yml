@@ -1,0 +1,43 @@
+---
+###############################################################################
+# Filename: tasks/preflight/firewalld.yml
+# Role: ansible-role-vault
+# Summary: Preflight gate - firewalld is running. Now honours the role's own
+#   vault_manage_firewall switch (issue #36 defect 3: the feature toggle did
+#   not reach preflight, so disabling firewall management still demanded a
+#   running firewalld).
+# NIST 800-53: SC-7 (Boundary Protection)
+###############################################################################
+- name: Verify firewalld for role-managed firewall rules
+  when: vault_manage_firewall | bool
+  block:
+    # systemd_service returns LoadState: not-found for an absent unit without
+    # failing, so no failed_when is needed to reach the assert (measured).
+    - name: Check firewalld service status
+      ansible.builtin.systemd_service:
+        name: firewalld
+      register: __vault_firewalld_status
+
+    - name: "Preflight | firewalld | service is active"
+      ansible.builtin.assert:
+        that:
+          - __vault_firewalld_status.status.ActiveState | default('unknown') == 'active'
+        fail_msg: >-
+          {% if __vault_firewalld_status.status.LoadState | default('') == 'not-found' %}
+          firewalld is not installed, so the role cannot manage Vault firewall
+          rules. Install firewalld, or set vault_manage_firewall: false if the
+          firewall is owned by a separate baseline.
+          {% elif __vault_firewalld_status.status.LoadState | default('') == 'masked' %}
+          firewalld is masked. Unmask before starting it:
+          systemctl unmask firewalld && systemctl enable --now firewalld
+          {% elif __vault_firewalld_status.status.ActiveState | default('') in ['inactive', 'failed'] %}
+          firewalld is installed but {{ __vault_firewalld_status.status.ActiveState }}.
+          The role manages Vault firewall rules via ansible.posix.firewalld.
+          Start it: systemctl enable --now firewalld
+          {% else %}
+          firewalld is in an unrecognised state - LoadState
+          {{ __vault_firewalld_status.status.LoadState | default('n/a') }},
+          ActiveState {{ __vault_firewalld_status.status.ActiveState | default('n/a') }}.
+          {% endif %}
+        success_msg: "firewalld: running"
+      register: __vault_firewalld_ok

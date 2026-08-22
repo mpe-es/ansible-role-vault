@@ -7,6 +7,16 @@
 # Classification: UNCLASSIFIED
 ###############################################################################
 
+# Satellite mode writes NO repo file by design (it is not a no-op: it also
+# REMOVES any role-written hashicorp.repo, below). subscription-manager owns
+# /etc/yum.repos.d/redhat.repo and generates it from the host's content-view
+# bindings; writing our own .repo alongside it would add a second, competing
+# definition pointing at the public internet - a broken build in a darksite
+# enclave and a supply-chain bypass of the curated content view in a connected
+# one. Preflight verifies registration instead; verifying that the content view
+# actually publishes Vault is tracked in #68.
+# The GPG key is associated with the custom product server-side; the role does
+# not import it in this mode (documented as a Satellite-side prerequisite).
 - name: Deploy HashiCorp RPM repository configuration
   ansible.builtin.template:
     src: hashicorp.repo.j2
@@ -14,8 +24,19 @@
     owner: root
     group: root
     mode: '0644'
+  when: vault_repo_source != 'satellite'
+
+# Skipping creation is not enough: a host converged earlier with hashicorp or
+# mirror keeps its .repo, and dnf would still resolve Vault from it -- a
+# supply-chain bypass of the curated content view.
+- name: Remove any role-written repo file when Satellite owns repo config
+  ansible.builtin.file:
+    path: /etc/yum.repos.d/hashicorp.repo
+    state: absent
+  when: vault_repo_source == 'satellite'
 
 - name: Import HashiCorp GPG key
   ansible.builtin.rpm_key:
     key: "{{ vault_repo_gpg_key }}"
     state: present
+  when: vault_repo_source != 'satellite'

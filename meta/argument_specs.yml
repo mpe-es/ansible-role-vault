@@ -30,10 +30,31 @@ argument_specs:
       ################################################################
       vault_manage_repo:
         description:
-          - Whether the role should create /etc/yum.repos.d/hashicorp.repo.
-          - Set to false if the repository is managed externally (e.g., Red Hat Satellite content view).
+          - Master switch for whether the role touches repo configuration.
+          - When false the role writes no repo file AND fires none of the repo preflight gates.
+          - >-
+            Satellite users should leave this true and set vault_repo_source to
+            'satellite' - that combination writes no repo file and additionally
+            verifies registration and package reachability, which setting this
+            to false does not.
         type: bool
         default: true
+
+      vault_repo_source:
+        description:
+          - How the Vault RPM reaches the host; decides which repo gates apply.
+          - "'hashicorp' - the public HashiCorp repo (today's behaviour)."
+          - "'mirror' - an internal reposync/Pulp mirror; the airgap assert applies."
+          - >-
+            'satellite' - a Red Hat Satellite content view. The role writes no
+            repo file (subscription-manager owns it) and preflight verifies
+            registration and package reachability instead. RHEL only.
+        type: str
+        default: "hashicorp"
+        choices:
+          - hashicorp
+          - mirror
+          - satellite
 
       vault_repo_url:
         description:
