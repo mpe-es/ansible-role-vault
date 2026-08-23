@@ -42,7 +42,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `hashicorp`) — declares how the Vault RPM reaches the host and decides which
   repo gates apply. `satellite` writes **no** repo file, since
   `subscription-manager` owns the client repo configuration; preflight verifies
-  registration and package reachability instead. RHEL only. (#36)
+  registration instead. Content-view reachability and install scoping are
+  tracked in #68. RHEL only. (#36)
 - **TLS material gate** — with `vault_manage_tls: false` (the default),
   preflight now verifies the certificate, key and CA all exist and are regular
   files, instead of letting a missing file surface at service start. (#36)

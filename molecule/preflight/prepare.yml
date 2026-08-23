@@ -35,7 +35,7 @@
     - name: Gather facts after Python bootstrap
       ansible.builtin.setup:
 
-    # ss is absent on ubi8, and row 11's normal cases need it. The query-failure
+    # ss is absent on ubi8, and the port gate's normal cases need it. The query-failure
     # case in verify.yml shims a failing ss rather than removing the package;
     # the "tool entirely absent" arm is knowingly untested (removing iproute
     # mid-scenario would break every later case on ubi9/ubi10).
@@ -134,19 +134,6 @@
         - good.key
         - good.ca
 
-    # subscription-manager writes /etc/yum.repos.d/redhat.repo from the host's
-    # content-view bindings; ubi images have none. Stage one by COPYING the
-    # container's own first enabled repo stanza -- baseurl and all -- so the
-    # scoped query resolves for real. Declaring the id without a baseurl only
-    # shadows the real definition and yields "Cannot find a valid baseurl".
-    # A disabled stanza is appended so the enabled-only parse is exercised
-    # against a file that genuinely contains one.
-    #
-    # Deliberately NO creates: guard. The subscription-manager dnf plugin
-    # writes an EMPTY /etc/yum.repos.d/redhat.repo on the first dnf
-    # transaction -- which the iproute install above triggers -- so a creates:
-    # guard silently skips the staging and every row-9 case then fails with
-    # "defines no ENABLED repositories".
     - name: Symlink a staged certificate (the certmonger/certbot pattern)
       ansible.builtin.file:
         src: good.crt

@@ -19,9 +19,10 @@ import os, sys, yaml
 root = os.environ["ROOT"]
 orch = os.path.join(root, "tasks", "preflight.yml")
 
-# The canonical sequence. Order is load-bearing: rhsm precedes the repo-source
-# so an unregistered host is told it is not registered rather than that its
-# package is unresolvable.
+# The canonical sequence. Order is load-bearing: cheap platform facts first, so
+# an unsupported OS is reported as such rather than through a downstream gate's
+# symptom, and rhsm precedes repo_source so an unregistered host is told it is
+# not registered.
 EXPECTED = [
     "os_family", "os_version", "fips", "selinux", "chrony", "firewalld",
     "rhsm", "repo_source", "tls", "port", "dns",
@@ -84,8 +85,12 @@ WANT_PREDICATES = {
     "fips": ["(__vault_fips_status.content | b64decode | trim) == '1'"],
     "selinux": ["ansible_selinux.status == 'enabled'",
                 "ansible_selinux.mode == 'enforcing'"],
-    "os_family": None,
-    "os_version": None,
+    # Pinned to the EXACT conditions, not merely "asserts something": a semantic
+    # mutation -- widening the family, or adding a version the role does not
+    # support -- would otherwise pass CI, because no behavioural case can run on
+    # a platform the container is not.
+    "os_family": ["ansible_os_family == 'RedHat'"],
+    "os_version": ["ansible_distribution_major_version in ['8', '9', '10']"],
 }
 
 def asserts_in(tasks):

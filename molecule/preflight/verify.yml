@@ -71,7 +71,7 @@
               - ansible_failed_result.msg is search('vault_repo_gpg_key')
             fail_msg: "wrong cause: {{ ansible_failed_result.msg | default('') }}"
 
-    - name: "DID NOT FIRE - master switch off suppresses row 8 entirely"
+    - name: "DID NOT FIRE - master switch off suppresses the repo-source gate entirely"
       ansible.builtin.include_role:
         name: ansible-role-vault
         tasks_from: preflight/repo_source.yml
@@ -80,7 +80,7 @@
         vault_repo_source: satellite
         ansible_distribution: Rocky
 
-    - name: Assert the row 8 marker was skipped, not merely non-failing
+    - name: Assert the repo-source marker was skipped, not merely non-failing
       ansible.builtin.assert:
         that:
           - __vault_repo_source_marker is defined
@@ -90,7 +90,7 @@
           register skipped; "nothing failed" is also what a deleted gate looks
           like.
 
-    - name: "EXECUTES - hashicorp source enters row 8 but fires no cause"
+    - name: "EXECUTES - hashicorp source enters the repo-source gate but fires no cause"
       ansible.builtin.include_role:
         name: ansible-role-vault
         tasks_from: preflight/repo_source.yml
@@ -157,13 +157,6 @@
                 | map(attribute='msg', default='') | join(' ') is search('not a regular file')
             fail_msg: "wrong cause: {{ ansible_failed_result | default('') }}"
 
-    - name: Assert the TLS pass-case actually evaluated all three files
-      ansible.builtin.assert:
-        that:
-          - __vault_tls_ok is defined
-          - __vault_tls_ok.results | default([]) | length == 3
-        fail_msg: "TLS pass-case did not evaluate three files"
-
     - name: "PASSES - a symlinked certificate is accepted"
       ansible.builtin.include_role:
         name: ansible-role-vault
@@ -174,12 +167,46 @@
         vault_tls_key_file: /tmp/preflight-fixtures/good.key
         vault_tls_ca_file: /tmp/preflight-fixtures/good.ca
 
-    # Staged-material checks are suppressed when the role manages TLS, but the
-    # managed branch now validates its OWN inputs, so this case has to supply
-    # them. Leaving them empty is a separate case below.
-    # On the CONTROLLER, deliberately: first_found resolves where copy reads
-    # from, not on the target. Staging it in the container is what a fixture
-    # that tested nothing would look like.
+    - name: Assert that pass-case actually evaluated all three files
+      ansible.builtin.assert:
+        that:
+          - __vault_tls_ok is defined
+          - __vault_tls_ok.results | default([]) | length == 3
+          # rejectattr('failed') on TRUTHINESS, never on 'defined': the stat
+          # carries failed_when: false, which DEFINES .failed as False on every
+          # result. Testing for the key's existence rejects all three -- the
+          # exact rewriting this issue exists to repair, and I reintroduced it
+          # here while asserting about the gate that repairs it.
+          - __vault_tls_ok.results | rejectattr('failed') | list | length == 3
+        fail_msg: >-
+          The TLS pass-case did not evaluate three files cleanly:
+          {{ __vault_tls_ok.results | default([]) | length }} results. Placed
+          AFTER a pass case deliberately -- before one, it consumes the previous
+          failing case's results and reports success for the wrong run.
+
+    # Every other TLS case sets vault_manage_tls: false, so deleting the
+    # production `when: not (vault_manage_tls | bool)` would not change the
+    # scenario at all. This is the oracle that notices.
+    - name: "DID NOT FIRE - role manages TLS, so the staged-material gate is suppressed"
+      ansible.builtin.include_role:
+        name: ansible-role-vault
+        tasks_from: preflight/tls.yml
+      vars:
+        vault_manage_tls: true
+        vault_tls_cert_file: /tmp/preflight-fixtures/absent.crt
+        vault_tls_key_file: /tmp/preflight-fixtures/absent.key
+        vault_tls_ca_file: /tmp/preflight-fixtures/absent.ca
+
+    - name: Assert the TLS gate was suppressed, not merely non-failing
+      ansible.builtin.assert:
+        that:
+          - __vault_tls_ok is defined
+          - __vault_tls_ok.skipped | default(false)
+        fail_msg: >-
+          The staged-material gate ran while the role manages TLS. Three absent
+          files were supplied, so "nothing failed" is also what a deleted
+          when: condition looks like.
+
     - name: "DID NOT FIRE - firewalld absent but management disabled"
       ansible.builtin.include_role:
         name: ansible-role-vault
@@ -187,7 +214,7 @@
       vars:
         vault_manage_firewall: false
 
-    - name: Assert row 6 was suppressed by its toggle
+    - name: Assert the firewalld gate was suppressed by its toggle
       ansible.builtin.assert:
         that:
           - __vault_firewalld_ok is defined
@@ -237,10 +264,10 @@
     ###########################################################################
     # R4 suppressor oracles. One per (suppressor, gate) pair: without these,
     # any single conjunct of a gate's when: can be deleted with the suite green
-    # -- and deleting row 7's is_rhel conjunct puts subscription-manager back on
+    # -- and deleting the RHSM gate's is_rhel conjunct puts subscription-manager back on
     # Rocky, which is the #36 defect this PR closes.
     ###########################################################################
-    - name: "DID NOT FIRE - row 7 suppressed by vault_manage_repo"
+    - name: "DID NOT FIRE - the RHSM gate suppressed by vault_manage_repo"
       ansible.builtin.include_role:
         name: ansible-role-vault
         tasks_from: preflight/rhsm.yml
@@ -248,14 +275,14 @@
         vault_manage_repo: false
         vault_repo_source: satellite
 
-    - name: Assert row 7 marker skipped under the master switch
+    - name: Assert the RHSM gate marker skipped under the master switch
       ansible.builtin.assert:
         that:
           - __vault_rhsm_marker is defined
           - __vault_rhsm_marker.skipped | default(false)
-        fail_msg: "row 7 ran with vault_manage_repo false"
+        fail_msg: "the RHSM gate ran with vault_manage_repo false"
 
-    - name: "DID NOT FIRE - row 7 suppressed on a non-RHEL host"
+    - name: "DID NOT FIRE - the RHSM gate suppressed on a non-RHEL host"
       ansible.builtin.include_role:
         name: ansible-role-vault
         tasks_from: preflight/rhsm.yml
@@ -264,16 +291,16 @@
         vault_repo_source: satellite
         ansible_distribution: Rocky
 
-    - name: Assert row 7 marker skipped on an EL rebuild
+    - name: Assert the RHSM gate marker skipped on an EL rebuild
       ansible.builtin.assert:
         that:
           - __vault_rhsm_marker is defined
           - __vault_rhsm_marker.skipped | default(false)
         fail_msg: >-
-          row 7 ran on Rocky. subscription-manager does not exist there; this
+          the RHSM gate ran on Rocky. subscription-manager does not exist there; this
           is the #36 defect that rejected every compatible EL distribution.
 
-    - name: "DID NOT FIRE - row 7 suppressed under the mirror source"
+    - name: "DID NOT FIRE - the RHSM gate suppressed under the mirror source"
       ansible.builtin.include_role:
         name: ansible-role-vault
         tasks_from: preflight/rhsm.yml
@@ -450,7 +477,7 @@
               - ansible_failed_result.msg is search('not the vault-shared service')
             fail_msg: "wrong cause: {{ ansible_failed_result.msg | default('') }}"
 
-    # C2 -- row 8's mirror-URL cause had no fires oracle, so its predicate was
+    # The mirror-URL cause had no fires oracle of its own, so its predicate was
     # tautologizable; only the GPG-key cause was proven.
     - name: "FIRES - mirror mode with the URL still pointing upstream"
       block:
@@ -472,7 +499,7 @@
               - ansible_failed_result.msg is search('still resolves to')
             fail_msg: "wrong cause: {{ ansible_failed_result.msg | default('') }}"
 
-    # C1 -- every row 9 oracle set vault_manage_install: true, so the HSM half
+    # Every reachability oracle set vault_manage_install: true, so the HSM half
     # of the firing disjunct short-circuited and was never load-bearing.
     - name: "FIRES - an unattributed row alongside a Vault-owned listener"
       block:
@@ -514,7 +541,7 @@
             state: absent
 
     ###########################################################################
-    # Codex round 5 - normalisation, signature policy, and effective readability
+    # Mirror-source normalisation
     ###########################################################################
 
     - name: "FIRES - mirror URL uses the absolute (root-dot) public hostname"
@@ -692,6 +719,29 @@
       vars:
         vault_repo_source: satellite
 
+    - name: Stat the repo file after the satellite run
+      ansible.builtin.stat:
+        path: /etc/yum.repos.d/hashicorp.repo
+      register: __repo_after_satellite
+
+    # Both halves, or the case proves nothing: without "present before",
+    # deleting the template task passes; without "absent after", deleting the
+    # cleanup passes. The split removed these assertions along with an adjacent
+    # Satellite block and left the two stat tasks recording nothing.
+    - name: "Assert the role wrote the file, then removed it for satellite"
+      ansible.builtin.assert:
+        that:
+          - __repo_after_hashicorp.stat.exists
+          - not __repo_after_satellite.stat.exists
+        fail_msg: >-
+          hashicorp source wrote the repo file:
+          {{ __repo_after_hashicorp.stat.exists }} (want true);
+          satellite source left it in place:
+          {{ __repo_after_satellite.stat.exists }} (want false).
+          A leftover .repo means dnf can still resolve Vault from the public
+          internet while subscription-manager owns repo configuration.
+        success_msg: "repo.yml: written under hashicorp, removed under satellite"
+
     - name: "FIRES - Satellite source on an unregistered host"
       block:
         - name: Run the RHSM gate for Satellite-sourced content
@@ -719,7 +769,7 @@
         vault_manage_repo: true
         vault_repo_source: hashicorp
 
-    - name: Assert row 7 was suppressed by the sourcing mode
+    - name: Assert the RHSM gate was suppressed by the sourcing mode
       ansible.builtin.assert:
         that:
           - __vault_rhsm_registered is defined
@@ -784,6 +834,4 @@
           failed_when: false
           changed_when: true
 
-    ###########################################################################
-    # Codex round 9 - named ACL entries, and an indeterminate ACL read
     ###########################################################################

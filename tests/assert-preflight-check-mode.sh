@@ -8,8 +8,8 @@
 # passes. A dry run that greens a host it would have rejected is worse than no
 # dry run. tasks/configure.yml carried the correct precedent before this.
 #
-# This is a CLASS lock, not a per-site one: the same omission shipped in six
-# files at once, so checking the files individually is how it recurs.
+# This is a CLASS lock, not a per-site one: the same omission shipped across
+# every probe at once, so checking sites individually is how it recurs.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export ROOT

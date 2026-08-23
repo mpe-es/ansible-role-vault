@@ -7,12 +7,18 @@
 #   assert FIRES on its own cause and does NOT fire when its feature is toggled
 #   off.
 #
-#   NOT every gate is covered, and the exclusions are deliberate:
-#     - fips and selinux are not exercised at all (no FIPS runner, no enforcing
-#       container). Their predicates are locked statically instead, by
-#       tests/assert-preflight-gate-order.sh.
-#     - the "ss entirely absent" arm is untested; removing iproute perturbs
-#       every other port case in the same container.
+#   NOT every gate is covered. verify.yml includes chrony, firewalld, port,
+#   repo_source, rhsm and tls directly. It does NOT include:
+#     - fips and selinux (no FIPS runner, no enforcing container),
+#     - os_family and os_version (the container is one platform, so a
+#       behavioural case could only assert the platform it is already on),
+#     - dns (advisory, warn-only by design).
+#   Those five are locked by tests/assert-preflight-gate-order.sh instead --
+#   fips, selinux, os_family and os_version on their exact predicates, dns on
+#   its conditional warning.
+#
+#   Also untested: the "ss entirely absent" arm; removing iproute perturbs every
+#   other port case in the same container.
 #   Treat "the scenario is green" as evidence about the covered gates only.
 # Classification: UNCLASSIFIED
 ###############################################################################

@@ -27,9 +27,9 @@ in airgap or internet-connected environments.
 
 `tasks/preflight.yml` **hard-fails the play** when any gate below is unmet.
 These are gates, not things the role configures for you — provision them in
-your image or an earlier play. The **Fires when** column matters: five of the
-gates are conditional, so the set that applies depends on how you configure
-the role.
+your image or an earlier play. The **Fires when** column matters: four of the
+gates are conditional — firewalld, RHSM, repo source and TLS material — so the
+set that applies depends on how you configure the role.
 
 | Gate | Fires when | Requirement |
 |------|-----------|-------------|
@@ -101,20 +101,19 @@ responsibility on the Satellite side:
 - the **GPG key is associated with the custom product** — the role does not
   import it in this mode.
 
-The reachability gate queries **only the enabled repositories that
-`subscription-manager` has written to `/etc/yum.repos.d/redhat.repo`**, never
-the host's full enabled set. Querying everything would let a stray HashiCorp,
-EPEL or internal mirror satisfy the check while your content view publishes
-no Vault package,
-which is exactly the curated-content bypass the gate exists to prevent. The
-scoping is a read-only query flag; it does not change repository state on the
-host.
+> **This release does not verify any of that.** Preflight checks the host is
+> registered and that `satellite` was selected on RHEL. It does **not** query
+> whether your content view publishes Vault, and the install transaction is
+> **not** scoped to Satellite content — `dnf` resolves across every enabled
+> repository, so a stray HashiCorp, EPEL or internal mirror can satisfy the
+> install while your content view publishes no Vault package. That is the
+> curated-content bypass, and closing it is tracked in
+> [#68](https://github.com/mpe-es/ansible-role-vault/issues/68).
 
-**Migrating an existing host to `satellite` is a one-time manual step.** If the
-role previously ran with `hashicorp` or `mirror`, `/etc/yum.repos.d/hashicorp.repo`
-is still present. Preflight is Phase 1 and refuses to proceed while it exists,
-so the role's own Phase 2 cleanup cannot run on that first pass. Remove the file
-before the migrating run.
+**Migrating an existing host to `satellite`.** If the role previously ran with
+`hashicorp` or `mirror`, `/etc/yum.repos.d/hashicorp.repo` is still present.
+The role removes it automatically in Phase 2 when the source is `satellite`;
+no manual step is required.
 
 ### Ansible
 
