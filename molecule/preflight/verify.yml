@@ -12,6 +12,10 @@
 #
 #   A did-not-fire case asserts the gate's register shows skipped -- not merely
 #   that nothing failed, which is also what a silently deleted gate looks like.
+#   One exception, stated rather than implied: the mirror-source RHSM case has
+#   no marker assertion. It is still non-vacuous (removing the source predicate
+#   makes it fail on the unregistered fixture, and another case catches deleting
+#   the gate outright), but it does not check a skipped register.
 #
 #   fips.yml and selinux.yml are deliberately NOT exercised: both read state
 #   from the host kernel, so a container inherits the runner's answer. They pass
@@ -426,28 +430,43 @@
             path: /usr/local/bin/ss
             state: absent
 
-    - name: "FIRES - a unit outside /system.slice does not satisfy the anchor"
+    # This fixture is a unit legitimately placed in app.slice. Under the old
+    # '/system.slice/<name>.service' anchor it was REJECTED, which was the
+    # inverse of the real bug: slice placement is a default, not an identity.
+    # systemd reports /app.slice/fakevault.service as that unit's control group,
+    # so when it IS the configured unit the gate must accept it.
+    - name: "PASSES - the Vault unit in a non-default slice is still the Vault unit"
+      ansible.builtin.include_role:
+        name: ansible-role-vault
+        tasks_from: preflight/port.yml
+      vars:
+        vault_listener_port: 19996
+        vault_service_name: fakevault
+
+    # The boundary that replaces the anchor: a unit whose name merely EXTENDS
+    # the configured one must not satisfy it. /system.slice/vault-shared.service
+    # is not /system.slice/vault.service, and a prefix match would accept it.
+    - name: "FIRES - a unit whose name extends the Vault unit's does not satisfy it"
       block:
-        - name: Run the port gate against a non-system-slice holder
+        - name: Run the port gate naming a unit the holder only prefixes
           ansible.builtin.include_role:
             name: ansible-role-vault
             tasks_from: preflight/port.yml
           vars:
-            vault_listener_port: 19996
-            vault_service_name: fakevault
-        - name: A non-system-slice holder should not have passed
+            vault_listener_port: 19995
+            vault_service_name: vault-share
+        - name: A prefix of the holder's unit name should not have passed
           ansible.builtin.fail:
             msg: >-
-              The gate accepted a listener whose cgroup is /app.slice/
-              fakevault.service. An unprivileged user can define
-              ~/.config/systemd/user/vault.service on a port above 1024; the
-              /system.slice/ anchor exists to reject exactly that, and this
-              case is what discriminates its removal.
+              The holder is vault-shared.service; the configured unit is
+              vault-share.service. Accepting that is a prefix match, and the
+              same weakness let a nested cgroup path containing the unit's
+              control group pass as the unit itself.
       rescue:
-        - name: Assert the message names foreign ownership
+        - name: Assert the message names the configured unit, not the holder
           ansible.builtin.assert:
             that:
-              - ansible_failed_result.msg is search('not the fakevault service')
+              - ansible_failed_result.msg is search('not the vault-share service')
             fail_msg: "wrong cause: {{ ansible_failed_result.msg | default('') }}"
 
 
@@ -836,5 +855,3 @@
             argv: [systemctl, stop, checkmode-squatter.service]
           failed_when: false
           changed_when: true
-
-    ###########################################################################

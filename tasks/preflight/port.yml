@@ -105,6 +105,43 @@
         success_msg: "Listener attribution: ok"
       register: __vault_port_attrib
 
+    # Ask systemd where the unit ACTUALLY lives, rather than pattern-matching a
+    # slice name. Matching '/system.slice/<unit>.service' was wrong in both
+    # directions, both measured:
+    #   - a nested path such as
+    #       0::/user.slice/user-1000.slice/user@1000.service/system.slice/vault.service
+    #     CONTAINS that substring, so an unprivileged user's own unit passed as
+    #     the system service and could hold the port;
+    #   - a legitimate system unit placed in a custom slice reports
+    #     /app.slice/<unit>.service and was rejected.
+    # systemd knows its own answer; slice placement is only a default.
+    - name: Ask systemd for the Vault unit's control group
+      ansible.builtin.command:
+        argv: [systemctl, show, --property=ControlGroup, --value,
+               "{{ vault_service_name }}.service"]
+      register: __vault_port_unit_cg
+      check_mode: false          # command/shell are skipped under --check;
+      # a skipped probe returns rc 0 with empty output, which the assert below
+      # would then read as "no control group", failing closed but for the wrong
+      # reason.
+      changed_when: false
+      failed_when: false
+
+    - name: "Preflight | port | the Vault unit has a control group to compare against"
+      ansible.builtin.assert:
+        that:
+          - __vault_port_unit_cg.stdout | default('') | trim | length > 0
+        fail_msg: >-
+          systemd reports no ControlGroup for
+          {{ vault_service_name }}.service, so the listener on port
+          {{ vault_listener_port }} cannot be attributed to it. An empty answer
+          means the unit is not loaded -- which also means it is not what is
+          holding the port. Listener(s): {{ __vault_port_q.stdout | trim }}
+        success_msg: >-
+          {{ vault_service_name }}.service control group:
+          {{ __vault_port_unit_cg.stdout | trim }}
+      register: __vault_port_unit_cg_ok
+
     - name: Read the owning cgroup for each listener
       ansible.builtin.slurp:
         src: "/proc/{{ item }}/cgroup"
@@ -115,14 +152,19 @@
     - name: "Preflight | port | the only listener is the Vault service"
       ansible.builtin.assert:
         that:
+          # Exact match against systemd's own answer, anchored after the
+          # hierarchy's ':' and bounded at end-of-line, so a longer path that
+          # merely CONTAINS it cannot match.
           - __vault_port_cgroups.results
             | map(attribute='content', default='')
             | map('b64decode')
-            | select('search', '/system\\.slice/' ~ (vault_service_name | regex_escape) ~ '\\.service(?:$|/)')
+            | select('search', ':' ~ (__vault_port_unit_cg.stdout | trim | regex_escape) ~ '\s*$', multiline=True)
             | list | length == __vault_port_pids | length
         fail_msg: >-
           Port {{ vault_listener_port }} is held by a process that is not the
-          {{ vault_service_name }} service. Vault cannot bind an occupied port.
+          {{ vault_service_name }} service, whose control group systemd reports
+          as {{ __vault_port_unit_cg.stdout | trim }}. Vault cannot bind an
+          occupied port.
           Listener(s): {{ __vault_port_q.stdout | trim }}
         success_msg: "Port {{ vault_listener_port }}: held by {{ vault_service_name }}"
       register: __vault_port_owner

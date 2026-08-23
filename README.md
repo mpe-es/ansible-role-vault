@@ -38,7 +38,7 @@ set that applies depends on how you configure the role.
 | SELinux | always | `enabled` **and** `enforcing` |
 | Time sync | always | `chronyc tracking` reports `Leap status : Normal`. A missing `chronyc` or a stopped `chronyd` now fails the **assert** with remediation text, not the task |
 | firewalld | `vault_manage_firewall` | service `ActiveState == active`. Honours the toggle — disable firewall management and this gate does not apply |
-| RHSM | RHEL **and** `vault_manage_repo` **and** `vault_repo_source: satellite` | host registered. Only meaningful for Satellite-sourced content; the role's own repo task uses HashiCorp's repo and needs no subscription |
+| RHSM | RHEL **and** `vault_manage_repo` **and** `vault_repo_source: satellite` | host registered. Only meaningful for Satellite-sourced content; the role-managed repository — HashiCorp's or your mirror's — needs no Red Hat subscription |
 | Repo source | `vault_manage_repo` | `mirror` mode must not name `rpm.releases.hashicorp.com` — checked for **both** `vault_repo_url` and `vault_repo_gpg_key`, since the target host fetches the key directly. This proves inequality with the shipped host, **not** that the endpoint is internal or airgap-safe. `satellite` mode requires RHEL |
 | TLS material | `vault_manage_tls: false` **(the default)** | `vault_tls_cert_file`, `vault_tls_key_file` and `vault_tls_ca_file` all exist and are regular files (symlinks followed). Whether the Vault account can READ them is tracked separately |
 | API port | always | `vault_listener_port` is free, or already held by the Vault service itself. Requires `iproute` (`ss`) — a missing query tool is a hard failure, not a skip |

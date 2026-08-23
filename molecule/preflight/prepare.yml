@@ -56,7 +56,7 @@
       changed_when: false
 
     # /etc/rhsm-host makes subscription-manager report container mode (rc 78)
-    # BEFORE any registration check, so rows 7's real causes are unreachable
+    # BEFORE any registration check, so the RHSM gate's real causes are unreachable
     # while it exists. Measured on ubi8/9/10.
     - name: Remove the container-mode marker so RHSM causes are reachable
       ansible.builtin.file:
@@ -123,6 +123,15 @@
         cmd: >-
           systemd-run --unit=preflight-intruder --collect
           /usr/bin/ncat -l -k ::1 19995
+      changed_when: true
+
+    # A real unit whose name is a strict PREFIX of the shared-port holder's
+    # (vault-share vs vault-shared). It exists and has a control group, but does
+    # not hold the port -- so the ownership comparison is what runs, rather than
+    # the earlier "unit has no control group" arm.
+    - name: Start a unit whose name prefixes the shared-port holder's
+      ansible.builtin.command:
+        argv: [systemd-run, --unit=vault-share, --collect, sleep, "600"]
       changed_when: true
 
     - name: Give the listeners a moment to bind
