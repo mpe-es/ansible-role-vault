@@ -189,15 +189,17 @@ jobs:
       - name: Install required Ansible collections
         run: ansible-galaxy collection install -r requirements.yml
 
-      # The rocky10 fleet is shared and IaC-managed; its documented baseline is
-      # python3 + git (+ docker for the Rust repos). podman is what molecule
-      # drives here, so assert it and say plainly whose job it is to provide it
-      # rather than apt-get installing on a host that has no apt.
+      # podman is provisioned BY the runner image, not by CI: see
+      # mpe-es/mpe-github-runner, files/github-runner-cloudinit.tftpl, which
+      # installs the podman/buildah/skopeo/fuse-overlayfs stack under the
+      # comment "Podman stack (STIG role molecule, ansible-builder default)".
+      # This asserts rather than installs -- and the `sudo apt-get` this step
+      # used to run could never have worked on Rocky anyway.
       - name: Verify podman is present on the runner
         run: |
           set -euo pipefail
           if ! command -v podman >/dev/null 2>&1; then
-            echo "::error::podman is not on this runner. The rocky10 fleet image is IaC-managed and CI does not install baseline tooling; add podman to the image."
+            echo "::error::podman is missing from this runner. It is provisioned by mpe-es/mpe-github-runner (cloud-init packages list); CI does not install baseline tooling."
             exit 1
           fi
           podman --version
@@ -292,12 +294,12 @@ jobs:
       - name: Install required Ansible collections
         run: ansible-galaxy collection install -r requirements.yml
 
-      # See the preflight job: the rocky10 fleet is IaC-managed and has no apt.
+      # See the preflight job: podman comes from the runner image.
       - name: Verify podman is present on the runner
         run: |
           set -euo pipefail
           if ! command -v podman >/dev/null 2>&1; then
-            echo "::error::podman is not on this runner. The rocky10 fleet image is IaC-managed and CI does not install baseline tooling; add podman to the image."
+            echo "::error::podman is missing from this runner. It is provisioned by mpe-es/mpe-github-runner (cloud-init packages list); CI does not install baseline tooling."
             exit 1
           fi
           podman --version
@@ -373,12 +375,12 @@ jobs:
       - name: Install required Ansible collections
         run: ansible-galaxy collection install -r requirements.yml
 
-      # See the preflight job: the rocky10 fleet is IaC-managed and has no apt.
+      # See the preflight job: podman comes from the runner image.
       - name: Verify podman is present on the runner
         run: |
           set -euo pipefail
           if ! command -v podman >/dev/null 2>&1; then
-            echo "::error::podman is not on this runner. The rocky10 fleet image is IaC-managed and CI does not install baseline tooling; add podman to the image."
+            echo "::error::podman is missing from this runner. It is provisioned by mpe-es/mpe-github-runner (cloud-init packages list); CI does not install baseline tooling."
             exit 1
           fi
           podman --version
