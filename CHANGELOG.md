@@ -47,8 +47,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **TLS material gate** — with `vault_manage_tls: false` (the default),
   preflight now verifies the certificate, key and CA all exist and are regular
   files, instead of letting a missing file surface at service start. (#36)
-- **Repo-source coherence gate** — `mirror` mode must not resolve to the public
-  HashiCorp host, checked for both `vault_repo_url` and `vault_repo_gpg_key`;
+- **Repo-source coherence gate** — `mirror` mode must not NAME the public
+  HashiCorp host, checked for both `vault_repo_url` and `vault_repo_gpg_key`.
+  It compares the parsed hostname and performs no name resolution, so an alias
+  or CNAME to the public endpoint still passes;
   the target fetches the key directly, so overriding only the URL still reaches
   the internet. (#36)
 - **Certificate SAN contract** documented with a worked `openssl` request:
@@ -125,8 +127,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   firewalld package is told that, rather than to start a service it lacks.
   (#36)
 - **The RHSM gate rejected every compatible EL distribution** for a dependency
-  the role does not have: `tasks/repo.yml` deploys the HashiCorp repo with
-  HashiCorp's GPG key and never touches Satellite. Registration is now checked
+  the role does not have: under the `hashicorp` and `mirror` sources
+  `tasks/repo.yml` deploys a repo file with HashiCorp's GPG key and needs no
+  subscription. (Under `satellite` it branches: it writes no repo file, removes
+  any role-written one, and skips the key import.) Registration is now checked
   only when Vault is sourced from Satellite. Rocky, AlmaLinux, CentOS Stream
   and Oracle Linux pass. (#36)
 

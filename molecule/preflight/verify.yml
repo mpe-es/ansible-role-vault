@@ -24,9 +24,6 @@
   hosts: all
   gather_facts: true
 
-  vars:
-    fx: /tmp/preflight-fixtures
-
   tasks:
     ###########################################################################
     # The repo-source gate - repo source coherence
@@ -262,7 +259,7 @@
 
 
     ###########################################################################
-    # R4 suppressor oracles. One per (suppressor, gate) pair: without these,
+    # Suppressor oracles. One per (suppressor, gate) pair: without these,
     # any single conjunct of a gate's when: can be deleted with the suite green
     # -- and deleting the RHSM gate's is_rhel conjunct puts subscription-manager back on
     # Rocky, which is the #36 defect this PR closes.
@@ -489,16 +486,20 @@
             vault_manage_repo: true
             vault_repo_source: mirror
             vault_repo_gpg_key: https://repo.closednetwork.local/hashicorp/gpg
-        - name: An upstream mirror URL should not have passed
+        # The scaffold must not contain the discriminator. Naming the variable
+        # here made the rescue match its own scaffold, so deleting the URL
+        # predicate left this case green -- a false-positive oracle guarding the
+        # control it was written for.
+        - name: An upstream mirror base URL should not have passed
           ansible.builtin.fail:
-            msg: "repo_source did not fire for an upstream vault_repo_url"
+            msg: "the repo-source gate did not fire for an upstream base address"
       rescue:
         - name: Assert the message names the URL, not the key
           ansible.builtin.assert:
             that:
-              # Names the VARIABLE, not the message wording: asserting on prose
-              # makes the case fail whenever the message is reworded, which is
-              # what happened when 'resolves to' became 'names'.
+              # Keyed to the VARIABLE, not to prose: asserting on wording makes
+              # every reword a false failure. The scaffold above deliberately
+              # names neither variable.
               - ansible_failed_result.msg is search('vault_repo_url')
               - ansible_failed_result.msg is not search('vault_repo_gpg_key')
             fail_msg: "wrong cause: {{ ansible_failed_result.msg | default('') }}"

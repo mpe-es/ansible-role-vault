@@ -73,8 +73,8 @@
           - (vault_repo_gpg_key | urlsplit('hostname') | default('', true)
              | lower | regex_replace('\.$', '')) != 'rpm.releases.hashicorp.com'
         fail_msg: >-
-          vault_repo_source is 'mirror' but vault_repo_gpg_key still resolves
-          to rpm.releases.hashicorp.com. The target host fetches this key
+          vault_repo_source is 'mirror' but vault_repo_gpg_key still names
+          rpm.releases.hashicorp.com. The target host fetches this key
           directly (rpm_key, and gpgkey= in the deployed .repo), so an
           airgapped run hangs here even when vault_repo_url is internal.
           Set vault_repo_gpg_key to your internal copy.

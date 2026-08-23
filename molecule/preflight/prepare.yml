@@ -49,9 +49,8 @@
         # entitlement. dnf usually routes around them and occasionally does not,
         # which failed this scenario in prepare with "All mirrors were tried"
         # -- a flake with nothing to do with the gates under test. The ubi repos
-        # carry both packages (measured). This is the same class the
-        # (removed with the Satellite gate; see #68) fix addresses in the Satellite gate: an operation
-        # must not depend on repositories it never reads.
+        # carry both packages (measured). The principle is general: an
+        # operation must not depend on repositories it never reads.
         disablerepo: 'rhel-*'
         state: present
       changed_when: false

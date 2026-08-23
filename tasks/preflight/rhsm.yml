@@ -3,9 +3,11 @@
 # Filename: tasks/preflight/rhsm.yml
 # Role: ansible-role-vault
 # Summary: Preflight gate - RHSM registration. Fires ONLY when the Vault RPM
-#   is sourced from Satellite: tasks/repo.yml deploys the HashiCorp repo with
-#   HashiCorp's GPG key and never touches Satellite, so registration is a
-#   prerequisite of the satellite sourcing mode, not of the role (issue #36).
+#   is sourced from Satellite. Under the hashicorp and mirror sources
+#   tasks/repo.yml deploys a repo file with HashiCorp's GPG key and needs no
+#   subscription at all; under satellite it writes none and defers to
+#   subscription-manager. Registration is therefore a prerequisite of the
+#   satellite sourcing mode, not of the role (issue #36).
 #   Satellite is RHEL-only, hence the ansible_distribution guard.
 # NIST 800-53: SI-7 (Software, Firmware, and Information Integrity)
 ###############################################################################
