@@ -27,6 +27,23 @@ on:
 permissions:
   contents: read
 
+# RUNNERS. These jobs ran on the org's private [self-hosted, rocky10] fleet
+# briefly and every job queued forever with runner=UNASSIGNED, while the fleet
+# sat idle with matching labels.
+#
+# Cause: this repository is PUBLIC (since #58). GitHub organisation runner
+# groups do not serve public repositories unless "Allow public repositories" is
+# explicitly enabled on the group, because a public repo means a fork PR can run
+# arbitrary code on internal infrastructure. The two repos that DO use that
+# fleet -- microkosmos and mpe_es.nutanix -- are both private.
+#
+# To move back to the private fleet, one org-side change and one line here:
+#   1. Settings -> Actions -> Runner groups -> Default -> allow public
+#      repositories (a deliberate security decision for a public repo: consider
+#      restricting the group to selected repositories at the same time), then
+#   2. swap `runs-on: ubuntu-latest` for `runs-on: [self-hosted, rocky10]`.
+# The podman steps below are already fleet-ready and need no further change.
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -37,7 +54,7 @@ jobs:
   ###########################################################
   lint:
     name: Lint
-    runs-on: [self-hosted, rocky10]
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -99,7 +116,7 @@ jobs:
   ###########################################################
   syntax:
     name: Syntax Check
-    runs-on: [self-hosted, rocky10]
+    runs-on: ubuntu-latest
     needs: lint
     steps:
       - name: Checkout repository
@@ -147,7 +164,7 @@ jobs:
     # needs.molecule.result, so a widened matrix is covered automatically and
     # no required check is stranded by the rename.
     name: Molecule Test (${{ matrix.scenario }} ${{ matrix.el.name }})
-    runs-on: [self-hosted, rocky10]
+    runs-on: ubuntu-latest
     needs: syntax
     strategy:
       fail-fast: false
@@ -189,17 +206,24 @@ jobs:
       - name: Install required Ansible collections
         run: ansible-galaxy collection install -r requirements.yml
 
-      # podman is provisioned BY the runner image, not by CI: see
-      # mpe-es/mpe-github-runner, files/github-runner-cloudinit.tftpl, which
-      # installs the podman/buildah/skopeo/fuse-overlayfs stack under the
-      # comment "Podman stack (STIG role molecule, ansible-builder default)".
-      # This asserts rather than installs -- and the `sudo apt-get` this step
-      # used to run could never have worked on Rocky anyway.
-      - name: Verify podman is present on the runner
+      - name: Ensure podman is available
         run: |
           set -euo pipefail
-          if ! command -v podman >/dev/null 2>&1; then
-            echo "::error::podman is missing from this runner. It is provisioned by mpe-es/mpe-github-runner (cloud-init packages list); CI does not install baseline tooling."
+          # Portable on purpose, so the runner target is a one-line change:
+          #   - the private rocky10 fleet already ships podman (see
+          #     mpe-es/mpe-github-runner, cloud-init "Podman stack" packages),
+          #   - hosted ubuntu images may or may not, depending on the image
+          #     version, so install only if it is actually absent.
+          # The previous `sudo apt-get install -y podman` was unconditional and
+          # Debian-only: it could never have run on Rocky.
+          if command -v podman >/dev/null 2>&1; then
+            echo "podman already provided by the runner image"
+          elif command -v dnf >/dev/null 2>&1; then
+            sudo dnf install -y podman
+          elif command -v apt-get >/dev/null 2>&1; then
+            sudo apt-get update && sudo apt-get install -y podman
+          else
+            echo "::error::No podman and no known package manager on this runner."
             exit 1
           fi
           podman --version
@@ -248,7 +272,7 @@ jobs:
   ###########################################################
   molecule-init:
     name: Molecule Init (${{ matrix.el.name }} ${{ matrix.mode.name }})
-    runs-on: [self-hosted, rocky10]
+    runs-on: ubuntu-latest
     needs: syntax
     strategy:
       fail-fast: false
@@ -294,12 +318,24 @@ jobs:
       - name: Install required Ansible collections
         run: ansible-galaxy collection install -r requirements.yml
 
-      # See the preflight job: podman comes from the runner image.
-      - name: Verify podman is present on the runner
+      - name: Ensure podman is available
         run: |
           set -euo pipefail
-          if ! command -v podman >/dev/null 2>&1; then
-            echo "::error::podman is missing from this runner. It is provisioned by mpe-es/mpe-github-runner (cloud-init packages list); CI does not install baseline tooling."
+          # Portable on purpose, so the runner target is a one-line change:
+          #   - the private rocky10 fleet already ships podman (see
+          #     mpe-es/mpe-github-runner, cloud-init "Podman stack" packages),
+          #   - hosted ubuntu images may or may not, depending on the image
+          #     version, so install only if it is actually absent.
+          # The previous `sudo apt-get install -y podman` was unconditional and
+          # Debian-only: it could never have run on Rocky.
+          if command -v podman >/dev/null 2>&1; then
+            echo "podman already provided by the runner image"
+          elif command -v dnf >/dev/null 2>&1; then
+            sudo dnf install -y podman
+          elif command -v apt-get >/dev/null 2>&1; then
+            sudo apt-get update && sudo apt-get install -y podman
+          else
+            echo "::error::No podman and no known package manager on this runner."
             exit 1
           fi
           podman --version
@@ -336,7 +372,7 @@ jobs:
   ###########################################################
   molecule-hsm:
     name: Molecule HSM (${{ matrix.el.name }})
-    runs-on: [self-hosted, rocky10]
+    runs-on: ubuntu-latest
     needs: syntax
     strategy:
       fail-fast: false
@@ -375,12 +411,24 @@ jobs:
       - name: Install required Ansible collections
         run: ansible-galaxy collection install -r requirements.yml
 
-      # See the preflight job: podman comes from the runner image.
-      - name: Verify podman is present on the runner
+      - name: Ensure podman is available
         run: |
           set -euo pipefail
-          if ! command -v podman >/dev/null 2>&1; then
-            echo "::error::podman is missing from this runner. It is provisioned by mpe-es/mpe-github-runner (cloud-init packages list); CI does not install baseline tooling."
+          # Portable on purpose, so the runner target is a one-line change:
+          #   - the private rocky10 fleet already ships podman (see
+          #     mpe-es/mpe-github-runner, cloud-init "Podman stack" packages),
+          #   - hosted ubuntu images may or may not, depending on the image
+          #     version, so install only if it is actually absent.
+          # The previous `sudo apt-get install -y podman` was unconditional and
+          # Debian-only: it could never have run on Rocky.
+          if command -v podman >/dev/null 2>&1; then
+            echo "podman already provided by the runner image"
+          elif command -v dnf >/dev/null 2>&1; then
+            sudo dnf install -y podman
+          elif command -v apt-get >/dev/null 2>&1; then
+            sudo apt-get update && sudo apt-get install -y podman
+          else
+            echo "::error::No podman and no known package manager on this runner."
             exit 1
           fi
           podman --version
@@ -448,7 +496,7 @@ jobs:
   ###########################################################
   security:
     name: Security Scan
-    runs-on: [self-hosted, rocky10]
+    runs-on: ubuntu-latest
     needs: lint
     # security-events: write is required by github/codeql-action/upload-sarif,
     # which publishes findings to the repository Security tab. Code scanning is
@@ -501,7 +549,7 @@ jobs:
       - molecule-init
       - molecule-hsm
       - security
-    runs-on: [self-hosted, rocky10]
+    runs-on: ubuntu-latest
     steps:
       - name: Check job results
         run: |
