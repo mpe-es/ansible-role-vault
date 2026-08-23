@@ -37,7 +37,7 @@ jobs:
   ###########################################################
   lint:
     name: Lint
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, rocky10]
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -99,7 +99,7 @@ jobs:
   ###########################################################
   syntax:
     name: Syntax Check
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, rocky10]
     needs: lint
     steps:
       - name: Checkout repository
@@ -147,7 +147,7 @@ jobs:
     # needs.molecule.result, so a widened matrix is covered automatically and
     # no required check is stranded by the rename.
     name: Molecule Test (${{ matrix.scenario }} ${{ matrix.el.name }})
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, rocky10]
     needs: syntax
     strategy:
       fail-fast: false
@@ -189,10 +189,18 @@ jobs:
       - name: Install required Ansible collections
         run: ansible-galaxy collection install -r requirements.yml
 
-      - name: Install Podman
+      # The rocky10 fleet is shared and IaC-managed; its documented baseline is
+      # python3 + git (+ docker for the Rust repos). podman is what molecule
+      # drives here, so assert it and say plainly whose job it is to provide it
+      # rather than apt-get installing on a host that has no apt.
+      - name: Verify podman is present on the runner
         run: |
-          sudo apt-get update
-          sudo apt-get install -y podman
+          set -euo pipefail
+          if ! command -v podman >/dev/null 2>&1; then
+            echo "::error::podman is not on this runner. The rocky10 fleet image is IaC-managed and CI does not install baseline tooling; add podman to the image."
+            exit 1
+          fi
+          podman --version
 
       - name: Configure Podman for systemd containers
         run: |
@@ -238,7 +246,7 @@ jobs:
   ###########################################################
   molecule-init:
     name: Molecule Init (${{ matrix.el.name }} ${{ matrix.mode.name }})
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, rocky10]
     needs: syntax
     strategy:
       fail-fast: false
@@ -284,10 +292,15 @@ jobs:
       - name: Install required Ansible collections
         run: ansible-galaxy collection install -r requirements.yml
 
-      - name: Install Podman
+      # See the preflight job: the rocky10 fleet is IaC-managed and has no apt.
+      - name: Verify podman is present on the runner
         run: |
-          sudo apt-get update
-          sudo apt-get install -y podman
+          set -euo pipefail
+          if ! command -v podman >/dev/null 2>&1; then
+            echo "::error::podman is not on this runner. The rocky10 fleet image is IaC-managed and CI does not install baseline tooling; add podman to the image."
+            exit 1
+          fi
+          podman --version
 
       - name: Configure Podman for systemd containers
         run: |
@@ -321,7 +334,7 @@ jobs:
   ###########################################################
   molecule-hsm:
     name: Molecule HSM (${{ matrix.el.name }})
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, rocky10]
     needs: syntax
     strategy:
       fail-fast: false
@@ -360,10 +373,15 @@ jobs:
       - name: Install required Ansible collections
         run: ansible-galaxy collection install -r requirements.yml
 
-      - name: Install Podman
+      # See the preflight job: the rocky10 fleet is IaC-managed and has no apt.
+      - name: Verify podman is present on the runner
         run: |
-          sudo apt-get update
-          sudo apt-get install -y podman
+          set -euo pipefail
+          if ! command -v podman >/dev/null 2>&1; then
+            echo "::error::podman is not on this runner. The rocky10 fleet image is IaC-managed and CI does not install baseline tooling; add podman to the image."
+            exit 1
+          fi
+          podman --version
 
       - name: Configure Podman for systemd containers
         run: |
@@ -428,7 +446,7 @@ jobs:
   ###########################################################
   security:
     name: Security Scan
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, rocky10]
     needs: lint
     # security-events: write is required by github/codeql-action/upload-sarif,
     # which publishes findings to the repository Security tab. Code scanning is
@@ -481,7 +499,7 @@ jobs:
       - molecule-init
       - molecule-hsm
       - security
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, rocky10]
     steps:
       - name: Check job results
         run: |

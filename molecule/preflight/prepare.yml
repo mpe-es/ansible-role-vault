@@ -42,22 +42,31 @@
     # case in verify.yml shims a failing ss rather than removing the package;
     # the "tool entirely absent" arm is knowingly untested (removing iproute
     # mid-scenario would break every later case on ubi9/ubi10).
-    - name: Ensure the socket query tool is present
-      ansible.builtin.dnf:
-        name: iproute
-        # ubi-init ships rhel-* enabled, and they are unreachable without an
-        # entitlement. dnf usually routes around them and occasionally does not,
-        # which failed this scenario in prepare with "All mirrors were tried"
-        # -- a flake with nothing to do with the gates under test. The ubi repos
-        # carry both packages (measured). The principle is general: an
-        # operation must not depend on repositories it never reads.
-        disablerepo: 'rhel-*'
-        state: present
-      changed_when: false
+    # The dnf CLI, not the dnf MODULE, and only in this fixture.
+    #
+    # On EL8 no interpreter satisfies both halves of what the module needs:
+    #   /usr/libexec/platform-python  3.6.8  has dnf bindings, but ansible-core
+    #                                        modules need >= 3.7 and die on
+    #                                        "future feature annotations is not
+    #                                        defined"
+    #   /usr/bin/python3.11           3.11   runs modules, has NO dnf bindings
+    # Both measured on ubi8. Selecting an interpreter therefore cannot work; the
+    # CLI sidesteps the binding question entirely and behaves the same on 8/9/10.
+    #
+    # rhel-* is disabled for the reason documented below: ubi-init ships those
+    # repos enabled and unentitled, and dnf occasionally insists on consulting
+    # them ("All mirrors were tried").
+    #
+    # iproute : the port gate's normal cases need ss, absent on ubi8.
+    # gnupg2  : the repo-lifecycle case drives the real tasks/repo.yml under the
+    #           hashicorp source, which imports the key via rpm_key -- and
+    #           rpm_key needs gpg2, which ubi10 does not ship at all.
+    - name: Ensure the fixture's package prerequisites are present
+      ansible.builtin.command:  # noqa command-instead-of-module
+        argv: [dnf, -y, --disablerepo=rhel-*, install, iproute, gnupg2]
+      register: __prep_pkgs
+      changed_when: "'Installed:' in __prep_pkgs.stdout"
 
-    # /etc/rhsm-host makes subscription-manager report container mode (rc 78)
-    # BEFORE any registration check, so the RHSM gate's real causes are unreachable
-    # while it exists. Measured on ubi8/9/10.
     - name: Remove the container-mode marker so RHSM causes are reachable
       ansible.builtin.file:
         path: /etc/rhsm-host
