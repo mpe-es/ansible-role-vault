@@ -60,7 +60,7 @@
           - (vault_repo_url | urlsplit('hostname') | default('', true)
              | lower | regex_replace('\.$', '')) != 'rpm.releases.hashicorp.com'
         fail_msg: >-
-          vault_repo_source is 'mirror' but vault_repo_url still resolves to
+          vault_repo_source is 'mirror' but vault_repo_url still names
           rpm.releases.hashicorp.com. An airgapped host cannot reach it. Set
           vault_repo_url to your internal mirror.
         success_msg: "Mirror URL: not the shipped HashiCorp host"

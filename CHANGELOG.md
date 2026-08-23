@@ -57,9 +57,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `tests/assert-preflight-gate-order.sh` — static lock on the gate sequence and
   the tag surfaces, wired into the CI lint job. (#36)
 - `molecule/preflight` scenario proving that each COVERED gate fires on its own
-  cause and stays silent when its feature is toggled off. FIPS and SELinux are
-  not exercised (no FIPS runner, no enforcing container) and are locked
-  statically instead; the "ss entirely absent" arm is untested. (#36)
+  cause and stays silent when its feature is toggled off. FIPS, SELinux, OS family,
+  OS version and DNS are not exercised behaviourally and are locked statically
+  instead; the "ss entirely absent" arm is untested. (#36)
 
 ### Deferred to follow-up issues
 
@@ -70,7 +70,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mode `dnf` still resolves across every enabled repository.
 - **TLS readability by the Vault account** — the staged-material gate proves the
   files exist and are regular files. Proving the service account can read them
-  (ACL evaluation and full pathname resolution) is tracked separately.
+  (ACL evaluation and full pathname resolution) is tracked in
+  [#69](https://github.com/mpe-es/ansible-role-vault/issues/69).
 
 ### Changed
 - Molecule now executes the real role rather than a hand-copied replica, so

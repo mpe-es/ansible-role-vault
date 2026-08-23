@@ -29,7 +29,7 @@
 
   tasks:
     ###########################################################################
-    # Row 8 - repo source coherence
+    # The repo-source gate - repo source coherence
     ###########################################################################
     - name: "FIRES - satellite mode on a non-RHEL host"
       block:
@@ -106,12 +106,12 @@
           - __vault_repo_source_url.skipped | default(false)
           - __vault_repo_source_gpg.skipped | default(false)
         fail_msg: >-
-          Row 8's marker must EXECUTE under a non-firing source while its cause
+          The repo-source gate's marker must EXECUTE under a non-firing source while its cause
           asserts skip. Without that distinction, "suppressed by
           vault_manage_repo" and "this source has no checks" are byte-identical.
 
     ###########################################################################
-    # Row 10 - TLS trio (inverted polarity: the switch being OFF turns it ON)
+    # The TLS gate - TLS trio (inverted polarity: the switch being OFF turns it ON)
     ###########################################################################
     - name: "FIRES - staged certificate is missing"
       block:
@@ -242,7 +242,7 @@
             fail_msg: "wrong cause: {{ ansible_failed_result.msg | default('') }}"
 
     ###########################################################################
-    # Row 5 - chrony absent (measured: chronyc ships on none of ubi8/9/10)
+    # The chrony gate - chrony absent (measured: chronyc ships on none of ubi8/9/10)
     ###########################################################################
     - name: "FIRES - chronyc absent fails the ASSERT, not the task"
       block:
@@ -496,11 +496,13 @@
         - name: Assert the message names the URL, not the key
           ansible.builtin.assert:
             that:
-              - ansible_failed_result.msg is search('still resolves to')
+              # Names the VARIABLE, not the message wording: asserting on prose
+              # makes the case fail whenever the message is reworded, which is
+              # what happened when 'resolves to' became 'names'.
+              - ansible_failed_result.msg is search('vault_repo_url')
+              - ansible_failed_result.msg is not search('vault_repo_gpg_key')
             fail_msg: "wrong cause: {{ ansible_failed_result.msg | default('') }}"
 
-    # Every reachability oracle set vault_manage_install: true, so the HSM half
-    # of the firing disjunct short-circuited and was never load-bearing.
     - name: "FIRES - an unattributed row alongside a Vault-owned listener"
       block:
         - name: Shim ss to emit one Vault row and one unattributable row
@@ -638,7 +640,7 @@
             state: absent
 
     ###########################################################################
-    # Row 5 / Row 6 - non-primary cause arms, via PATH shims
+    # The chrony gate / The firewalld gate - non-primary cause arms, via PATH shims
     ###########################################################################
     - name: "FIRES - chronyd unreachable is distinguished from unsynchronised"
       block:
@@ -777,7 +779,7 @@
         fail_msg: >-
           RHSM gate ran for a non-satellite source. This is the #36 defect:
           registration is a prerequisite of the sourcing mode, not of the role.
-    - name: "PASSES - all three staged and readable"
+    - name: "PASSES - all three staged and regular files"
       ansible.builtin.include_role:
         name: ansible-role-vault
         tasks_from: preflight/tls.yml

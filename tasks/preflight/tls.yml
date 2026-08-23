@@ -22,7 +22,8 @@
 #   file. Proving the Vault account can actually READ it -- ACL evaluation and
 #   full pathname resolution -- is a separate concern and a separate issue; it
 #   generated critical findings in 7 of 9 review rounds while this contract
-#   generated none, so it does not ride along with the gate repair.
+#   generated none, so it does not ride along with the gate repair. Tracked in
+#   #69.
 #
 #   isreg is checked as well as exists: a directory satisfies exists, so
 #   mkdir /opt/vault/tls/tls.crt would pass and then die at service start -

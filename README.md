@@ -39,7 +39,7 @@ set that applies depends on how you configure the role.
 | Time sync | always | `chronyc tracking` reports `Leap status : Normal`. A missing `chronyc` or a stopped `chronyd` now fails the **assert** with remediation text, not the task |
 | firewalld | `vault_manage_firewall` | service `ActiveState == active`. Honours the toggle — disable firewall management and this gate does not apply |
 | RHSM | RHEL **and** `vault_manage_repo` **and** `vault_repo_source: satellite` | host registered. Only meaningful for Satellite-sourced content; the role's own repo task uses HashiCorp's repo and needs no subscription |
-| Repo source | `vault_manage_repo` | `mirror` mode must not resolve to `rpm.releases.hashicorp.com` — checked for **both** `vault_repo_url` and `vault_repo_gpg_key`, since the target host fetches the key directly. This proves inequality with the shipped host, **not** that the endpoint is internal or airgap-safe. `satellite` mode requires RHEL |
+| Repo source | `vault_manage_repo` | `mirror` mode must not name `rpm.releases.hashicorp.com` — checked for **both** `vault_repo_url` and `vault_repo_gpg_key`, since the target host fetches the key directly. This proves inequality with the shipped host, **not** that the endpoint is internal or airgap-safe. `satellite` mode requires RHEL |
 | TLS material | `vault_manage_tls: false` **(the default)** | `vault_tls_cert_file`, `vault_tls_key_file` and `vault_tls_ca_file` all exist and are regular files (symlinks followed). Whether the Vault account can READ them is tracked separately |
 | API port | always | `vault_listener_port` is free, or already held by the Vault service itself. Requires `iproute` (`ss`) — a missing query tool is a hard failure, not a skip |
 
@@ -52,10 +52,15 @@ still surfaces at service start; see [#39](https://github.com/mpe-es/ansible-rol
 
 #### Certificate SAN contract
 
-When `vault_manage_tls: false`, the listener certificate you stage must carry:
+The **final listener certificate** must carry these, regardless of who puts it
+there — the requirement is about what the role's own callers connect to, not
+about who deployed the file. It therefore applies equally when
+`vault_manage_tls: true`, since that path copies the certificate you supply
+without altering its SANs:
 
-- the host **FQDN** (advertised via `vault_api_addr`), and
-- a **`127.0.0.1` IP SAN**.
+- a **`127.0.0.1` IP SAN**, and
+- whatever hostname `vault_api_addr` advertises — the host **FQDN** by default,
+  but the name you set if you override it.
 
 The role's own callers use the loopback address — `tasks/service.yml` verifies
 against `https://127.0.0.1:<port>`, and `files/vault-unseal.sh` and the unseal
@@ -101,8 +106,8 @@ responsibility on the Satellite side:
 - the **GPG key is associated with the custom product** — the role does not
   import it in this mode.
 
-> **This release does not verify any of that.** Preflight checks the host is
-> registered and that `satellite` was selected on RHEL. It does **not** query
+> **This release verifies only the first of those three.** Preflight checks the
+> host is registered, and that `satellite` was selected on RHEL. It does **not** query
 > whether your content view publishes Vault, and the install transaction is
 > **not** scoped to Satellite content — `dnf` resolves across every enabled
 > repository, so a stray HashiCorp, EPEL or internal mirror can satisfy the

@@ -26,6 +26,9 @@
 
   tasks:
     - name: Bootstrap requested Python interpreter
+      # NOT excluded here: this runs before Python exists, so it cannot use the
+      # dnf module's disablerepo. If the bootstrap ever flakes on "All mirrors
+      # were tried", that is why.
       ansible.builtin.raw: >-
         sh -c 'test -x {{ ansible_python_interpreter }}
         || dnf install -y {{ ansible_python_interpreter | basename }}'
@@ -47,7 +50,7 @@
         # which failed this scenario in prepare with "All mirrors were tried"
         # -- a flake with nothing to do with the gates under test. The ubi repos
         # carry both packages (measured). This is the same class the
-        # skip_if_unavailable fix addresses in the Satellite gate: an operation
+        # (removed with the Satellite gate; see #68) fix addresses in the Satellite gate: an operation
         # must not depend on repositories it never reads.
         disablerepo: 'rhel-*'
         state: present
@@ -67,12 +70,16 @@
         state: directory
         mode: '0755'
 
-    # Row 11 needs REAL listeners in real systemd cgroups: ownership is decided
+    # The port gate needs REAL listeners in real systemd cgroups: ownership is decided
     # by /proc/<pid>/cgroup, so a bare background process would not exercise the
     # code path. systemd-run puts each under /system.slice/<unit>.service.
     - name: Install a listener helper for the port fixtures
       ansible.builtin.dnf:
         name: nmap-ncat
+        # Same exclusion as the iproute install above, for the same measured
+        # reason: ubi-init ships rhel-* enabled and unentitled, and applying
+        # this to only one transaction leaves the flake it claims to prevent.
+        disablerepo: 'rhel-*'
         state: present
       changed_when: false
 

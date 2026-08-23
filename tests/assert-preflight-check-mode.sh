@@ -27,8 +27,16 @@ def walk(tasks):
             yield from walk(t.get(key))
 
 files = sorted(glob.glob(os.path.join(root, "tasks", "preflight", "*.yml")))
-if len(files) < 11:
-    fail.append(f"expected at least 11 gate files, found {len(files)}")
+# The EXACT set, not a floor: ">= 11" would let a twelfth leftover gate file sit
+# in the directory unreferenced by the orchestrator, which is precisely what a
+# split leaves behind.
+CANONICAL = {"os_family", "os_version", "fips", "selinux", "chrony", "firewalld",
+             "rhsm", "repo_source", "tls", "port", "dns"}
+found = {os.path.basename(f)[:-4] for f in files}
+if found != CANONICAL:
+    extra, missing = sorted(found - CANONICAL), sorted(CANONICAL - found)
+    fail.append(f"tasks/preflight/ does not hold exactly the canonical gates. "
+                f"unexpected: {extra or 'none'}; missing: {missing or 'none'}")
 
 probes = 0
 for path in files:
