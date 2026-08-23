@@ -98,7 +98,7 @@
 
     # A unit in a NON-system slice: its cgroup contains /fakevault.service but
     # NOT /system.slice/fakevault.service. That is the only way to discriminate
-    # the ownership anchor -- a shimmed PID whose cgroup lacks the name entirely
+    # the ownership comparison -- a shimmed PID whose cgroup lacks the name entirely
     # fails as a foreign holder whether the anchor is present or not, which is
     # false coverage.
     - name: Start a listener in a non-system slice
@@ -132,6 +132,25 @@
     - name: Start a unit whose name prefixes the shared-port holder's
       ansible.builtin.command:
         argv: [systemd-run, --unit=vault-share, --collect, sleep, "600"]
+      changed_when: true
+
+    # PORT ALLOCATION (check before adding a fixture; 19998 was already the
+    # "genuinely free port" case and binding it broke that case):
+    #   18200 vault-owned pass   19994 unattributed row   19995 shared/no-PID
+    #   19996 custom slice       19997 check-mode         19998 MUST STAY FREE
+    #   19999 ss-unusable        19993 extension holder
+    #
+    # A holder whose cgroup is a strict EXTENSION of the configured unit's:
+    #   configured : /system.slice/vault-share.service
+    #   holder     : /system.slice/vault-share.service-rogue.service
+    # On a DEDICATED port with no other listener, so the ownership comparison is
+    # the only thing that can fail the case. Without the end anchor in the
+    # production match, the configured path is found inside the holder's and the
+    # gate wrongly passes -- which is what this fixture exists to detect.
+    - name: Start a holder whose cgroup extends the configured unit's
+      ansible.builtin.command:
+        argv: [systemd-run, --unit=vault-share.service-rogue, --collect,
+               /usr/bin/ncat, -l, -k, "19993"]
       changed_when: true
 
     - name: Give the listeners a moment to bind

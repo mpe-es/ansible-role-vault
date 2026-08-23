@@ -133,13 +133,17 @@ dns_path = os.path.join(root, "tasks", "preflight", "dns.yml")
 if os.path.isfile(dns_path):
     with open(dns_path) as fh:
         dns_tasks = yaml.safe_load(fh) or []
+    # The DIRECTION, not merely that 'rc' appears: flipping `rc != 0` to
+    # `rc == 0` warns every healthy host and stays silent on the failures the
+    # advice exists for, and a substring check accepts both.
+    WANT_DNS_WHEN = "__vault_dns_check.rc != 0"
     warns = [t for t in dns_tasks
              if "ansible.builtin.debug" in t
-             and "rc" in str(t.get("when", ""))
+             and " ".join(str(t.get("when", "")).split()) == WANT_DNS_WHEN
              and "WARNING" in str(t["ansible.builtin.debug"].get("msg", ""))]
     if not warns:
-        fail.append("tasks/preflight/dns.yml no longer emits a WARNING conditioned on the "
-                    "resolution probe's rc. It is advisory by design, so this warning is "
+        fail.append("tasks/preflight/dns.yml no longer emits a WARNING conditioned on "
+                    f"exactly {WANT_DNS_WHEN!r}. It is advisory by design, so this warning is "
                     "the entire contract; nothing else would notice it disappearing.")
 
 # tasks/main.yml must still route to the orchestrator under the same tags.

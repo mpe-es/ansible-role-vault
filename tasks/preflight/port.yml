@@ -11,12 +11,15 @@
 #   name: this gate exists to reject foreign holders, and any process may be
 #   named "vault". A listener with no attributable PID FAILS CLOSED - ss omits
 #   users:(...) for sockets it cannot attribute, which needs become: true.
-#   Ownership is anchored to /system.slice/: an unprivileged user can define a
+#   Ownership is anchored to systemd's reported ControlGroup: an unprivileged user can define a
 #   ~/.config/systemd/user/<name>.service binding a port above 1024, and an
 #   unanchored match would accept it while the role's system unit still cannot
 #   bind.
 #
-#   The service name is regex-escaped and the match requires a cgroup-component
+#   Ownership is decided by asking systemd for the unit's ControlGroup and
+#   comparing that exact path; the service name is not pattern-matched into a
+#   slice path, because slice placement is a default and not an identity.
+#   The comparison requires a cgroup-component
 #   boundary. Without the boundary, '/system.slice/vault\.service' also matches
 #   /system.slice/vault.service-rogue.service -- a foreign unit accepted as
 #   Vault by the gate whose purpose is rejecting foreign holders.

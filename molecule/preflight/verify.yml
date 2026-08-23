@@ -443,25 +443,37 @@
         vault_listener_port: 19996
         vault_service_name: fakevault
 
+    - name: Assert the ownership comparison actually ran for the custom slice
+      ansible.builtin.assert:
+        that:
+          - __vault_port_owner is defined
+          - not (__vault_port_owner.skipped | default(false))
+        fail_msg: >-
+          The custom-slice case passed without the ownership task running, so it
+          proves nothing: a skipped comparison looks exactly like an accepted
+          one from the outside.
+
     # The boundary that replaces the anchor: a unit whose name merely EXTENDS
     # the configured one must not satisfy it. /system.slice/vault-shared.service
     # is not /system.slice/vault.service, and a prefix match would accept it.
-    - name: "FIRES - a unit whose name extends the Vault unit's does not satisfy it"
+    - name: "FIRES - a holder whose cgroup extends the Vault unit's does not satisfy it"
       block:
-        - name: Run the port gate naming a unit the holder only prefixes
+        - name: Run the port gate against the extension holder
           ansible.builtin.include_role:
             name: ansible-role-vault
             tasks_from: preflight/port.yml
           vars:
-            vault_listener_port: 19995
+            vault_listener_port: 19993
             vault_service_name: vault-share
-        - name: A prefix of the holder's unit name should not have passed
+        - name: A cgroup that merely CONTAINS the unit's should not have passed
           ansible.builtin.fail:
             msg: >-
-              The holder is vault-shared.service; the configured unit is
-              vault-share.service. Accepting that is a prefix match, and the
-              same weakness let a nested cgroup path containing the unit's
-              control group pass as the unit itself.
+              The configured unit's control group is
+              /system.slice/vault-share.service; the holder's is
+              /system.slice/vault-share.service-rogue.service, which contains it
+              as a strict prefix. Accepting that is the same containment error
+              that let a nested user-manager cgroup pass as the system unit.
+              This port has one listener, so nothing else can fail the case.
       rescue:
         - name: Assert the message names the configured unit, not the holder
           ansible.builtin.assert:
@@ -722,12 +734,18 @@
     # tasks/repo.yml - executed by NO scenario before this case. The satellite
     # branch and its leftover-removal are fail-open controls otherwise.
     ###########################################################################
+    # A LOCAL key, deliberately: this case only needs the repo file created and
+    # then removed, and repo.yml also imports vault_repo_gpg_key under the
+    # hashicorp source. Left at its default that reaches out to
+    # rpm.releases.hashicorp.com, making a file-lifecycle test depend on public
+    # network access it has no reason to need.
     - name: Write a repo file as the hashicorp source would
       ansible.builtin.include_role:
         name: ansible-role-vault
         tasks_from: repo.yml
       vars:
         vault_repo_source: hashicorp
+        vault_repo_gpg_key: /etc/pki/rpm-gpg/RPM-GPG-KEY-redhat-release
 
     - name: Confirm the hashicorp source wrote the repo file
       ansible.builtin.stat:
