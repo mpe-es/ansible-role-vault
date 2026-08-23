@@ -2,9 +2,10 @@
 # A doubled backslash before a regex class letter, inside a FOLDED (>) or
 # LITERAL (|) block scalar, silently never matches.
 #
-# Measured on the live gate rather than reasoned about: __vault_sat_dupes lives
-# in a folded scalar; with '\\S' it returned [] and the shadow-detection gate
-# did not fire, with '\S' it returned three repository ids and the gate fired.
+# Measured on a live gate rather than reasoned about: a regex_findall in a
+# folded scalar returned [] with '\\S' and matched with '\S', and the gate that
+# consumed it fired only in the second case. (That particular expression lives
+# on the branch for #68; the rule it demonstrates is general.)
 #
 # SCOPE MATTERS, and this lock got it wrong the first time. In a PLAIN scalar --
 # how every assert `that:` item is written -- BOTH forms match. Flagging those

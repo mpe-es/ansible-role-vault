@@ -22,8 +22,10 @@ vault_manage_repo: true
 #   hashicorp - public HashiCorp repo (default; today's behaviour)
 #   mirror    - internal reposync/Pulp mirror; airgap assert applies
 #   satellite - Red Hat Satellite content view; the role writes NO repo file
-#               (subscription-manager owns it) and preflight verifies
-#               registration + package reachability instead.
+#               (subscription-manager owns it) and preflight verifies the host
+#               is registered. Verifying that the content view actually
+#               publishes Vault, and scoping the install to it, is #68 -- until
+#               then dnf resolves across every enabled repository.
 # satellite is RHEL-only: Satellite is a licensed Red Hat product and does not
 # manage EL rebuilds, so preflight rejects it on Rocky/Alma/CentOS Stream.
 vault_repo_source: "hashicorp"

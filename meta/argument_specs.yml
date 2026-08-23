@@ -35,8 +35,8 @@ argument_specs:
           - >-
             Satellite users should leave this true and set vault_repo_source to
             'satellite' - that combination writes no repo file and additionally
-            verifies registration and package reachability, which setting this
-            to false does not.
+            verifies that the host is registered, which setting this to false
+            does not.
         type: bool
         default: true
 
@@ -47,8 +47,9 @@ argument_specs:
           - "'mirror' - an internal reposync/Pulp mirror; the airgap assert applies."
           - >-
             'satellite' - a Red Hat Satellite content view. The role writes no
-            repo file (subscription-manager owns it) and preflight verifies
-            registration and package reachability instead. RHEL only.
+            repo file (subscription-manager owns it) and preflight verifies the
+            host is registered. Content-view reachability and install scoping
+            are tracked in #68. RHEL only.
         type: str
         default: "hashicorp"
         choices:
