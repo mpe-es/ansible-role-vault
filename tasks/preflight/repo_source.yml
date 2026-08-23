@@ -41,7 +41,7 @@
       when: vault_repo_source == 'satellite'
 
     # The host is compared normalised: urlsplit lowercases, but it preserves
-    # the FQDN root dot, so 'rpm.releases.hashicorp.com.' resolves to the same
+    # the FQDN root dot. DNS treats 'rpm.releases.hashicorp.com.' as the same
     # public endpoint while failing a literal !=. Strip it before comparing.
     # Both variables are fetched BY THE TARGET HOST - vault_repo_url as the
     # repo baseurl, vault_repo_gpg_key by both rpm_key and the .repo gpgkey=.

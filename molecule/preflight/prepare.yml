@@ -97,7 +97,9 @@
       changed_when: true
 
     # A unit in a NON-system slice: its cgroup contains /fakevault.service but
-    # NOT /system.slice/fakevault.service. That is the only way to discriminate
+    # systemd reports /app.slice/fakevault.service as this unit's ControlGroup,
+    # so when it IS the configured unit the gate must accept it -- the inverse
+    # of the bug the old slice anchor caused
     # the ownership comparison -- a shimmed PID whose cgroup lacks the name entirely
     # fails as a foreign holder whether the anchor is present or not, which is
     # false coverage.

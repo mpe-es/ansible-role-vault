@@ -453,9 +453,9 @@
           proves nothing: a skipped comparison looks exactly like an accepted
           one from the outside.
 
-    # The boundary that replaces the anchor: a unit whose name merely EXTENDS
-    # the configured one must not satisfy it. /system.slice/vault-shared.service
-    # is not /system.slice/vault.service, and a prefix match would accept it.
+    # The boundary that replaces the anchor: a holder whose cgroup merely
+    # EXTENDS the configured unit's must not satisfy it -- the same containment
+    # error that let a nested user-manager cgroup pass as the system unit.
     - name: "FIRES - a holder whose cgroup extends the Vault unit's does not satisfy it"
       block:
         - name: Run the port gate against the extension holder
@@ -592,7 +592,7 @@
         - name: A root-dot FQDN should not have passed
           ansible.builtin.fail:
             msg: >-
-              'rpm.releases.hashicorp.com.' resolves to the same public endpoint
+              DNS treats 'rpm.releases.hashicorp.com.' as the same public endpoint
               as the bare name, so comparing the hostname literally lets a
               declared internal mirror fetch from HashiCorp.
       rescue:

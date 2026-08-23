@@ -20,7 +20,9 @@ vault_manage_repo: true
 
 # How the Vault RPM reaches the host. Decides which repo gates apply.
 #   hashicorp - public HashiCorp repo (default; today's behaviour)
-#   mirror    - internal reposync/Pulp mirror; airgap assert applies
+#   mirror    - internal reposync/Pulp mirror; preflight checks the URL and
+#               key do not NAME the public HashiCorp host (it compares a
+#               parsed hostname, so an alias still passes)
 #   satellite - Red Hat Satellite content view; the role writes NO repo file
 #               (subscription-manager owns it) and preflight verifies the host
 #               is registered. Verifying that the content view actually

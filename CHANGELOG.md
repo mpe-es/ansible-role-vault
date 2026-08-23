@@ -54,7 +54,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the target fetches the key directly, so overriding only the URL still reaches
   the internet. (#36)
 - **Certificate SAN contract** documented with a worked `openssl` request:
-  host FQDN plus a `127.0.0.1` IP SAN. No `localhost` DNS SAN is required —
+  a `127.0.0.1` IP SAN plus whatever `vault_api_addr` advertises (the host
+  FQDN by default). No `localhost` DNS SAN is required —
   the issue body's claim to the contrary was wrong and is corrected there. (#36)
 - `tests/assert-preflight-gate-order.sh` — static lock on the gate sequence and
   the tag surfaces, wired into the CI lint job. (#36)

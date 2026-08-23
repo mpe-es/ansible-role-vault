@@ -20,7 +20,8 @@
 
 ###############################################################################
 # Phase 2: Repository Configuration
-# Configure HashiCorp RPM repository (or verify local mirror).
+# Write the repo file for the hashicorp/mirror sources; under satellite,
+# write none and remove any role-written one. No mirror reachability check.
 # NIST 800-53: SI-7 (Software, Firmware, and Information Integrity)
 ###############################################################################
 - name: Include repository configuration tasks

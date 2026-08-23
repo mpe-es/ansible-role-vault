@@ -78,9 +78,11 @@ for gate in EXPECTED:
 # present kept every guard and the whole scenario green.
 #
 # dns is deliberately absent from this map: it is ADVISORY by design (warn-only,
-# documented as such in the README), so "must assert something" is the wrong
-# requirement. What it must not lose is the warning itself, checked separately
-# below.
+# documented as such in the README), so a predicate requirement is the wrong
+# shape for it. What it must not lose is the warning itself, checked separately
+# below. Every entry here is an exact condition list -- there is no
+# "assert something" fallback, because a gate with no pinned predicate is a gate
+# whose semantics nothing checks.
 WANT_PREDICATES = {
     "fips": ["(__vault_fips_status.content | b64decode | trim) == '1'"],
     "selinux": ["ansible_selinux.status == 'enabled'",
@@ -110,16 +112,6 @@ for gate, want in WANT_PREDICATES.items():
     conds = [" ".join(str(c).split())
              for _, a in asserts_in(body)
              for c in (a.get("that") or [])]
-    if want is None:
-        # No pinned wording, but the gate must still assert SOMETHING that can
-        # fail. An empty file, or one asserting only truisms, is the hole.
-        TRIVIAL = {"true", "True", "1", "yes"}
-        real = [c for c in conds if c not in TRIVIAL]
-        if not real:
-            fail.append(f"tasks/preflight/{gate}.yml asserts nothing that can fail "
-                        f"(conditions: {conds!r}). This gate has no Molecule coverage, "
-                        "so nothing else would notice it being emptied.")
-        continue
     missing = [w for w in want if w not in conds]
     if missing:
         fail.append(f"tasks/preflight/{gate}.yml no longer asserts {missing!r}. "

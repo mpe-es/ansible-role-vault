@@ -43,12 +43,12 @@ provisioner:
     ansible_become: false
   env:
     ANSIBLE_ROLES_PATH: ${MOLECULE_PROJECT_DIRECTORY}/..
-  # converge does NOT run the role: this scenario tests Phase 1 in isolation
-  # and the gates are driven individually from verify.yml. Without this, the
-  # role's own preflight would abort at the kernel-inherited FIPS gate on a
-  # non-FIPS CI runner before any assertion ran.
-  options:
-    skip-tags: preflight,service_start
+  # converge does NOT run the role: this scenario tests Phase 1 in isolation and
+  # drives each gate individually from verify.yml. Running the role here would
+  # abort at the kernel-inherited FIPS gate on a non-FIPS CI runner before any
+  # assertion executed. (A skip-tags option used to sit here for that reason and
+  # was a no-op once converge stopped running the role; an EMPTY options: key is
+  # not equivalent to no key -- molecule reads it as None and crashes merging.)
   inventory:
     host_vars:
       vault-preflight:
@@ -57,9 +57,6 @@ provisioner:
         vault_manage_repo: false
         vault_manage_firewall: false
         vault_manage_tls: false
-        vault_manage_install: false
-        vault_manage_selinux: false
-        vault_initialize: false
         # prepare.yml and verify.yml are plain playbooks: they do NOT load
         # defaults/main.yml or vars/main.yml, so anything the fixtures
         # reference must be pinned here.

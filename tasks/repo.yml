@@ -2,7 +2,8 @@
 ###############################################################################
 # Filename: tasks/repo.yml
 # Role: ansible-role-vault
-# Summary: Configure HashiCorp RPM repository for Vault installation
+# Summary: Write the Vault RPM repo file for the hashicorp and mirror sources;
+#   under satellite write none and remove any role-written one.
 # NIST 800-53: SI-7 (Software, Firmware, and Information Integrity)
 # Classification: UNCLASSIFIED
 ###############################################################################

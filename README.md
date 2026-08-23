@@ -317,9 +317,16 @@ for Python library dependencies. No other Ansible role dependencies.
     - role: mpe-es.vault
       vars:
         vault_repo_source: satellite
-        vault_edition: vault-enterprise
         vault_package_version: "1.18.3-1"
 ```
+
+> **Enterprise editions need a license this role does not deliver.** Satellite
+> deployments are usually Enterprise, and `vault_edition: vault-enterprise`
+> selects that package — but Vault Enterprise **cannot start unlicensed**, and
+> the role has no license management
+> ([#42](https://github.com/mpe-es/ansible-role-vault/issues/42)). The example
+> above therefore uses the OSS default, which starts. If you set an Enterprise
+> edition, stage the license separately or the service will fail at Phase 9.
 
 Satellite mode writes no `.repo` file: `subscription-manager` owns
 `/etc/yum.repos.d/redhat.repo` and generates it from the host's content-view

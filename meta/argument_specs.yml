@@ -44,7 +44,9 @@ argument_specs:
         description:
           - How the Vault RPM reaches the host; decides which repo gates apply.
           - "'hashicorp' - the public HashiCorp repo (today's behaviour)."
-          - "'mirror' - an internal reposync/Pulp mirror; the airgap assert applies."
+          - "'mirror' - an internal reposync/Pulp mirror. Preflight checks the URL
+            and key do not name the public HashiCorp host; it compares a parsed
+            hostname and performs no resolution, so an alias still passes."
           - >-
             'satellite' - a Red Hat Satellite content view. The role writes no
             repo file (subscription-manager owns it) and preflight verifies the
