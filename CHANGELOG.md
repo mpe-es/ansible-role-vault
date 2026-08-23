@@ -8,7 +8,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-
 - Initial Vault role implementing all nine task phases: install, user and
   directory layout, TLS, configuration, systemd, initialization, audit, STIG
   remediation, and verification. (#1)
@@ -38,8 +37,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CODEOWNERS and Dependabot conventions aligned with the sibling repositories.
   (#24)
 
-### Changed
 
+- **`vault_repo_source`** (`hashicorp` | `mirror` | `satellite`, default
+  `hashicorp`) — declares how the Vault RPM reaches the host and decides which
+  repo gates apply. `satellite` writes **no** repo file, since
+  `subscription-manager` owns the client repo configuration; preflight verifies
+  registration instead. Content-view reachability and install scoping are
+  tracked in #68. RHEL only. (#36)
+- **TLS material gate** — with `vault_manage_tls: false` (the default),
+  preflight now verifies the certificate, key and CA all exist and are regular
+  files, instead of letting a missing file surface at service start. (#36)
+- **Repo-source coherence gate** — `mirror` mode must not NAME the public
+  HashiCorp host, checked for both `vault_repo_url` and `vault_repo_gpg_key`.
+  It compares the parsed hostname and performs no name resolution, so an alias
+  or CNAME to the public endpoint still passes;
+  the target fetches the key directly, so overriding only the URL still reaches
+  the internet. (#36)
+- **Certificate SAN contract** documented with a worked `openssl` request:
+  a `127.0.0.1` IP SAN plus whatever `vault_api_addr` advertises (the host
+  FQDN by default). No `localhost` DNS SAN is required —
+  the issue body's claim to the contrary was wrong and is corrected there. (#36)
+- `tests/assert-preflight-gate-order.sh` — static lock on the gate sequence and
+  the tag surfaces, wired into the CI lint job. (#36)
+- `molecule/preflight` scenario proving that each COVERED gate fires on its own
+  cause and stays silent when its feature is toggled off. FIPS, SELinux, OS family,
+  OS version and DNS are not exercised behaviourally and are locked statically
+  instead; the "ss entirely absent" arm is untested. (#36)
+
+### Deferred to follow-up issues
+
+- **Satellite content reachability and install-transaction scoping** — verifying
+  that the content view publishes Vault, and scoping `dnf` to the verified
+  repository set, are tracked in
+  [#68](https://github.com/mpe-es/ansible-role-vault/issues/68). In `satellite`
+  mode `dnf` still resolves across every enabled repository.
+- **TLS readability by the Vault account** — the staged-material gate proves the
+  files exist and are regular files. Proving the service account can read them
+  (ACL evaluation and full pathname resolution) is tracked in
+  [#69](https://github.com/mpe-es/ansible-role-vault/issues/69).
+
+### Changed
 - Molecule now executes the real role rather than a hand-copied replica, so
   the tests exercise what ships. (#50, closes #43)
 - Initialization is now a single transaction that unseals and enables audit by
@@ -56,27 +93,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   convention shared with the sibling MPE-ES roles, replacing `*.internal.mil`
   and `*.enclave.mil`.
 
-### Documentation
 
-- Added a **Known Limitations** section covering developmental multi-node HA
-  (#44), the silent no-op on tag-scoped runs (#28), the preflight gaps (#36),
-  and the tracked functional gaps (#35, #39, #40, #42, #45).
-- Requirements now document every prerequisite `tasks/preflight.yml` actually
-  hard-fails on — FIPS mode, SELinux enforcing, chrony synchronization,
-  firewalld running, and RHSM registration — none of which were previously
-  listed. Records that the port-availability assert is inert and that TLS
-  certificate existence is never validated. (#36)
-- Corrected the "or compatible EL distribution" platform claim: the RHSM gate
-  structurally rejects Rocky, AlmaLinux and CentOS Stream today. (#36)
-- HA example playbook now states plainly that running it unchanged across
-  three hosts produces three independent Vaults, not one Raft cluster. (#44)
+**BREAKING CHANGES**
 
-### Removed
 
-- `vault_log_file_mode` from `vars/main.yml` — defined but never consumed by
-  any task or template. (#37)
+- **`--tags preflight` now runs the gates.** It previously matched nothing and
+  reported success having done nothing. A tag-scoped job that was green may now
+  go red — which is the point. `--tags vault|install|stig|fapolicyd` run the
+  fapolicyd phase alone (measured); the remaining tags still do nothing. (#36)
+- **The TLS material gate fires under shipped defaults.** `vault_manage_tls`
+  defaults to `false` and the certificate paths default under `/opt/vault/tls/`,
+  which the role does not populate. A deployment that stages certificates in a
+  later play or out of band passed before and now fails at preflight.
+  Remediation: stage them before the role, or set `vault_manage_tls: true`
+  **and** populate `vault_tls_src_cert` / `_key` / `_ca`. (#36)
+- **The port gate requires `iproute`.** A missing `ss` is a hard failure, not a
+  skip: degrading to a skip would silently restore the inert gate this repairs.
+  Install `iproute` on minimal images. (#36)
 
 ### Fixed
+- **The API port-availability assert could never fail.** `wait_for` with
+  `failed_when: false` forces the result's `failed` key to False, so the assert
+  was a tautology and an occupied port surfaced as an opaque Vault
+  service-start error. The gate now identifies the port's listener and passes
+  only when the port is free or already held by the Vault service itself —
+  decided by systemd cgroup, not process name, since any process may be named
+  `vault`. A listener with no attributable PID fails closed. (#36)
+- **A missing `chronyc` crashed the task instead of failing the assert**, so
+  the remediation text was never reached. Presence is now detected first, and
+  a stopped `chronyd`, an unrecognised exit code and an unsynchronised clock
+  each carry their own message. (#36)
+- **firewalld was required even when `vault_manage_firewall: false`** — the
+  feature toggle did not reach preflight. It now does, and a host with no
+  firewalld package is told that, rather than to start a service it lacks.
+  (#36)
+- **The RHSM gate rejected every compatible EL distribution** for a dependency
+  the role does not have: under the `hashicorp` and `mirror` sources
+  `tasks/repo.yml` deploys a repo file with HashiCorp's GPG key and needs no
+  subscription. (Under `satellite` it branches: it writes no repo file, removes
+  any role-written one, and skips the key import.) Registration is now checked
+  only when Vault is sourced from Satellite. Rocky, AlmaLinux, CentOS Stream
+  and Oracle Linux pass. (#36)
+
 
 - Vault auto-unseal repaired: the service now runs as root, exits honestly
   rather than reporting success on failure, and uses a hardened tokens path.
@@ -84,8 +142,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Audit backups are now root-only, and the retention variable is correctly
   wired. (#46, closes #32)
 
-### Security
+### Documentation
+- Added a **Known Limitations** section covering developmental multi-node HA
+  (#44), the silent no-op on tag-scoped runs (#28 — `--tags preflight` is now
+  an exception), the preflight gaps (#36 — since repaired and removed),
+  and the tracked functional gaps (#35, #39, #40, #42, #45).
+- Requirements now document every prerequisite `tasks/preflight.yml` actually
+  hard-fails on — FIPS mode, SELinux enforcing, chrony synchronization,
+  firewalld running, and RHSM registration — none of which were previously
+  listed. **Superseded below:** the gates it described as broken are now
+  repaired, and the table has been rebuilt with a "fires when" column. (#36)
+- Corrected the "or compatible EL distribution" platform claim: the RHSM gate
+  structurally rejects Rocky, AlmaLinux and CentOS Stream today.
+  **Superseded below:** compatible EL distributions now pass. (#36)
+- HA example playbook now states plainly that running it unchanged across
+  three hosts produces three independent Vaults, not one Raft cluster. (#44)
 
+### Removed
+- `vault_log_file_mode` from `vars/main.yml` — defined but never consumed by
+  any task or template. (#37)
+
+### Security
 - **Shamir unseal shares moved off the command-line argument vector.** Both
   unseal paths passed each share as a CLI argument, which `auditd` records in
   `execve` argv on any STIG-baseline RHEL host; `no_log` suppresses Ansible's
@@ -117,7 +194,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   because fork pull requests will run CI once the repository is public.
 
 ### Dependencies
-
 - Bump certifi from 2026.2.25 to 2026.4.22 (#3)
 - Bump idna from 3.11 to 3.13 (#4)
 - Bump urllib3 from 2.6.3 to 2.7.0 (#5)

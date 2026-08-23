@@ -1,0 +1,67 @@
+---
+###############################################################################
+# Filename: molecule/preflight/molecule.yml
+# Role: ansible-role-vault
+# Summary: Preflight gate scenario (issue #36). Exercises the repaired gates
+#   directly via include_role/tasks_from in verify.yml, proving that a covered
+#   assert FIRES on its own cause and does NOT fire when its feature is toggled
+#   off.
+#
+#   NOT every gate is covered. verify.yml includes chrony, firewalld, port,
+#   repo_source, rhsm and tls directly. It does NOT include:
+#     - fips and selinux (no FIPS runner, no enforcing container),
+#     - os_family and os_version (the container is one platform, so a
+#       behavioural case could only assert the platform it is already on),
+#     - dns (advisory, warn-only by design).
+#   Those five are locked by tests/assert-preflight-gate-order.sh instead --
+#   fips, selinux, os_family and os_version on their exact predicates, dns on
+#   its conditional warning.
+#
+#   Also untested: the "ss entirely absent" arm; removing iproute perturbs every
+#   other port case in the same container.
+#   Treat "the scenario is green" as evidence about the covered gates only.
+# Classification: UNCLASSIFIED
+###############################################################################
+dependency:
+  name: galaxy
+  options:
+    requirements-file: requirements.yml
+
+driver:
+  name: podman
+
+platforms:
+  - name: vault-preflight
+    image: ${MOLECULE_IMAGE:-registry.access.redhat.com/ubi9/ubi-init:latest}
+    pre_build_image: true
+    privileged: true
+    command: /usr/sbin/init
+
+provisioner:
+  name: ansible
+  connection_options:
+    ansible_become: false
+  env:
+    ANSIBLE_ROLES_PATH: ${MOLECULE_PROJECT_DIRECTORY}/..
+  # converge does NOT run the role: this scenario tests Phase 1 in isolation and
+  # drives each gate individually from verify.yml. Running the role here would
+  # abort at the kernel-inherited FIPS gate on a non-FIPS CI runner before any
+  # assertion executed. (A skip-tags option used to sit here for that reason and
+  # was a no-op once converge stopped running the role; an EMPTY options: key is
+  # not equivalent to no key -- molecule reads it as None and crashes merging.)
+  inventory:
+    host_vars:
+      vault-preflight:
+        ansible_user: root
+        ansible_python_interpreter: ${MOLECULE_PYTHON:-/usr/bin/python3}
+        vault_manage_repo: false
+        vault_manage_firewall: false
+        vault_manage_tls: false
+        # prepare.yml and verify.yml are plain playbooks: they do NOT load
+        # defaults/main.yml or vars/main.yml, so anything the fixtures
+        # reference must be pinned here.
+        vault_listener_port: 8200
+        vault_service_name: vault
+
+verifier:
+  name: ansible

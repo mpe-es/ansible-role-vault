@@ -12,33 +12,115 @@ in airgap or internet-connected environments.
 
 ### Platform
 
-- RHEL 8, 9, or 10.
-- **Red Hat proper, not a rebuild.** Preflight hard-fails when
-  `subscription-manager identity` returns non-zero, so Rocky, AlmaLinux and
-  CentOS Stream do not currently pass even though the OS-family assert admits
-  them. Relaxing this gate is tracked in
-  [#36](https://github.com/mpe-es/ansible-role-vault/issues/36).
+- RHEL 8, 9, or 10, **or a compatible EL distribution** — Rocky, AlmaLinux,
+  CentOS Stream and Oracle Linux all pass. The RHSM gate that previously
+  rejected them now fires only when Vault is sourced from Red Hat Satellite,
+  which is a licensed Red Hat product that does not manage EL rebuilds.
+- **Supported platform is not the same claim as supported host baseline.**
+  Preflight requires FIPS mode and SELinux enforcing on *every* platform,
+  including Red Hat proper. Those are prerequisites the role **verifies and
+  never provides** — a stock Rocky or RHEL host that is not already hardened
+  is rejected at Phase 1. There is no opt-out today; one is tracked in
+  [#64](https://github.com/mpe-es/ansible-role-vault/issues/64).
 
 ### Target Host Prerequisites
 
-`tasks/preflight.yml` **hard-fails the play** if any of the following is not
-already true on the target. These are gates, not things the role configures for
-you — provision them in your image or an earlier play:
+`tasks/preflight.yml` **hard-fails the play** when any gate below is unmet.
+These are gates, not things the role configures for you — provision them in
+your image or an earlier play. The **Fires when** column matters: four of the
+gates are conditional — firewalld, RHSM, repo source and TLS material — so the
+set that applies depends on how you configure the role.
 
-| Gate | Requirement | Why |
-|------|-------------|-----|
-| FIPS mode | `/proc/sys/crypto/fips_enabled` is `1` | FIPS 140-3 validated modules (SC-13). Enable with `fips-mode-setup --enable && reboot` |
-| SELinux | `enabled` **and** `enforcing` | The role sets SELinux fcontexts; permissive/disabled hosts are rejected |
-| Time sync | `chronyc tracking` reports `Leap status : Normal` | Raft consensus and TLS validity windows need accurate time. **chrony must be installed** — a missing `chronyc` fails the task rather than the assert |
-| firewalld | service `ActiveState == active` | Enforced unconditionally, **even when `vault_manage_firewall: false`** ([#36](https://github.com/mpe-es/ansible-role-vault/issues/36)) |
-| RHSM | `subscription-manager identity` returns 0 | Satellite repository access |
+| Gate | Fires when | Requirement |
+|------|-----------|-------------|
+| OS family / version | always | RedHat-family, EL 8/9/10 |
+| FIPS | always | `/proc/sys/crypto/fips_enabled` is `1`. This is the kernel flag only — it does not establish a validated module version, nor that a FIPS Vault edition was selected via `vault_edition` |
+| SELinux | always | `enabled` **and** `enforcing` |
+| Time sync | always | `chronyc tracking` reports `Leap status : Normal`. A missing `chronyc` or a stopped `chronyd` now fails the **assert** with remediation text, not the task |
+| firewalld | `vault_manage_firewall` | service `ActiveState == active`. Honours the toggle — disable firewall management and this gate does not apply |
+| RHSM | RHEL **and** `vault_manage_repo` **and** `vault_repo_source: satellite` | host registered. Only meaningful for Satellite-sourced content; the role-managed repository — HashiCorp's or your mirror's — needs no Red Hat subscription |
+| Repo source | `vault_manage_repo` | `mirror` mode must not name `rpm.releases.hashicorp.com` — checked for **both** `vault_repo_url` and `vault_repo_gpg_key`, since the target host fetches the key directly. This proves inequality with the shipped host, **not** that the endpoint is internal or airgap-safe. `satellite` mode requires RHEL |
+| TLS material | `vault_manage_tls: false` **(the default)** | `vault_tls_cert_file`, `vault_tls_key_file` and `vault_tls_ca_file` all exist and are regular files (symlinks followed). Whether the Vault account can READ them is tracked separately |
+| API port | always | `vault_listener_port` is free, or already held by the Vault service itself. Requires `iproute` (`ss`) — a missing query tool is a hard failure, not a skip |
 
-Two further checks are advisory, not gates:
+One further check is advisory, not a gate:
 
 - **DNS resolution** of `ansible_fqdn` — prints a warning only.
-- **API port availability** — this assert is currently inert and cannot fail
-  ([#36](https://github.com/mpe-es/ansible-role-vault/issues/36)). Do not rely
-  on it to catch a port conflict; Vault will instead fail at service start.
+
+The port gate covers the API port only. A conflict on the cluster port (8201)
+still surfaces at service start; see [#39](https://github.com/mpe-es/ansible-role-vault/issues/39).
+
+#### Certificate SAN contract
+
+The **final listener certificate** must carry these, regardless of who puts it
+there — the requirement is about what the role's own callers connect to, not
+about who deployed the file. It therefore applies equally when
+`vault_manage_tls: true`, since that path copies the certificate you supply
+without altering its SANs:
+
+- a **`127.0.0.1` IP SAN**, and
+- the host identity in `vault_api_addr`, encoded to match its TYPE: a **DNS
+  SAN** for a hostname (the host FQDN by default), or an **IP SAN** if you set
+  `vault_api_addr` to an address. `argument_specs` permits either, and
+  `DNS:10.0.0.5` will not validate `https://10.0.0.5`.
+
+The role's own callers use the loopback address — `tasks/service.yml` verifies
+against `https://127.0.0.1:<port>`, and `files/vault-unseal.sh` and the unseal
+unit both set `VAULT_ADDR` to it. A certificate without the IP SAN fails
+hostname verification and breaks init and unseal.
+
+**No `localhost` DNS SAN is required.** Nothing in the role contacts
+`https://localhost:<port>`; requiring one is not free, since enclave ADCS/RHCS
+policy routinely refuses to issue it.
+
+```bash
+openssl req -new -newkey rsa:3072 -nodes \
+  -keyout vault.key -out vault.csr \
+  -subj "/CN=$(hostname -f)" \
+  -addext "subjectAltName=DNS:$(hostname -f),IP:127.0.0.1"
+```
+
+This contract covers `vault_tls_source: file` (the default). The
+`vault_pki` source cannot satisfy it until [#63](https://github.com/mpe-es/ansible-role-vault/issues/63) lands, and multi-node
+HA adds the cluster-leader name — see [#44](https://github.com/mpe-es/ansible-role-vault/issues/44).
+
+#### Migrating from `vault_manage_repo: false`
+
+Earlier documentation told Satellite users to set `vault_manage_repo: false`.
+That still works — the role writes no repo file — but it also means
+**preflight verifies nothing**: not registration, and not that the host is a
+RHEL system Satellite can actually serve.
+Satellite users should instead leave `vault_manage_repo` at its default and set
+`vault_repo_source: satellite`, which writes no repo file *and* runs those
+checks.
+
+#### Satellite-sourced content
+
+With `vault_repo_source: satellite` the role writes **no** repo file:
+`subscription-manager` owns the client repo configuration and generates it from
+the host's content-view bindings. Three things are therefore your
+responsibility on the Satellite side:
+
+- the host is **registered**;
+- the Vault product is in the host's **content view** (otherwise no Vault
+  package resolves — the generated repo file may still carry every OS
+  repository);
+- the **GPG key is associated with the custom product** — the role does not
+  import it in this mode.
+
+> **This release verifies only the first of those three.** Preflight checks the
+> host is registered, and that `satellite` was selected on RHEL. It does **not** query
+> whether your content view publishes Vault, and the install transaction is
+> **not** scoped to Satellite content — `dnf` resolves across every enabled
+> repository, so a stray HashiCorp, EPEL or internal mirror can satisfy the
+> install while your content view publishes no Vault package. That is the
+> curated-content bypass, and closing it is tracked in
+> [#68](https://github.com/mpe-es/ansible-role-vault/issues/68).
+
+**Migrating an existing host to `satellite`.** If the role previously ran with
+`hashicorp` or `mirror`, `/etc/yum.repos.d/hashicorp.repo` is still present.
+The role removes it automatically in Phase 2 when the source is `satellite`;
+no manual step is required.
 
 ### Ansible
 
@@ -84,11 +166,15 @@ auto-generation and input validation.
 ### Other
 
 - TLS certificates for the Vault listener (provided externally or via this
-  role). **Preflight does not verify that these exist.** When
-  `vault_manage_tls: false`, a missing or wrong-SAN certificate at
-  `vault_tls_cert_file` surfaces as a Vault service-start failure, not as a
-  preflight error ([#36](https://github.com/mpe-es/ansible-role-vault/issues/36)).
-- For airgap: a local RPM mirror (e.g., Red Hat Satellite content view) hosting the HashiCorp Vault package and GPG key
+  role). **Preflight verifies that all three exist and are regular files** when
+  `vault_manage_tls: false`. **SAN correctness is still not validated** — a
+  certificate missing the `127.0.0.1` IP SAN passes preflight and then breaks
+  init and unseal at service start. See the SAN contract above; enforcement is
+  tracked separately.
+- For airgap: an internal RPM mirror hosting the Vault package and GPG key
+  (`vault_repo_source: mirror`), or a Red Hat Satellite content view
+  (`vault_repo_source: satellite`, RHEL only — the role then writes no repo
+  file at all).
 
 ## Role Variables
 
@@ -96,7 +182,8 @@ auto-generation and input validation.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `vault_manage_repo` | `true` | Create `/etc/yum.repos.d/hashicorp.repo` |
+| `vault_manage_repo` | `true` | Master switch: whether the role touches repo configuration at all. When `false` it writes nothing **and fires none of the repo preflight gates** |
+| `vault_repo_source` | `hashicorp` | How the Vault RPM reaches the host: `hashicorp` \| `mirror` \| `satellite`. Decides which repo gates apply. `satellite` writes **no** repo file and is RHEL-only |
 | `vault_repo_url` | HashiCorp official | RPM repository base URL |
 | `vault_repo_gpg_key` | HashiCorp official | GPG key URL for RPM verification |
 | `vault_repo_gpgcheck` | `true` | Enable GPG signature checking |
@@ -217,10 +304,53 @@ for Python library dependencies. No other Ansible role dependencies.
   roles:
     - role: mpe-es.vault
       vars:
+        vault_repo_source: mirror
         vault_repo_url: "https://repo.closednetwork.local/hashicorp/RHEL/$releasever/$basearch/stable"
         vault_repo_gpg_key: "https://repo.closednetwork.local/hashicorp/gpg"
         vault_package_version: "1.18.3-1"
 ```
+
+### Single-Node Deployment (Red Hat Satellite)
+
+```yaml
+- hosts: vault
+  become: true
+  roles:
+    - role: mpe-es.vault
+      vars:
+        vault_repo_source: satellite
+        vault_package_version: "1.18.3-1"
+```
+
+> **Enterprise editions need a license this role does not deliver.** Satellite
+> deployments are usually Enterprise, and `vault_edition: vault-enterprise`
+> selects that package — but Vault Enterprise **cannot start unlicensed**, and
+> the role has no license management
+> ([#42](https://github.com/mpe-es/ansible-role-vault/issues/42)). The example
+> above therefore uses the OSS default, which starts. If you set an Enterprise
+> edition, stage the license separately or the service will fail at Phase 9.
+
+Satellite mode writes no `.repo` file: `subscription-manager` owns
+`/etc/yum.repos.d/redhat.repo` and generates it from the host's content-view
+bindings, and the GPG key is associated with the product server-side. The role
+does not register the host — that is a prerequisite. Preflight verifies that
+the host is registered and that `satellite` was selected on a RHEL system.
+
+Verifying that your content view actually publishes Vault, and scoping the
+install transaction to Satellite-published content, are **not** part of this
+release — see [#68](https://github.com/mpe-es/ansible-role-vault/issues/68).
+Until then `dnf` resolves across every enabled repository, so a foreign build
+can win even in `satellite` mode.
+
+`satellite` requires Red Hat Enterprise Linux — Satellite does not manage EL
+rebuilds, so use `mirror` with an internal reposync URL on Rocky, Alma or
+Oracle Linux.
+
+The airgap and Satellite examples leave `vault_manage_tls` at its default of
+`false`, so the certificate, key and CA must already be staged at `vault_tls_cert_file`,
+`vault_tls_key_file` and `vault_tls_ca_file` before the role runs — preflight
+rejects the host otherwise. Set `vault_manage_tls: true` **and** populate
+`vault_tls_src_cert` / `_key` / `_ca` if you want the role to place them.
 
 ### HA Cluster (3-Node with Load Balancer) — developmental
 
@@ -601,20 +731,31 @@ Until #44 lands, treat cluster standup as a manual runbook: run the role for
 configuration, then initialize exactly one node, join and unseal followers by
 hand.
 
-### Tag-scoped runs execute zero tasks ([#28](https://github.com/mpe-es/ansible-role-vault/issues/28))
+### Tag-scoped runs execute a single unrelated phase ([#28](https://github.com/mpe-es/ansible-role-vault/issues/28))
 
 `tasks/main.yml` composes the role with `include_tasks`, which does not
-propagate tags to the included file's tasks. A run such as `--tags stig`
-therefore matches nothing and **completes successfully having done nothing**.
-This fails silently, which is the dangerous part — do not use tag-scoped runs
+propagate tags to the included file's tasks unless the include also carries an
+`apply:` block. Only Phase 8.5 (fapolicyd) does. So a run such as `--tags stig`
+executes **exactly that one phase and nothing else** — measured: `--tags stig`,
+`--tags fapolicyd` and `--tags vault` each run the fapolicyd trust tasks alone,
+with no install, no configuration and no service management. (`--tags install`
+does the same; Phase 8.5 carries that tag too.)
+
+That is more dangerous than executing nothing, because the run reports success
+having applied a fragment of the role. Do not use tag-scoped runs
 to apply a subset of hardening until this is fixed.
 
-### Preflight gaps ([#36](https://github.com/mpe-es/ansible-role-vault/issues/36))
+**Exception: `--tags preflight` works.** The preflight phase was split into
+per-gate files under [#36](https://github.com/mpe-es/ansible-role-vault/issues/36) and its includes carry both their own tags
+and an `apply:` block, so `--tags preflight` runs every gate. That is a
+behaviour change: it previously ran nothing and reported success.
 
-- The API port-availability assert is inert and cannot fail.
-- firewalld is required to be running even when `vault_manage_firewall: false`.
-- TLS certificate existence and SAN correctness are never validated.
-- The RHSM gate blocks compatible EL rebuilds that the OS-family assert admits.
+Phase 8.5 carries `vault`, `install`, `stig` and `fapolicyd`, so those four tags
+run the fapolicyd phase alone — measured. Every *other* tag (`repo`, `system`,
+`configure`, `firewall`, `tls`, `service`) still matches no inner task and does
+nothing at all. `apply:` on the preflight includes carries `preflight` alone
+precisely so `--tags vault` does not ALSO pull in the gates and become a larger
+partial run that looks complete.
 
 ### Other tracked gaps
 

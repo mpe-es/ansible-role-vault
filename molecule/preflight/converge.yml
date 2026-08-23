@@ -1,0 +1,17 @@
+---
+###############################################################################
+# Filename: molecule/preflight/converge.yml
+# Role: ansible-role-vault
+# Summary: Deliberately a no-op. The preflight scenario drives each gate
+#   individually from verify.yml so a failing assert can be caught and
+#   inspected; running the role here would abort at the kernel-inherited FIPS
+#   gate on a non-FIPS CI runner before any assertion executed.
+# Classification: UNCLASSIFIED
+###############################################################################
+- name: Converge
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Preflight scenario drives gates from verify.yml
+      ansible.builtin.debug:
+        msg: "Gates are exercised individually in verify.yml"

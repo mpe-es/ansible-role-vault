@@ -27,6 +27,23 @@ on:
 permissions:
   contents: read
 
+# RUNNERS. These jobs ran on the org's private [self-hosted, rocky10] fleet
+# briefly and every job queued forever with runner=UNASSIGNED, while the fleet
+# sat idle with matching labels.
+#
+# Cause: this repository is PUBLIC (since #58). GitHub organisation runner
+# groups do not serve public repositories unless "Allow public repositories" is
+# explicitly enabled on the group, because a public repo means a fork PR can run
+# arbitrary code on internal infrastructure. The two repos that DO use that
+# fleet -- microkosmos and mpe_es.nutanix -- are both private.
+#
+# To move back to the private fleet, one org-side change and one line here:
+#   1. Settings -> Actions -> Runner groups -> Default -> allow public
+#      repositories (a deliberate security decision for a public repo: consider
+#      restricting the group to selected repositories at the same time), then
+#   2. swap `runs-on: ubuntu-latest` for `runs-on: [self-hosted, rocky10]`.
+# The podman steps below are already fleet-ready and need no further change.
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -73,11 +90,26 @@ jobs:
       - name: Run vault-audit-backup behavioral tests
         run: bash tests/vault-audit-backup-test.sh
 
-      - name: Assert no CLI-argv unseal form (issue #31 regression lock)
-        run: bash tests/assert-no-unseal-argv.sh
-
-      - name: Assert least-privilege ownership posture (issue #38)
-        run: bash tests/assert-root-owned-posture.sh
+      # Globbed deliberately. Naming each guard meant a NEW guard was not run
+      # by CI at all: assert-preflight-check-mode.sh passed locally while
+      # deleting the thing it locks would have merged green. Anything matching
+      # tests/assert-*.sh is a gate, and the loop fails if it matches nothing.
+      - name: Assert repository invariants (all static guards)
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          guards=(tests/assert-*.sh)
+          if [ ${#guards[@]} -eq 0 ]; then
+            echo "no static guards found under tests/ -- this step would pass vacuously"
+            exit 1
+          fi
+          rc=0
+          for g in "${guards[@]}"; do
+            echo "::group::$g"
+            bash "$g" || rc=1
+            echo "::endgroup::"
+          done
+          exit "$rc"
 
   ###########################################################
   # Syntax Check Stage
@@ -126,7 +158,12 @@ jobs:
   # Molecule Test Stage
   ###########################################################
   molecule:
-    name: Molecule Test (${{ matrix.el.name }})
+    # Job name carries the scenario: two scenarios x three EL versions would
+    # otherwise render two check runs named "Molecule Test (el9)". Branch
+    # protection requires only the CI Status aggregator, which gates on
+    # needs.molecule.result, so a widened matrix is covered automatically and
+    # no required check is stranded by the rename.
+    name: Molecule Test (${{ matrix.scenario }} ${{ matrix.el.name }})
     runs-on: ubuntu-latest
     needs: syntax
     strategy:
@@ -134,6 +171,7 @@ jobs:
       matrix:
         scenario:
           - default
+          - preflight
         el:
           - name: el8
             image: registry.access.redhat.com/ubi8/ubi-init:latest
@@ -168,10 +206,27 @@ jobs:
       - name: Install required Ansible collections
         run: ansible-galaxy collection install -r requirements.yml
 
-      - name: Install Podman
+      - name: Ensure podman is available
         run: |
-          sudo apt-get update
-          sudo apt-get install -y podman
+          set -euo pipefail
+          # Portable on purpose, so the runner target is a one-line change:
+          #   - the private rocky10 fleet already ships podman (see
+          #     mpe-es/mpe-github-runner, cloud-init "Podman stack" packages),
+          #   - hosted ubuntu images may or may not, depending on the image
+          #     version, so install only if it is actually absent.
+          # The previous `sudo apt-get install -y podman` was unconditional and
+          # Debian-only: it could never have run on Rocky.
+          if command -v podman >/dev/null 2>&1; then
+            echo "podman already provided by the runner image"
+          elif command -v dnf >/dev/null 2>&1; then
+            sudo dnf install -y podman
+          elif command -v apt-get >/dev/null 2>&1; then
+            sudo apt-get update && sudo apt-get install -y podman
+          else
+            echo "::error::No podman and no known package manager on this runner."
+            exit 1
+          fi
+          podman --version
 
       - name: Configure Podman for systemd containers
         run: |
@@ -263,10 +318,27 @@ jobs:
       - name: Install required Ansible collections
         run: ansible-galaxy collection install -r requirements.yml
 
-      - name: Install Podman
+      - name: Ensure podman is available
         run: |
-          sudo apt-get update
-          sudo apt-get install -y podman
+          set -euo pipefail
+          # Portable on purpose, so the runner target is a one-line change:
+          #   - the private rocky10 fleet already ships podman (see
+          #     mpe-es/mpe-github-runner, cloud-init "Podman stack" packages),
+          #   - hosted ubuntu images may or may not, depending on the image
+          #     version, so install only if it is actually absent.
+          # The previous `sudo apt-get install -y podman` was unconditional and
+          # Debian-only: it could never have run on Rocky.
+          if command -v podman >/dev/null 2>&1; then
+            echo "podman already provided by the runner image"
+          elif command -v dnf >/dev/null 2>&1; then
+            sudo dnf install -y podman
+          elif command -v apt-get >/dev/null 2>&1; then
+            sudo apt-get update && sudo apt-get install -y podman
+          else
+            echo "::error::No podman and no known package manager on this runner."
+            exit 1
+          fi
+          podman --version
 
       - name: Configure Podman for systemd containers
         run: |
@@ -339,10 +411,27 @@ jobs:
       - name: Install required Ansible collections
         run: ansible-galaxy collection install -r requirements.yml
 
-      - name: Install Podman
+      - name: Ensure podman is available
         run: |
-          sudo apt-get update
-          sudo apt-get install -y podman
+          set -euo pipefail
+          # Portable on purpose, so the runner target is a one-line change:
+          #   - the private rocky10 fleet already ships podman (see
+          #     mpe-es/mpe-github-runner, cloud-init "Podman stack" packages),
+          #   - hosted ubuntu images may or may not, depending on the image
+          #     version, so install only if it is actually absent.
+          # The previous `sudo apt-get install -y podman` was unconditional and
+          # Debian-only: it could never have run on Rocky.
+          if command -v podman >/dev/null 2>&1; then
+            echo "podman already provided by the runner image"
+          elif command -v dnf >/dev/null 2>&1; then
+            sudo dnf install -y podman
+          elif command -v apt-get >/dev/null 2>&1; then
+            sudo apt-get update && sudo apt-get install -y podman
+          else
+            echo "::error::No podman and no known package manager on this runner."
+            exit 1
+          fi
+          podman --version
 
       - name: Configure Podman for systemd containers
         run: |

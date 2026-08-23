@@ -1,0 +1,82 @@
+---
+###############################################################################
+# Filename: tasks/preflight/tls.yml
+# Role: ansible-role-vault
+# Summary: Preflight gate - the TLS trio exists when the role is NOT managing
+#   TLS (issue #36). Inverted polarity: vault_manage_tls: false (the default)
+#   is what turns this gate ON, because that is exactly when the certificates
+#   must already be staged by the operator.
+#
+#   All three files are load-bearing: the CA feeds VAULT_CACERT in vault.env
+#   and vault-unseal.service, tls_client_ca_file in vault.hcl, and the init
+#   tasks in service.yml. Each gets its own message so a partial
+#   implementation cannot pass the suite.
+#
+#   follow: true is REQUIRED. stat defaults to follow: false (lstat), so a
+#   symlink to a real certificate reports isreg: false -- and certmonger- or
+#   certbot-managed material is normally symlinked. Without it the gate rejects
+#   a working deployment and tells the operator Vault cannot read the file,
+#   which is untrue: the kernel resolves the link.
+#
+#   Scope: this gate proves the operator-staged material EXISTS and is a regular
+#   file. Proving the Vault account can actually READ it -- ACL evaluation and
+#   full pathname resolution -- is a separate concern and a separate issue; it
+#   generated critical findings in 7 of 9 review rounds while this contract
+#   generated none, so it does not ride along with the gate repair. Tracked in
+#   #69.
+#
+#   isreg is checked as well as exists: a directory satisfies exists, so
+#   mkdir /opt/vault/tls/tls.crt would pass and then die at service start -
+#   the failure mode this gate removes. stat carries failed_when: false so an
+#   unreadable path routes to the assert instead of crashing -- but that rewrite
+#   also forces .failed to False in EVERY result, so the unreadable case is
+#   discriminated by the absence of a stat key, never by .failed. Keying on
+#   .failed here would be the same tautology as the wait_for assert this PR
+#   repairs.
+# NIST 800-53: SC-8 (Transmission Confidentiality and Integrity)
+###############################################################################
+- name: Verify operator-staged TLS material
+  when: not (vault_manage_tls | bool)
+  block:
+    - name: Stat the operator-staged TLS files
+      ansible.builtin.stat:
+        path: "{{ item.path }}"
+        follow: true
+        get_checksum: false
+        get_mime: false
+        get_attributes: false
+      register: __vault_tls_stat
+      failed_when: false
+      loop:
+        - {path: "{{ vault_tls_cert_file }}", role: "certificate", var: "vault_tls_cert_file"}
+        - {path: "{{ vault_tls_key_file }}", role: "private key", var: "vault_tls_key_file"}
+        - {path: "{{ vault_tls_ca_file }}", role: "CA certificate", var: "vault_tls_ca_file"}
+      loop_control:
+        label: "{{ item.path }}"
+
+    - name: "Preflight | tls | operator-staged TLS file is present"
+      ansible.builtin.assert:
+        that:
+          - item.stat is defined
+          - item.stat.exists | default(false)
+          - item.stat.isreg | default(false)
+        fail_msg: >-
+          {% if item.stat is not defined %}
+          {{ item.item.path }} ({{ item.item.var }}) could not be inspected:
+          {{ item.msg | default('unknown error') }}. Preflight cannot confirm
+          the {{ item.item.role }} is staged. This usually means the play needs
+          become: true to read the TLS directory.
+          {% elif not (item.stat.exists | default(false)) %}
+          vault_manage_tls is false, so the role expects the {{ item.item.role }}
+          to already exist at {{ item.item.path }} ({{ item.item.var }}), but it
+          is missing. Stage it before running the role, or set
+          vault_manage_tls: true and populate vault_tls_src_cert/_key/_ca.
+          {% else %}
+          {{ item.item.path }} ({{ item.item.var }}) exists but is not a regular
+          file. Vault cannot read the {{ item.item.role }} from it.
+          {% endif %}
+        success_msg: "TLS {{ item.item.role }} ({{ item.item.path }}): present"
+      loop: "{{ __vault_tls_stat.results }}"
+      loop_control:
+        label: "{{ item.item.path }}"
+      register: __vault_tls_ok

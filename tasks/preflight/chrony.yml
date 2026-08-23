@@ -1,0 +1,72 @@
+---
+###############################################################################
+# Filename: tasks/preflight/chrony.yml
+# Role: ansible-role-vault
+# Summary: Preflight gate - NTP time synchronisation (issue #36). Previously a
+#   missing chronyc CRASHED the task (command: with no failed_when), so the
+#   assert's remediation text was never reached. Same family as the command -v
+#   trap from #38.
+# NIST 800-53: AU-8 (Time Stamps)
+###############################################################################
+# 'command' is not only a shell builtin: bash ships /usr/bin/command (a two-line
+# wrapper) on EL8/9/10 -- `rpm -qf /usr/bin/command` returns bash on all three --
+# so ansible.builtin.command's execvp resolves it without a shell. Verified in
+# ubi8/ubi9/ubi10. ansible-lint's command-instead-of-shell is not skip-listed here,
+# so switching to shell: would trip lint for no gain.
+- name: Detect chronyc
+  ansible.builtin.command:
+    cmd: command -v chronyc
+  register: __vault_chronyc_bin
+  check_mode: false          # command/shell are skipped under --check;
+  # a skipped probe returns rc 0 with empty output, which every
+  # assert below would then read as a healthy host.
+  changed_when: false
+  failed_when: false
+  environment:
+    LC_ALL: C
+
+- name: Check chrony synchronization status
+  ansible.builtin.command:
+    cmd: chronyc tracking
+  register: __vault_chrony_status
+  check_mode: false          # command/shell are skipped under --check;
+  # a skipped probe returns rc 0 with empty output, which every
+  # assert below would then read as a healthy host.
+  changed_when: false
+  failed_when: false
+  environment:
+    LC_ALL: C
+  when: __vault_chronyc_bin.rc == 0
+
+# Each cause carries its own remediation. A shared message would make the
+# mutation probe useless: breaking either branch would leave both tests green.
+# Note "506 Cannot talk to daemon" goes to STDOUT, not stderr (measured).
+- name: "Preflight | chrony | time is synchronised"
+  ansible.builtin.assert:
+    that:
+      - __vault_chronyc_bin.rc == 0
+      - __vault_chrony_status.rc | default(1) == 0
+      - __vault_chrony_status.stdout | default('') is search('Leap status\s*:\s*Normal')
+    fail_msg: >-
+      {% if __vault_chronyc_bin.rc != 0 %}
+      chronyc is not installed, so time synchronisation cannot be verified.
+      Vault Raft consensus and TLS certificate validity windows require an
+      accurate clock. Install chrony as part of the host baseline.
+      {% elif __vault_chrony_status.stdout | default('') is search('Cannot talk to daemon') %}
+      chronyc is installed but cannot reach chronyd, so the clock is
+      unverified. Start the service: systemctl enable --now chronyd
+      {% elif __vault_chrony_status.rc | default(1) != 0 %}
+      chronyc tracking exited {{ __vault_chrony_status.rc | default('n/a') }}
+      without a recognised error. First line of output:
+      {{ (__vault_chrony_status.stdout_lines | default([]) + __vault_chrony_status.stderr_lines | default([]) + ['(no output)']) | first }}
+      {% elif __vault_chrony_status.stdout | default('') is search('Leap status') %}
+      Chrony is running but the clock is not synchronised (Leap status is not
+      Normal). Vault Raft consensus and TLS validity windows require accurate
+      time. Investigate with: chronyc tracking
+      {% else %}
+      chronyc tracking succeeded but reported no Leap status line, so the clock
+      state is unverified. First line of output:
+      {{ (__vault_chrony_status.stdout_lines | default([]) + ['(no output)']) | first }}
+      {% endif %}
+    success_msg: "Chrony NTP: synchronized"
+  register: __vault_chrony_ok

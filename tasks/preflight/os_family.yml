@@ -1,0 +1,15 @@
+---
+###############################################################################
+# Filename: tasks/preflight/os_family.yml
+# Role: ansible-role-vault
+# Summary: Preflight gate - OS family is RedHat
+# Classification: UNCLASSIFIED
+###############################################################################
+- name: "Preflight | os_family | OS family is RedHat"
+  ansible.builtin.assert:
+    that:
+      - ansible_os_family == 'RedHat'
+    fail_msg: >-
+      This role requires a Red Hat Enterprise Linux (or compatible) system.
+      Detected OS family: {{ ansible_os_family }}
+    success_msg: "OS family: {{ ansible_os_family }}"

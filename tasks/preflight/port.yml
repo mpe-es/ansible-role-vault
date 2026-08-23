@@ -1,0 +1,173 @@
+---
+###############################################################################
+# Filename: tasks/preflight/port.yml
+# Role: ansible-role-vault
+# Summary: Preflight gate - the Vault API port is free, or held by Vault
+#   itself (issue #36). Replaces an assert that could never fire: wait_for with
+#   failed_when: false forces .failed to False, so `is not failed` was a
+#   tautology and an occupied port surfaced as a service-start error instead.
+#
+#   Ownership is decided by the listener's systemd cgroup, never by process
+#   name: this gate exists to reject foreign holders, and any process may be
+#   named "vault". A listener with no attributable PID FAILS CLOSED - ss omits
+#   users:(...) for sockets it cannot attribute, which needs become: true.
+#   Ownership is anchored to systemd's reported ControlGroup: an unprivileged user can define a
+#   ~/.config/systemd/user/<name>.service binding a port above 1024, and an
+#   unanchored match would accept it while the role's system unit still cannot
+#   bind.
+#
+#   Ownership is decided by asking systemd for the unit's ControlGroup and
+#   comparing that exact path; the service name is not pattern-matched into a
+#   slice path, because slice placement is a default and not an identity.
+#   The comparison requires a cgroup-component
+#   boundary. Without the boundary, '/system.slice/vault\.service' also matches
+#   /system.slice/vault.service-rogue.service -- a foreign unit accepted as
+#   Vault by the gate whose purpose is rejecting foreign holders.
+# NIST 800-53: CM-6 (Configuration Settings)
+###############################################################################
+# 'command' is not only a shell builtin: bash ships /usr/bin/command (a two-line
+# wrapper) on EL8/9/10 -- `rpm -qf /usr/bin/command` returns bash on all three --
+# so ansible.builtin.command's execvp resolves it without a shell. Verified in
+# ubi8/ubi9/ubi10. ansible-lint's command-instead-of-shell is not skip-listed here,
+# so switching to shell: would trip lint for no gain.
+- name: Detect the socket query tool
+  ansible.builtin.command:
+    cmd: command -v ss
+  register: __vault_ss_bin
+  check_mode: false          # command/shell are skipped under --check;
+  # a skipped probe returns rc 0 with empty output, which every
+  # assert below would then read as a healthy host.
+  changed_when: false
+  failed_when: false
+  environment:
+    LC_ALL: C
+
+# Hard failure, deliberately NOT the warn-and-skip used for host-owned tools:
+# degrading to a skip would silently restore the inert gate this repairs.
+- name: "Preflight | port | socket query tool is available"
+  ansible.builtin.assert:
+    that:
+      - __vault_ss_bin.rc == 0
+    fail_msg: >-
+      ss is not installed, so port ownership cannot be verified. Install
+      iproute. This gate fails closed rather than skipping, because skipping
+      would restore the inert port check that issue #36 repairs.
+    success_msg: "Socket query tool: present"
+  register: __vault_port_tool
+
+- name: Query listeners on the Vault API port
+  ansible.builtin.command:
+    cmd: ss -Htlnp sport = :{{ vault_listener_port }}
+  register: __vault_port_q
+  check_mode: false          # command/shell are skipped under --check;
+  # a skipped probe returns rc 0 with empty output, which every
+  # assert below would then read as a healthy host.
+  changed_when: false
+  failed_when: false
+  environment:
+    LC_ALL: C
+
+- name: "Preflight | port | socket query succeeded"
+  ansible.builtin.assert:
+    that:
+      - __vault_port_q.rc == 0
+    fail_msg: >-
+      Querying listeners on port {{ vault_listener_port }} failed
+      (rc {{ __vault_port_q.rc }}), so port ownership is unverified. First
+      line: {{ (__vault_port_q.stderr_lines | default([]) + __vault_port_q.stdout_lines | default([]) + ['(no output)']) | first }}
+      This gate fails closed: a failed query with empty output is
+      indistinguishable from a free port.
+    success_msg: "Socket query: ok"
+  register: __vault_port_query_ok
+
+- name: Resolve listener ownership
+  when: __vault_port_q.stdout | trim | length > 0
+  block:
+    - name: Extract listener rows and their PIDs
+      ansible.builtin.set_fact:
+        # Per-ROW, not global. ss emits one row per listening socket and omits
+        # users:(...) for sockets it cannot attribute. Counting PIDs globally
+        # reduced "every listener is attributable" to "at least one PID exists",
+        # so an SO_REUSEPORT pair of one Vault socket and one unattributed
+        # foreign socket passed the gate.
+        __vault_port_rows: "{{ __vault_port_q.stdout_lines | default([]) | select('search', '\\S') | list }}"
+        __vault_port_attributed: "{{ __vault_port_q.stdout_lines | default([]) | select('search', 'pid=') | list }}"
+        __vault_port_pids: "{{ __vault_port_q.stdout | regex_findall('pid=(\\d+)') | unique }}"
+
+    - name: "Preflight | port | every listener is attributable to a process"
+      ansible.builtin.assert:
+        that:
+          - __vault_port_rows | length > 0
+          - __vault_port_attributed | length == __vault_port_rows | length
+        fail_msg: >-
+          Port {{ vault_listener_port }} has
+          {{ __vault_port_rows | length }} listening socket(s) but only
+          {{ __vault_port_attributed | length }} carry an owning PID. ss omits that field for sockets it cannot attribute,
+          which normally means the play is not running with become: true.
+          This gate fails closed rather than assume the holder is Vault.
+        success_msg: "Listener attribution: ok"
+      register: __vault_port_attrib
+
+    # Ask systemd where the unit ACTUALLY lives, rather than pattern-matching a
+    # slice name. Matching '/system.slice/<unit>.service' was wrong in both
+    # directions, both measured:
+    #   - a nested path such as
+    #       0::/user.slice/user-1000.slice/user@1000.service/system.slice/vault.service
+    #     CONTAINS that substring, so an unprivileged user's own unit passed as
+    #     the system service and could hold the port;
+    #   - a legitimate system unit placed in a custom slice reports
+    #     /app.slice/<unit>.service and was rejected.
+    # systemd knows its own answer; slice placement is only a default.
+    - name: Ask systemd for the Vault unit's control group
+      ansible.builtin.command:
+        argv: [systemctl, show, --property=ControlGroup, --value,
+               "{{ vault_service_name }}.service"]
+      register: __vault_port_unit_cg
+      check_mode: false          # command/shell are skipped under --check;
+      # a skipped probe returns rc 0 with empty output, which the assert below
+      # would then read as "no control group", failing closed but for the wrong
+      # reason.
+      changed_when: false
+      failed_when: false
+
+    - name: "Preflight | port | the Vault unit has a control group to compare against"
+      ansible.builtin.assert:
+        that:
+          - __vault_port_unit_cg.stdout | default('') | trim | length > 0
+        fail_msg: >-
+          systemd reports no ControlGroup for
+          {{ vault_service_name }}.service, so the listener on port
+          {{ vault_listener_port }} cannot be attributed to it. An empty answer
+          means the unit is not loaded -- which also means it is not what is
+          holding the port. Listener(s): {{ __vault_port_q.stdout | trim }}
+        success_msg: >-
+          {{ vault_service_name }}.service control group:
+          {{ __vault_port_unit_cg.stdout | trim }}
+      register: __vault_port_unit_cg_ok
+
+    - name: Read the owning cgroup for each listener
+      ansible.builtin.slurp:
+        src: "/proc/{{ item }}/cgroup"
+      register: __vault_port_cgroups
+      loop: "{{ __vault_port_pids }}"
+      failed_when: false
+
+    - name: "Preflight | port | the only listener is the Vault service"
+      ansible.builtin.assert:
+        that:
+          # Exact match against systemd's own answer, anchored after the
+          # hierarchy's ':' and bounded at end-of-line, so a longer path that
+          # merely CONTAINS it cannot match.
+          - __vault_port_cgroups.results
+            | map(attribute='content', default='')
+            | map('b64decode')
+            | select('search', ':' ~ (__vault_port_unit_cg.stdout | trim | regex_escape) ~ '\s*$', multiline=True)
+            | list | length == __vault_port_pids | length
+        fail_msg: >-
+          Port {{ vault_listener_port }} is held by a process that is not the
+          {{ vault_service_name }} service, whose control group systemd reports
+          as {{ __vault_port_unit_cg.stdout | trim }}. Vault cannot bind an
+          occupied port.
+          Listener(s): {{ __vault_port_q.stdout | trim }}
+        success_msg: "Port {{ vault_listener_port }}: held by {{ vault_service_name }}"
+      register: __vault_port_owner

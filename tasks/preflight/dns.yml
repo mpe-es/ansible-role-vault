@@ -1,0 +1,24 @@
+---
+###############################################################################
+# Filename: tasks/preflight/dns.yml
+# Role: ansible-role-vault
+# Summary: Preflight gate - DNS resolution (advisory, warn-only)
+# Classification: UNCLASSIFIED
+###############################################################################
+- name: Test DNS resolution for inventory hostname
+  ansible.builtin.command:
+    cmd: "getent hosts {{ ansible_fqdn }}"
+  register: __vault_dns_check
+  check_mode: false          # command/shell are skipped under --check;
+  # a skipped probe returns rc 0 with empty output, which every
+  # assert below would then read as a healthy host.
+  changed_when: false
+  failed_when: false
+
+- name: Warn if DNS resolution fails
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: DNS resolution failed for {{ ansible_fqdn }}.
+      Vault cluster communication relies on FQDN resolution.
+      Verify DNS configuration or use IP-based addresses.
+  when: __vault_dns_check.rc != 0

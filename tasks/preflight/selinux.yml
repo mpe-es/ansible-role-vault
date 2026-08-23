@@ -1,0 +1,16 @@
+---
+###############################################################################
+# Filename: tasks/preflight/selinux.yml
+# Role: ansible-role-vault
+# Summary: Preflight gate - SELinux enabled and enforcing
+# Classification: UNCLASSIFIED
+###############################################################################
+- name: "Preflight | selinux | SELinux is enforcing"
+  ansible.builtin.assert:
+    that:
+      - ansible_selinux.status == 'enabled'
+      - ansible_selinux.mode == 'enforcing'
+    fail_msg: >-
+      SELinux must be in enforcing mode. Current status: {{ ansible_selinux.status }},
+      mode: {{ ansible_selinux.mode | default('unknown') }}
+    success_msg: "SELinux: enforcing"

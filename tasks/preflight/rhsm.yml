@@ -1,0 +1,118 @@
+---
+###############################################################################
+# Filename: tasks/preflight/rhsm.yml
+# Role: ansible-role-vault
+# Summary: Preflight gate - RHSM registration. Fires ONLY when the Vault RPM
+#   is sourced from Satellite. Under the hashicorp and mirror sources
+#   tasks/repo.yml deploys a repo file with HashiCorp's GPG key and needs no
+#   subscription at all; under satellite it writes none and defers to
+#   subscription-manager. Registration is therefore a prerequisite of the
+#   satellite sourcing mode, not of the role (issue #36).
+#   Satellite is RHEL-only, hence the ansible_distribution guard.
+# NIST 800-53: SI-7 (Software, Firmware, and Information Integrity)
+###############################################################################
+- name: Verify RHSM registration for Satellite-sourced content
+  when:
+    - ansible_distribution == 'RedHat'
+    - vault_manage_repo | bool
+    - vault_repo_source == 'satellite'
+  block:
+    # Unconditional marker. Without it, __vault_rhsm_registered is skipped both
+    # when the gate is suppressed AND when the binary is absent (inner when: at
+    # the foot of this file), so a did-not-fire oracle cannot tell the two
+    # apart -- and an emptied gate file satisfies it too.
+    - name: "Preflight | rhsm | RHSM check applies"
+      ansible.builtin.assert:
+        that: [true]
+        success_msg: "RHSM registration check: applies"
+      register: __vault_rhsm_marker
+
+    # Presence via `command -v`, NOT stat on a path: the paths are not uniform
+    # across binaries (/usr/bin vs /usr/sbin) and stat would use a different
+    # resolver than the probe that follows.
+    # 'command' is not only a shell builtin: bash ships /usr/bin/command (a two-line
+    # wrapper) on EL8/9/10 -- `rpm -qf /usr/bin/command` returns bash on all three --
+    # so ansible.builtin.command's execvp resolves it without a shell. Verified in
+    # ubi8/ubi9/ubi10. ansible-lint's command-instead-of-shell is not skip-listed here,
+    # so switching to shell: would trip lint for no gain.
+    - name: Detect subscription-manager
+      ansible.builtin.command:
+        cmd: command -v subscription-manager
+      register: __vault_rhsm_bin
+      check_mode: false          # command/shell are skipped under --check;
+      # a skipped probe returns rc 0 with empty output, which every
+      # assert below would then read as a healthy host.
+      changed_when: false
+      failed_when: false
+      environment:
+        LC_ALL: C
+
+    - name: "Preflight | rhsm | subscription-manager is installed"
+      ansible.builtin.assert:
+        that:
+          - __vault_rhsm_bin.rc == 0
+        fail_msg: >-
+          vault_repo_source is 'satellite' but subscription-manager is not
+          installed. Satellite-sourced content requires a registered RHEL host.
+          Install subscription-manager, or use vault_repo_source 'mirror'.
+        success_msg: "subscription-manager: present"
+      register: __vault_rhsm_present
+
+    - name: Check RHSM identity
+      ansible.builtin.command:
+        cmd: subscription-manager identity
+      register: __vault_rhsm_status
+      check_mode: false          # command/shell are skipped under --check;
+      # a skipped probe returns rc 0 with empty output, which every
+      # assert below would then read as a healthy host.
+      changed_when: false
+      failed_when: false
+      environment:
+        LC_ALL: C
+
+    # Exit codes read from the shipped source, not inferred from one arm:
+    #   0 registered (NOTE: this path makes a live REST call to Candlepin)
+    #   1 not registered        cli_command/cli.py ERR_NOT_REGISTERED_CODE
+    #   8 not root              scripts/subscription_manager.py sys.exit(8)
+    #  65 identity cert corrupt os.EX_DATAERR
+    #  69 consumer deleted server-side, GoneException (cli.py) - NOT a
+    #     connectivity error; the two EX_UNAVAILABLE sites sit behind
+    #     `if config_changed:` which a bare `identity` never sets
+    #  70 entitlement server unreachable, os.EX_SOFTWARE
+    #  78 container mode (ubi ships /etc/rhsm-host) - fires FIRST, before any
+    #     registration check, so 1/8/65 are unreachable in a container
+    - name: "Preflight | rhsm | host is registered"
+      ansible.builtin.assert:
+        that:
+          - __vault_rhsm_status.rc == 0
+        fail_msg: >-
+          {% if __vault_rhsm_status.rc == 1 %}
+          This host is not registered. Register it with Satellite before
+          running the role: subscription-manager register --org <org>
+          --activationkey <key>
+          {% elif __vault_rhsm_status.rc == 8 %}
+          subscription-manager requires root. This is a privilege problem, not
+          a registration problem - run the role with become: true.
+          {% elif __vault_rhsm_status.rc == 65 %}
+          The consumer identity certificate exists but is corrupt. Repair with
+          subscription-manager clean, then re-register.
+          {% elif __vault_rhsm_status.rc == 69 %}
+          This consumer profile has been deleted from the Satellite server.
+          Run subscription-manager clean, then register again.
+          {% elif __vault_rhsm_status.rc == 70 %}
+          The host appears registered but the entitlement server is
+          unreachable. This is a connectivity problem, NOT a registration
+          problem - do not re-register. Check the Satellite/Capsule host and
+          any proxy settings.
+          {% elif __vault_rhsm_status.rc == 78 %}
+          subscription-manager is in container mode (/etc/rhsm-host is
+          present), so registration cannot be checked here. Subscriptions are
+          managed from the container host.
+          {% else %}
+          subscription-manager identity returned an unrecognised exit code
+          {{ __vault_rhsm_status.rc }}. First line of output:
+          {{ (__vault_rhsm_status.stderr_lines | default([]) + __vault_rhsm_status.stdout_lines | default([]) + ['(no output)']) | first }}
+          {% endif %}
+        success_msg: "RHSM: registered"
+      register: __vault_rhsm_registered
+      when: __vault_rhsm_bin.rc == 0

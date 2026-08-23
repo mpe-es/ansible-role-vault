@@ -1,0 +1,188 @@
+---
+###############################################################################
+# Filename: molecule/preflight/prepare.yml
+# Role: ansible-role-vault
+# Summary: Establish gate preconditions explicitly (issue #36). Container
+#   defaults differ across the ubi8/9/10 matrix -- measured: chronyc is absent
+#   on all three, ss is absent on ubi8, firewalld is absent on all three.
+#
+#   States this file FORCES are trustworthy. Two are NOT forced and are inherited
+#   from the image: the ABSENCE of chronyc and of firewalld. The absent-tool
+#   cases depend on that absence, and :latest UBI tags are mutable. Their
+#   rescues assert the specific "not installed" wording, so a future image
+#   shipping either package turns the scenario RED rather than falsely green --
+#   the failure is loud, but it is a fixture problem, not a gate problem.
+#   Forcing removal is the fix; it is not done here because removing
+#   firewalld's dependencies perturbs other cases.
+# Classification: UNCLASSIFIED
+###############################################################################
+- name: Prepare
+  hosts: all
+  # ubi8 ships NO python3 at all, so facts cannot be gathered until an
+  # interpreter exists. molecule/default/prepare.yml already had to solve this;
+  # copying that play's structure without its first task is what broke the el8
+  # matrix cell.
+  gather_facts: false
+
+  tasks:
+    - name: Bootstrap requested Python interpreter
+      # NOT excluded here: this runs before Python exists, so it cannot use the
+      # dnf module's disablerepo. If the bootstrap ever flakes on "All mirrors
+      # were tried", that is why.
+      ansible.builtin.raw: >-
+        sh -c 'test -x {{ ansible_python_interpreter }}
+        || dnf install -y {{ ansible_python_interpreter | basename }}'
+      register: __prepare_python
+      changed_when: "'Installed:' in __prepare_python.stdout"
+
+    - name: Gather facts after Python bootstrap
+      ansible.builtin.setup:
+
+    # ss is absent on ubi8, and the port gate's normal cases need it. The query-failure
+    # case in verify.yml shims a failing ss rather than removing the package;
+    # the "tool entirely absent" arm is knowingly untested (removing iproute
+    # mid-scenario would break every later case on ubi9/ubi10).
+    # The dnf CLI, not the dnf MODULE, and only in this fixture.
+    #
+    # On EL8 no interpreter satisfies both halves of what the module needs:
+    #   /usr/libexec/platform-python  3.6.8  has dnf bindings, but ansible-core
+    #                                        modules need >= 3.7 and die on
+    #                                        "future feature annotations is not
+    #                                        defined"
+    #   /usr/bin/python3.11           3.11   runs modules, has NO dnf bindings
+    # Both measured on ubi8. Selecting an interpreter therefore cannot work; the
+    # CLI sidesteps the binding question entirely and behaves the same on 8/9/10.
+    #
+    # rhel-* is disabled for the reason documented below: ubi-init ships those
+    # repos enabled and unentitled, and dnf occasionally insists on consulting
+    # them ("All mirrors were tried").
+    #
+    # iproute : the port gate's normal cases need ss, absent on ubi8.
+    # gnupg2  : the repo-lifecycle case drives the real tasks/repo.yml under the
+    #           hashicorp source, which imports the key via rpm_key -- and
+    #           rpm_key needs gpg2, which ubi10 does not ship at all.
+    - name: Ensure the fixture's package prerequisites are present
+      ansible.builtin.command:  # noqa command-instead-of-module
+        argv: [dnf, -y, --disablerepo=rhel-*, install, iproute, gnupg2]
+      register: __prep_pkgs
+      changed_when: "'Installed:' in __prep_pkgs.stdout"
+
+    - name: Remove the container-mode marker so RHSM causes are reachable
+      ansible.builtin.file:
+        path: /etc/rhsm-host
+        state: absent
+
+    - name: Create a directory where a TLS file is expected
+      ansible.builtin.file:
+        path: /tmp/preflight-fixtures/isdir.crt
+        state: directory
+        mode: '0755'
+
+    # The port gate needs REAL listeners in real systemd cgroups: ownership is decided
+    # by /proc/<pid>/cgroup, so a bare background process would not exercise the
+    # code path. systemd-run puts each under /system.slice/<unit>.service.
+    # CLI, for the same reason as the package task above: on EL8 no interpreter
+    # has both dnf bindings and a Python new enough for ansible-core modules.
+    # Converting only the first task left this one failing on EL8 -- the fix has
+    # to cover every dnf MODULE use in the fixture, not the one that was named.
+    - name: Install a listener helper for the port fixtures
+      ansible.builtin.command:  # noqa command-instead-of-module
+        argv: [dnf, -y, --disablerepo=rhel-*, install, nmap-ncat]
+      register: __prep_ncat
+      changed_when: "'Installed:' in __prep_ncat.stdout"
+
+    - name: Start a FOREIGN listener on the Vault API port
+      ansible.builtin.command:
+        cmd: >-
+          systemd-run --unit=preflight-foreign --collect
+          /usr/bin/ncat -l -k -p {{ vault_listener_port }}
+      changed_when: true
+
+    - name: Start a listener under the Vault service name on an alternate port
+      ansible.builtin.command:
+        cmd: >-
+          systemd-run --unit={{ vault_service_name }} --collect
+          /usr/bin/ncat -l -k -p 18200
+      changed_when: true
+
+    # A REAL unit in a non-system slice. systemd reports
+    # /app.slice/fakevault.service as its ControlGroup, so when it IS the
+    # configured unit the gate must accept it -- the inverse of the bug the old
+    # hard-coded slice anchor caused.
+    #
+    # A real unit, not a shimmed PID: a shim whose cgroup lacks the name
+    # entirely fails as a foreign holder no matter what the comparison does,
+    # which is false coverage.
+    - name: Start a listener in a non-system slice
+      ansible.builtin.command:
+        cmd: >-
+          systemd-run --unit=fakevault --slice=app.slice --collect
+          /usr/bin/ncat -l -k -p 19996
+      changed_when: true
+
+    # Two DIFFERENT owners on one port. Without this every port fixture is
+    # single-owner, so "all listeners are Vault" and "any listener is Vault"
+    # behave identically and the cardinality comparison is never exercised.
+    - name: Start a Vault-owned listener on the shared-port fixture
+      ansible.builtin.command:
+        cmd: >-
+          systemd-run --unit=vault-shared --collect
+          /usr/bin/ncat -l -k 127.0.0.1 19995
+      changed_when: true
+
+    - name: Start a foreign listener on the same shared-port fixture
+      ansible.builtin.command:
+        cmd: >-
+          systemd-run --unit=preflight-intruder --collect
+          /usr/bin/ncat -l -k ::1 19995
+      changed_when: true
+
+    # A real unit whose name is a strict PREFIX of the shared-port holder's
+    # (vault-share vs vault-shared). It exists and has a control group, but does
+    # not hold the port -- so the ownership comparison is what runs, rather than
+    # the earlier "unit has no control group" arm.
+    - name: Start a unit whose name prefixes the shared-port holder's
+      ansible.builtin.command:
+        argv: [systemd-run, --unit=vault-share, --collect, sleep, "600"]
+      changed_when: true
+
+    # PORT ALLOCATION (check before adding a fixture; 19998 was already the
+    # "genuinely free port" case and binding it broke that case):
+    #   18200 vault-owned pass   19994 unattributed row   19995 shared/no-PID
+    #   19996 custom slice       19997 check-mode         19998 MUST STAY FREE
+    #   19999 ss-unusable        19993 extension holder
+    #
+    # A holder whose cgroup is a strict EXTENSION of the configured unit's:
+    #   configured : /system.slice/vault-share.service
+    #   holder     : /system.slice/vault-share.service-rogue.service
+    # On a DEDICATED port with no other listener, so the ownership comparison is
+    # the only thing that can fail the case. Without the end anchor in the
+    # production match, the configured path is found inside the holder's and the
+    # gate wrongly passes -- which is what this fixture exists to detect.
+    - name: Start a holder whose cgroup extends the configured unit's
+      ansible.builtin.command:
+        argv: [systemd-run, --unit=vault-share.service-rogue, --collect,
+               /usr/bin/ncat, -l, -k, "19993"]
+      changed_when: true
+
+    - name: Give the listeners a moment to bind
+      ansible.builtin.wait_for:
+        port: "{{ vault_listener_port }}"
+        timeout: 10
+
+    - name: Stage a readable TLS trio for the pass case
+      ansible.builtin.copy:
+        content: "fixture\n"
+        dest: "/tmp/preflight-fixtures/{{ item }}"
+        mode: '0644'
+      loop:
+        - good.crt
+        - good.key
+        - good.ca
+
+    - name: Symlink a staged certificate (the certmonger/certbot pattern)
+      ansible.builtin.file:
+        src: good.crt
+        dest: /tmp/preflight-fixtures/link.crt
+        state: link
+        force: true
