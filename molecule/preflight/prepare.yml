@@ -96,13 +96,14 @@
           /usr/bin/ncat -l -k -p 18200
       changed_when: true
 
-    # A unit in a NON-system slice: its cgroup contains /fakevault.service but
-    # systemd reports /app.slice/fakevault.service as this unit's ControlGroup,
-    # so when it IS the configured unit the gate must accept it -- the inverse
-    # of the bug the old slice anchor caused
-    # the ownership comparison -- a shimmed PID whose cgroup lacks the name entirely
-    # fails as a foreign holder whether the anchor is present or not, which is
-    # false coverage.
+    # A REAL unit in a non-system slice. systemd reports
+    # /app.slice/fakevault.service as its ControlGroup, so when it IS the
+    # configured unit the gate must accept it -- the inverse of the bug the old
+    # hard-coded slice anchor caused.
+    #
+    # A real unit, not a shimmed PID: a shim whose cgroup lacks the name
+    # entirely fails as a foreign holder no matter what the comparison does,
+    # which is false coverage.
     - name: Start a listener in a non-system slice
       ansible.builtin.command:
         cmd: >-

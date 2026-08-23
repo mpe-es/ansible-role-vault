@@ -103,6 +103,7 @@
       ansible.builtin.assert:
         that:
           - not (__vault_repo_source_marker.skipped | default(false))
+          - not (__vault_repo_source_marker.failed | default(false))
           - __vault_repo_source_rhel.skipped | default(false)
           - __vault_repo_source_url.skipped | default(false)
           - __vault_repo_source_gpg.skipped | default(false)
@@ -337,9 +338,15 @@
         that:
           - __vault_port_owner is defined
           - not (__vault_port_owner.skipped | default(false))
+          # Same reason as the custom-slice oracle below: the register survives
+          # include_role, and the foreign-listener case leaves it defined,
+          # unskipped and FAILED. Without this the oracle is satisfied by that
+          # stale result if this case's include is ever removed.
+          - not (__vault_port_owner.failed | default(false))
         fail_msg: >-
-          The port pass-case skipped the ownership block, so the cgroup logic
-          was never evaluated. "Nothing failed" is not proof for a pass case.
+          The port pass-case skipped the ownership block or inherited a failed
+          result, so the cgroup logic was not evaluated successfully here.
+          "Nothing failed" is not proof for a pass case.
 
     - name: "FIRES - the socket query tool is unusable"
       block:
@@ -443,11 +450,17 @@
         vault_listener_port: 19996
         vault_service_name: fakevault
 
-    - name: Assert the ownership comparison actually ran for the custom slice
+    # Registers survive include_role, so "defined and not skipped" is satisfied
+    # by the PREVIOUS case's register -- the foreign-listener case fails inside
+    # this very assert, leaving it defined, unskipped and failed. Requiring
+    # failed to be false binds this to a successful result from THIS case, so
+    # deleting the include above turns the oracle red instead of green.
+    - name: Assert the ownership comparison ran and PASSED for the custom slice
       ansible.builtin.assert:
         that:
           - __vault_port_owner is defined
           - not (__vault_port_owner.skipped | default(false))
+          - not (__vault_port_owner.failed | default(false))
         fail_msg: >-
           The custom-slice case passed without the ownership task running, so it
           proves nothing: a skipped comparison looks exactly like an accepted

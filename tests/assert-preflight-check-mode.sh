@@ -2,11 +2,14 @@
 # Every read-only probe in tasks/preflight/ must carry check_mode: false.
 #
 # ansible.builtin.command and .shell are SKIPPED under --check. A skipped probe
-# registers rc 0 with empty stdout, and every assert downstream reads that as a
-# healthy host: chrony reports no "Leap status: Normal" and fails a good host,
-# while the port gate's ownership block never runs at all and a foreign listener
-# passes. A dry run that greens a host it would have rejected is worse than no
-# dry run. tasks/configure.yml carried the correct precedent before this.
+# registers rc 0 with empty stdout, and downstream asserts misread that in BOTH
+# directions -- either is wrong, and they are not the same wrong:
+#   - FALSE NEGATIVE: the port gate's ownership block never runs, so a foreign
+#     listener passes. A dry run that greens a host it would have rejected is
+#     worse than no dry run.
+#   - FALSE POSITIVE: chrony sees no "Leap status: Normal" in the empty output
+#     and fails a perfectly healthy host.
+# tasks/configure.yml carried the correct precedent before this.
 #
 # This is a CLASS lock, not a per-site one: the same omission shipped across
 # every probe at once, so checking sites individually is how it recurs.

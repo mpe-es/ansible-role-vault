@@ -59,8 +59,10 @@ about who deployed the file. It therefore applies equally when
 without altering its SANs:
 
 - a **`127.0.0.1` IP SAN**, and
-- whatever hostname `vault_api_addr` advertises — the host **FQDN** by default,
-  but the name you set if you override it.
+- the host identity in `vault_api_addr`, encoded to match its TYPE: a **DNS
+  SAN** for a hostname (the host FQDN by default), or an **IP SAN** if you set
+  `vault_api_addr` to an address. `argument_specs` permits either, and
+  `DNS:10.0.0.5` will not validate `https://10.0.0.5`.
 
 The role's own callers use the loopback address — `tasks/service.yml` verifies
 against `https://127.0.0.1:<port>`, and `files/vault-unseal.sh` and the unseal
