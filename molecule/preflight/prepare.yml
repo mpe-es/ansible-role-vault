@@ -81,15 +81,15 @@
     # The port gate needs REAL listeners in real systemd cgroups: ownership is decided
     # by /proc/<pid>/cgroup, so a bare background process would not exercise the
     # code path. systemd-run puts each under /system.slice/<unit>.service.
+    # CLI, for the same reason as the package task above: on EL8 no interpreter
+    # has both dnf bindings and a Python new enough for ansible-core modules.
+    # Converting only the first task left this one failing on EL8 -- the fix has
+    # to cover every dnf MODULE use in the fixture, not the one that was named.
     - name: Install a listener helper for the port fixtures
-      ansible.builtin.dnf:
-        name: nmap-ncat
-        # Same exclusion as the iproute install above, for the same measured
-        # reason: ubi-init ships rhel-* enabled and unentitled, and applying
-        # this to only one transaction leaves the flake it claims to prevent.
-        disablerepo: 'rhel-*'
-        state: present
-      changed_when: false
+      ansible.builtin.command:  # noqa command-instead-of-module
+        argv: [dnf, -y, --disablerepo=rhel-*, install, nmap-ncat]
+      register: __prep_ncat
+      changed_when: "'Installed:' in __prep_ncat.stdout"
 
     - name: Start a FOREIGN listener on the Vault API port
       ansible.builtin.command:
