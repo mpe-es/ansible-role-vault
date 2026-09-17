@@ -13,6 +13,11 @@
 #         always-true `vault_tls_dir | dirname is defined`,
 #     r3  passed a one-term polarity flip on the STAT task -- a SIBLING of the
 #         term r2 had hardened -- which makes every downstream task skip.
+#     r4  (codex, the first blind reviewer outside this harness) passed five
+#         more: the stat pinned to one variable so every item carried the
+#         CERT's metadata, an enforcement writing `{{ item.item }}.bak`, and an
+#         always-false term on the enforcer or the stat -- r3 had added that
+#         rejection to the REPORTER only. Same family, same miss, third time.
 #   That last one is the lesson this file encodes: bounds come in families, and
 #   a mutation suite that covers one member of a family proves nothing about the
 #   others. Every `when:` in the region is mutated at every site it appears.
@@ -242,11 +247,11 @@ KILL = [
     # --- module arguments.
     ("path targets the DIRECTORY, not the loop item",
      edit('enforce', '    path: "{{ item.item }}"', '    path: "{{ vault_tls_dir }}"'), None,
-     "not derived from item.item"),
+     "not one of the supported forms"),
     ("path laundered through stat output (writes through the link)",
      edit('enforce', '    path: "{{ item.item }}"',
           '    path: "{{ item.stat.lnk_target | default(item.item) }}"'), None,
-     "derived from stat output"),
+     "not one of the supported forms"),
     ("state: file -> state: touch", edit('enforce', '    state: file', '    state: touch'),
      None, "state='touch'"),
     ("drop follow: false from the file module",
@@ -297,6 +302,29 @@ KILL = [
     ("drop the symlink disjunct from the report",
      edit('report', '\n      or (item.stat.islnk | default(false))', ''), None,
      "missing the exact disjunct"),
+
+    # --- codex round 1: the guard established facts about the path the STAT
+    # inspected, then never bound the write to that same path, and rejected an
+    # always-false term on the reporter but not on its siblings.
+    ("pin the inspector to one variable (every item carries the CERT's metadata)",
+     edit('stat', '    path: "{{ item }}"', '    path: "{{ vault_tls_cert_file }}"'),
+     None, "is not exactly {{ item }}"),
+    ("enforce a DIFFERENT path than the one inspected (.bak)",
+     edit('enforce', '    path: "{{ item.item }}"', '    path: "{{ item.item }}.bak"'),
+     None, "not one of the supported forms"),
+    ("disable the ENFORCER with an always-false term",
+     edit('enforce', MANAGE, '    - false\n' + MANAGE), None,
+     "enforcement when: contains an always-false term"),
+    ("disable the STAT with an always-false term",
+     edit('stat', '  when: not (vault_manage_tls | bool)',
+          '  when:\n    - false\n    - not (vault_manage_tls | bool)'), None,
+     "stat when: contains an always-false term"),
+    ("invert the reporter's skipped-item term",
+     edit('report', '    - not (item.skipped | default(false))',
+          '    - item.skipped | default(false)'), None,
+     "not (item.skipped | default(false))"),
+    ("drop failed_when: false from the inspector",
+     edit('stat', '\n  failed_when: false', ''), None, "stat failed_when=None"),
 
     # --- the premise in tasks/main.yml, and every way to break it.
     ("ungate tls.yml in tasks/main.yml", None,

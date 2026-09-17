@@ -79,6 +79,14 @@ def when_terms(task):
 MANAGE_RX = r'not\s*\(?\s*vault_manage_tls\s*\|\s*bool\s*\)?'
 
 
+FALSEY = ('false', 'no', 'off', 'none', '0')
+
+
+def disabled(terms):
+    """A term that can never be true switches the task off outright."""
+    return [t for t in terms if t.strip().lower() in FALSEY]
+
+
 def has_term(terms, pattern):
     """True when SOME whole term matches `pattern` end-to-end (parens tolerated)."""
     rx = re.compile(r'^\(?\s*' + pattern + r'\s*\)?$')
@@ -116,10 +124,26 @@ elif len(inspectors) > 1:
 else:
     task, mod = inspectors[0]
     register = task.get('register')
+    if not re.match(r'^\{\{\s*item\s*\}\}$', str(mod.get('path', ''))):
+        fail.append(f"staged-TLS stat path={mod.get('path', '')!r} is not exactly "
+                    "{{ item }}; pinning it to one variable gives EVERY loop item "
+                    "that file's metadata, so a hardlinked key passes the "
+                    "certificate's nlink check and its shared inode is rewritten")
     if mod.get('follow') is not False:
         fail.append(f"staged-TLS stat follow={mod.get('follow')!r}; must be false, "
                     "or it reports the link TARGET and a symlink is converged as "
                     "though it were a regular file")
+    # SF2c: without it an un-stat-able path aborts the play instead of routing
+    # to the report, and the report's `item.stat is not defined` branch becomes
+    # unreachable.
+    # failed_when is a TASK keyword, not a module argument.
+    if task.get('failed_when') is not False:
+        fail.append(f"staged-TLS stat failed_when={task.get('failed_when')!r}; must "
+                    "be false, or an un-inspectable path (ENOTDIR, EACCES) fails "
+                    "the play at Phase 4 instead of being reported")
+    if disabled(when_terms(task)):
+        fail.append(f"staged-TLS stat when: contains an always-false term "
+                    f"({when_terms(task)!r}); the whole region goes dead")
     if not register:
         fail.append("staged-TLS stat has no register:; the enforcement has nothing "
                     "to consume")
@@ -161,15 +185,20 @@ elif enforcers:
                     "exactly {{ vault_tls_file_mode }} (a filter could launder it "
                     "to any value while still naming the var)")
 
-    # --- target derived per item, so one fixed path cannot stand in for the trio.
-    # item.stat is specifically excluded: `item.stat.lnk_target` names `item` and
-    # would write straight through a symlink, defeating the islnk bound.
-    if 'item.item' not in path:
-        fail.append(f"staged-TLS enforcement path={path!r} is not derived from "
-                    "item.item; it would converge one fixed path, not the trio")
-    if 'item.stat' in path:
-        fail.append(f"staged-TLS enforcement path={path!r} is derived from stat "
-                    "output; lnk_target and friends resolve OUTSIDE vault_tls_dir")
+    # --- the write target is an ALLOW-LIST, not a substring test. Everything
+    # above establishes facts about the path the stat INSPECTED; the module must
+    # then write that exact path. `{{ item.item }}.bak` contains `item.item` and
+    # writes a different, never-inspected file; `item.stat.lnk_target` resolves
+    # outside vault_tls_dir. Both pass any substring rule.
+    ALLOWED_PATHS = (
+        r'\{\{\s*item\.item\s*\}\}',
+        r'\{\{\s*vault_tls_dir\s*\}\}/\{\{\s*item\.item\s*\|\s*basename\s*\}\}',
+    )
+    if not any(re.match('^' + a + '$', path) for a in ALLOWED_PATHS):
+        fail.append(f"staged-TLS enforcement path={path!r} is not one of the "
+                    "supported forms ({{ item.item }} or "
+                    "{{ vault_tls_dir }}/{{ item.item | basename }}); anything "
+                    "else writes a path the stat above never inspected")
 
     # --- state: touch would CREATE material the operator was told to supply.
     if mod.get('state') != 'file':
@@ -207,6 +236,10 @@ elif enforcers:
          "anything weaker than EXACT parent equality lets an operator pointing "
          "vault_tls_ca_file at a shared anchor have it chgrp'd away from the host"),
     ]
+    if disabled(terms):
+        fail.append(f"staged-TLS enforcement when: contains an always-false term "
+                    f"({terms!r}); every required term is still present and the "
+                    "repair never runs")
     for pattern, literal, why in REQUIRED:
         if not has_term(terms, pattern):
             fail.append(f"staged-TLS enforcement when: is missing the exact term "
@@ -229,9 +262,14 @@ elif reporters:
     if not has_term(rterms, MANAGE_RX):
         fail.append(f"staged-TLS report when: is missing the exact term "
                     f"`not (vault_manage_tls | bool)` (found {rterms!r})")
-    if any(t.strip().lower() in ('false', 'no', 'off') for t in rterms):
+    if disabled(rterms):
         fail.append(f"staged-TLS report when: contains an always-false term "
                     f"({rterms!r}); every exclusion would be silent")
+    if not has_term(rterms, r'not\s*\(\s*item\.skipped\s*\|\s*default\(\s*false\s*\)\s*\)'):
+        fail.append(f"staged-TLS report when: is missing the exact term "
+                    f"`not (item.skipped | default(false))` (found {rterms!r}); "
+                    "inverted, it fires ONLY for the managed path's skipped "
+                    "results and every real exclusion goes unreported")
     # The or-chain is ONE yaml term. Substring-checking its causes cannot see
     # polarity (`dirname != dir` flipped to `==` silently drops the shared-anchor
     # case) nor the joining operator (`or` collapsed to `and` makes the chain

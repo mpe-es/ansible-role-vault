@@ -126,8 +126,10 @@
     - name: Assert the symlinked CA and its shared target were left untouched
       ansible.builtin.assert:
         that:
-          # still a link -- not replaced by a regular file
+          # still a link, and still pointing where prepare.yml put it:
+          # "is a symlink" alone passes even if the role repointed it elsewhere
           - __verify_symlink_ca.results[0].stat.islnk | default(false)
+          - __verify_symlink_ca.results[0].stat.lnk_target | default('') == '/etc/pki/mock-shared-ca.crt'
           # the shared anchor kept root:root 0644
           - __verify_symlink_ca.results[1].stat.mode == '0644'
           - __verify_symlink_ca.results[1].stat.pw_name | default('') == 'root'
