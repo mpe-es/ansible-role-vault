@@ -82,7 +82,7 @@ jobs:
       # Widened per the #46-era comment now that both script lineages are
       # in tree; full consolidation + version pinning tracked in issue #47
       - name: Run shellcheck on shipped and test scripts
-        run: shellcheck files/*.sh tests/*.sh tests/local-preflight-harness/getent
+        run: shellcheck files/*.sh tests/*.sh tests/local-preflight-harness/{getent,command}
 
       - name: Run vault-unseal behavioral tests
         run: bash tests/vault-unseal-test.sh

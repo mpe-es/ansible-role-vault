@@ -165,66 +165,16 @@ Install via `pip install --require-hashes -r requirements.txt`:
 | `hvac` | 2.4.0 | HashiCorp Vault API client (required by `community.hashi_vault`) |
 | `netaddr` | 1.3.0 | Address classification for `ansible.utils.ipaddr` (required by that collection). **Controller-side only** — the filter runs on the controller, so the managed host needs nothing |
 
-Python dependencies are managed via `pip-compile` with SHA-256 hash pinning
-for supply chain integrity (NIST 800-53 SI-7). To regenerate after updating
-`requirements.in`:
+Python dependencies are hash-pinned with `pip-compile --generate-hashes` for
+supply chain integrity (NIST 800-53 SI-7). **Version updates are Dependabot's
+job** — `.github/dependabot.yml` sets a 7-day release cooldown and maintains
+`requirements.txt` directly; do not hand-bump a pin.
 
-```bash
-docker run --rm --platform linux/amd64 -v "$PWD:/w" -w /w python:3.11-slim \
-  sh -c 'pip install -q --require-hashes -r requirements-generator.txt && \
-         pip-compile --generate-hashes --output-file=requirements.txt requirements.in'
-```
-
-Running that exact command against the committed lock reproduces it
-**byte-identically** — which is what makes the artifact reproducible from its own
-documented procedure, rather than merely asserted to be.
-
-**Run it in that container, and against the existing `requirements.txt`.** Three
-reasons, each measured rather than assumed:
-
-- `--generate-hashes` enumerates the wheels the resolver can *see*, which depends
-  on OS, architecture and Python version. CI installs on `ubuntu-latest` x86_64
-  with Python 3.11; regenerating on macOS rewrote ~184 lines for no semantic
-  reason, so the lock would no longer be reproducible from its own documented
-  command.
-- `pip-compile` honours the pins already present in its output file. Pointed at a
-  fresh path it re-resolves everything and silently upgraded an unrelated
-  transitive (`urllib3`) to a release **one day old** — inside the 7-day cooldown
-  floor `.github/dependabot.yml` sets precisely so a malicious or yanked upstream
-  release has time to be caught. Dependency *upgrades* belong to Dependabot,
-  which enforces that cooldown; regeneration should only add what you asked for.
-- **The whole generator toolchain is pinned, not just `pip-tools`.**
-  `requirements-generator.txt` is a hash-pinned lock of the generator itself
-  (`pip-tools`, `click`, and `pip` — `pip` is the resolver, and the
-  `python:3.11-slim` tag is mutable, so the base image's bundled `pip` is not a
-  fixed input either). `pip install pip-tools==7.6.1` alone admits more than one
-  Click, and Click's version changes the generated output. That lock is itself a
-  fixed point: installing it and regenerating it reproduces it byte for byte.
-- **The 7-day cooldown floor applies to the generator lock too**, including its
-  indirect pins — a transitive of a build tool is precisely where nobody looks. A
-  pin is held *down* in `requirements-generator.in` when the newest release has
-  not cleared the floor. Because `.github/dependabot.yml` deliberately excludes
-  the generator stack, `tests/assert-generator-lock-cooldown.sh` enforces the
-  floor instead: it reads `default-days` from that same file and fails CI on a
-  pin inside the floor or on a yanked release.
-
-> **The `--no-index` in the generated header was never passed and never reached
-> pip.** Do not "fix" the command above to match it, and do not pass it, or the
-> lock would be resolved from whatever happens to sit in the local cache.
->
-> *Mechanism* — it is a rendering artifact of **Click 8.5.0**, the pinned
-> version. `piptools/utils.py::get_compile_command` skips an option when
-> `option.default == value`. Click 8.5.0 reports the `--no-index` default as
-> `Sentinel.UNSET`, so `UNSET == False` is false, the guard never fires, and with
-> no secondary `--index` opt to switch to the emitter falls through to
-> `arg = option_long_name` and prints the flag despite its `False` value. Click
-> 8.4.1 and 8.1.7 report that default as `False`, the guard fires, and the *same*
-> pip-tools emits no such line. That version-dependence is precisely why the
-> toolchain is pinned as a whole rather than by `pip-tools` version alone.
->
-> *Evidence it was never in effect*: in a fresh container with an empty pip cache
-> and `--network none`, `pip-compile` fails with `DistributionNotFound: No
-> matching distribution found for hvac>=2.0.0`. Resolution requires index access.
+`requirements.in` is edited only to **add or remove** a dependency, which
+Dependabot does not do. The regeneration command and the two constraints that
+make it safe (run it on `linux/amd64` Python 3.11 to match CI; run it against
+the existing `requirements.txt`, never a fresh path) are documented in
+`requirements.in` itself.
 
 ### Execution Environment (AAP)
 

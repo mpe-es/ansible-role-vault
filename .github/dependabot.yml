@@ -8,9 +8,7 @@
 # Classification: UNCLASSIFIED
 ###############################################################################
 # Ecosystems monitored:
-#   1. pip            - requirements.in / requirements.txt (pip-compile managed).
-#                       requirements-generator.* is the pinned GENERATOR toolchain
-#                       and is deliberately excluded via ignore: -- see below.
+#   1. pip            - requirements.in / requirements.txt (pip-compile managed)
 #   2. github-actions - .github/workflows/ (SHA-pinned to full commit hashes)
 #
 # NOT monitored: requirements.yml (Ansible Galaxy collections). Dependabot has
@@ -50,29 +48,6 @@ updates:
     allow:
       - dependency-type: direct
       - dependency-type: indirect
-    # requirements-generator.txt pins the toolchain that GENERATES
-    # requirements.txt (see requirements-generator.in). Dependabot's pip
-    # ecosystem globs every requirements*.txt in this directory, so without
-    # these ignores it would bump the generator without regenerating the lock
-    # the generator produced -- breaking the reproducibility the pin exists to
-    # provide. Moving the toolchain is a deliberate act: bump it by hand, then
-    # regenerate requirements.txt from it in the same commit. None of these
-    # names appear in requirements.txt, so nothing runtime is suppressed.
-    #
-    # These ignores DO remove the generator stack from the cooldown enforcement
-    # below, so the floor is re-enforced for it by
-    # tests/assert-generator-lock-cooldown.sh, which reads default-days from
-    # THIS file and fails CI on a pin inside the floor or on a yanked release.
-    # Without that guard the floor would be prose here and a control nowhere.
-    ignore:
-      - dependency-name: pip-tools
-      - dependency-name: click
-      - dependency-name: pip
-      - dependency-name: setuptools
-      - dependency-name: wheel
-      - dependency-name: build
-      - dependency-name: packaging
-      - dependency-name: pyproject-hooks
     groups:
       # Collapse the hvac stack into one PR for patch + minor bumps. Major
       # bumps stay individual for deliberate review.
