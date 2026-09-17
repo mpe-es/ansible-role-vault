@@ -171,15 +171,16 @@ for supply chain integrity (NIST 800-53 SI-7). To regenerate after updating
 
 ```bash
 docker run --rm --platform linux/amd64 -v "$PWD:/w" -w /w python:3.11-slim \
-  sh -c 'pip install -q pip-tools==7.6.1 && \
+  sh -c 'pip install -q --require-hashes -r requirements-generator.txt && \
          pip-compile --generate-hashes --output-file=requirements.txt requirements.in'
 ```
 
-Running that exact command twice produces **byte-identical** output — which is
-what makes the lock reproducible from its own documented procedure.
+Running that exact command against the committed lock reproduces it
+**byte-identically** — which is what makes the artifact reproducible from its own
+documented procedure, rather than merely asserted to be.
 
-**Run it in that container, and against the existing `requirements.txt`.** Two
-reasons, both measured rather than assumed:
+**Run it in that container, and against the existing `requirements.txt`.** Three
+reasons, each measured rather than assumed:
 
 - `--generate-hashes` enumerates the wheels the resolver can *see*, which depends
   on OS, architecture and Python version. CI installs on `ubuntu-latest` x86_64
@@ -192,21 +193,27 @@ reasons, both measured rather than assumed:
   floor `.github/dependabot.yml` sets precisely so a malicious or yanked upstream
   release has time to be caught. Dependency *upgrades* belong to Dependabot,
   which enforces that cooldown; regeneration should only add what you asked for.
-- **Pin the generator.** An unpinned `pip install pip-tools` makes the output
-  depend on whichever release is current when someone regenerates. The committed
-  lock was produced by 7.6.1.
+- **The whole generator toolchain is pinned, not just `pip-tools`.**
+  `requirements-generator.txt` is a hash-pinned lock of the generator itself
+  (`pip-tools`, `click`, and `pip` — `pip` is the resolver, and the
+  `python:3.11-slim` tag is mutable, so the base image's bundled `pip` is not a
+  fixed input either). `pip install pip-tools==7.6.1` alone admits more than one
+  Click, and Click's version changes the generated output. That lock is itself a
+  fixed point: installing it and regenerating it reproduces it byte for byte.
 
-> **The `--no-index` in the generated header is a pip-tools rendering bug.** It
-> was never passed and never reached pip — do not "fix" the command above to
-> match it, and do not pass it, or the lock would be resolved from whatever
-> happens to sit in the local cache.
+> **The `--no-index` in the generated header was never passed and never reached
+> pip.** Do not "fix" the command above to match it, and do not pass it, or the
+> lock would be resolved from whatever happens to sit in the local cache.
 >
-> *Mechanism* (`piptools/utils.py::get_compile_command`, 7.6.1): the header
-> builder skips an option when `option.default == value`. For `--no-index` click
-> reports the default as `Sentinel.UNSET`, so `UNSET == False` is false and the
-> guard never fires; the option has no secondary `--index` opt, so the emitter
-> falls through to `arg = option_long_name` and prints the flag regardless of its
-> `False` value.
+> *Mechanism* — it is a rendering artifact of **Click 8.5.0**, the pinned
+> version. `piptools/utils.py::get_compile_command` skips an option when
+> `option.default == value`. Click 8.5.0 reports the `--no-index` default as
+> `Sentinel.UNSET`, so `UNSET == False` is false, the guard never fires, and with
+> no secondary `--index` opt to switch to the emitter falls through to
+> `arg = option_long_name` and prints the flag despite its `False` value. Click
+> 8.4.1 and 8.1.7 report that default as `False`, the guard fires, and the *same*
+> pip-tools emits no such line. That version-dependence is precisely why the
+> toolchain is pinned as a whole rather than by `pip-tools` version alone.
 >
 > *Evidence it was never in effect*: in a fresh container with an empty pip cache
 > and `--network none`, `pip-compile` fails with `DistributionNotFound: No

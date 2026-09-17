@@ -1,0 +1,35 @@
+# Pinned toolchain that generates requirements.txt. NOT a runtime dependency of
+# this role -- nothing here is installed on a controller or a managed host.
+#
+# WHY THIS FILE EXISTS
+#
+# `pip-compile --generate-hashes` output depends on more than pip-tools' own
+# version. Its header is rendered by Click, and Click changed the default of a
+# flag option between releases:
+#
+#   click 8.4.1 -> cli.params['no_index'].default is False
+#   click 8.5.0 -> cli.params['no_index'].default is Sentinel.UNSET
+#
+# piptools/utils.py::get_compile_command skips an option when
+# `option.default == value`. Under 8.4.1 that guard fires and `--no-index` is
+# omitted; under 8.5.0 `Sentinel.UNSET == False` is False, the guard does not
+# fire, and the flag is printed although it was never passed. Same pip-tools,
+# same inputs, two different headers.
+#
+# Pinning pip-tools alone therefore does NOT make regeneration reproducible,
+# because `pip install pip-tools==7.6.1` admits either Click. The whole
+# generator toolchain is pinned here instead, pip included -- pip is the
+# resolver, and the python:3.11-slim tag is mutable, so the base image's
+# bundled pip is not a fixed input either.
+#
+# REGENERATING THIS FILE (rarely; only to move the toolchain deliberately):
+#
+#   docker run --rm --platform linux/amd64 -v "$PWD:/w" -w /w python:3.11-slim \
+#     sh -c 'pip install -q pip-tools==7.6.1 click==8.5.0 && \
+#            pip-compile --generate-hashes --allow-unsafe \
+#              --output-file=requirements-generator.txt requirements-generator.in'
+#
+# This is a fixed point: installing requirements-generator.txt and re-running
+# the command above reproduces requirements-generator.txt byte for byte.
+pip-tools==7.6.1
+click==8.5.0

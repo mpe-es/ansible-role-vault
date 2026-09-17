@@ -119,6 +119,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   deployment it does not affect. Classification of "reachable" is delegated to
   `ansible.utils.ipaddr` rather than pattern-matched. (#79)
 
+- **`requirements.txt` regeneration is now reproducible from its documented
+  command.** The lock gained `netaddr` (for `ansible.utils.ipaddr`) and is
+  regenerated in a `linux/amd64` Python 3.11 container, because
+  `--generate-hashes` enumerates the wheels the resolver can *see* and that set
+  is platform-dependent. The generator toolchain itself is now hash-pinned in
+  `requirements-generator.txt` rather than installed unpinned: `pip-tools`
+  alone is not sufficient, since the same `pip-tools` release emits a different
+  header under different Click versions, and `pip` — the resolver — is not fixed
+  by the mutable `python:3.11-slim` tag either. Dependabot ignores those
+  packages so the generator cannot be bumped out from under the lock it
+  produced. The `--no-index` recorded in the generated header was never passed
+  and never reached pip; it is a Click 8.5.0 rendering artifact, documented in
+  `requirements-generator.in` so nobody "fixes" the command to match it.
+
 - Molecule now executes the real role rather than a hand-copied replica, so
   the tests exercise what ships. (#50, closes #43)
 - Initialization is now a single transaction that unseals and enables audit by

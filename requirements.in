@@ -1,37 +1,45 @@
 # Python dependencies for ansible-role-vault
 # Source file for pip-compile. DO NOT edit requirements.txt directly.
 #
-# REGENERATE REPRODUCIBLY. The lock is a generated artifact and must be produced
-# on the platform CI installs it on, or the hash set drifts: --generate-hashes
-# enumerates the wheels the resolver can SEE, which depends on OS, architecture
-# and Python version. Regenerating on macOS rewrote ~184 lines for no semantic
-# reason. CI is ubuntu-latest x86_64 with Python 3.11, so:
+# REGENERATE REPRODUCIBLY:
 #
 #   docker run --rm --platform linux/amd64 -v "$PWD:/w" -w /w python:3.11-slim \
-#     sh -c 'pip install -q pip-tools==7.6.1 && \
+#     sh -c 'pip install -q --require-hashes -r requirements-generator.txt && \
 #            pip-compile --generate-hashes --output-file=requirements.txt requirements.in'
 #
-# PIN THE GENERATOR. An unpinned `pip install pip-tools` makes the output depend
-# on whichever release is current at regeneration time; the committed lock was
-# produced by 7.6.1. Running that exact command twice yields BYTE-IDENTICAL
-# output, which is what makes the artifact reproducible from its own procedure.
+# Three things make that reproducible, each measured rather than assumed.
 #
-# Run it against the EXISTING requirements.txt, never a fresh path. pip-compile
-# honours the pins already in its output file, so an unrelated transitive is not
-# silently upgraded -- a fresh-path run pulled urllib3 2.8.0, which was ONE DAY
-# OLD and inside the 7-day cooldown floor .github/dependabot.yml sets precisely
-# to catch a malicious or yanked upstream release.
+# 1. THE PLATFORM. --generate-hashes enumerates the wheels the resolver can SEE,
+#    which depends on OS, architecture and Python version. CI is ubuntu-latest
+#    x86_64 / Python 3.11; regenerating on macOS rewrote ~184 lines for no
+#    semantic reason.
 #
-# THE `--no-index` IN THE GENERATED HEADER IS A pip-tools RENDERING BUG, not a
-# flag anyone passed and not one that reached pip. Do not "fix" the documented
-# command to match it, and do not pass it: the lock would then be resolved from
-# whatever happens to be in the local cache.
+# 2. THE EXISTING OUTPUT FILE. Run against the existing requirements.txt, never
+#    a fresh path. pip-compile honours the pins already in its output file, so an
+#    unrelated transitive is not silently upgraded -- a fresh-path run pulled
+#    urllib3 2.8.0, which was ONE DAY OLD and inside the 7-day cooldown floor
+#    .github/dependabot.yml sets precisely to catch a malicious or yanked
+#    upstream release. Upgrades belong to Dependabot, which enforces that floor.
 #
-#   Mechanism (piptools/utils.py get_compile_command, 7.6.1): the header builder
-#   skips an option when `option.default == value`. For --no-index click reports
-#   default `Sentinel.UNSET`, so UNSET == False is False and the guard never
-#   fires; the option has no secondary `--index` opt, so the emitter falls to
-#   `arg = option_long_name` and prints the flag regardless of its False value.
+# 3. THE WHOLE GENERATOR TOOLCHAIN, not just pip-tools. See
+#    requirements-generator.in: `pip install pip-tools==7.6.1` admits more than
+#    one Click, and Click's version changes the generated header. pip is pinned
+#    there too -- pip is the resolver, and the python:3.11-slim tag is mutable,
+#    so the base image's bundled pip is not a fixed input either.
+#
+# THE `--no-index` IN THE GENERATED HEADER WAS NEVER PASSED AND NEVER REACHED
+# PIP. Do not "fix" the documented command to match it, and do not pass it: the
+# lock would then be resolved from whatever happens to be in the local cache.
+#
+#   It is a rendering artifact of Click 8.5.0, the pinned version.
+#   piptools/utils.py::get_compile_command skips an option when
+#   `option.default == value`. Click 8.5.0 reports the --no-index default as
+#   `Sentinel.UNSET`, so `UNSET == False` is False, the guard never fires, and
+#   -- with no secondary `--index` opt to switch to -- the emitter falls to
+#   `arg = option_long_name` and prints the flag despite its False value.
+#   Click 8.4.1 and 8.1.7 report that default as False, the guard fires, and the
+#   same pip-tools emits NO such line. That version-dependence is why the
+#   toolchain is pinned as a whole.
 #
 #   Evidence it was never in effect: in a fresh container with an empty pip cache
 #   and `--network none`, pip-compile FAILS with
