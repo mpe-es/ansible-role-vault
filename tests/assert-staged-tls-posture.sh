@@ -240,6 +240,13 @@ elif enforcers:
         fail.append(f"staged-TLS enforcement when: contains an always-false term "
                     f"({terms!r}); every required term is still present and the "
                     "repair never runs")
+    # The LOOP, not just the conditions: every bound can be intact while the
+    # task iterates an empty list. codex demonstrated that against the sibling
+    # dns classifier; the same shape applies here.
+    if register not in str(task.get('loop', '')):
+        fail.append(f"staged-TLS enforcement no longer loops over {register}; "
+                    f"its loop is {task.get('loop')!r}. Every bound below can be "
+                    "intact while the task iterates nothing.")
     for pattern, literal, why in REQUIRED:
         if not has_term(terms, pattern):
             fail.append(f"staged-TLS enforcement when: is missing the exact term "

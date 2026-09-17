@@ -114,6 +114,11 @@ WANT_PREDICATES = {
                     "item.stat.readable | default(false)"],
 }
 
+def _norm(v):
+    """Collapse whitespace so a folded scalar compares like a single line."""
+    return " ".join(str(v).split())
+
+
 def asserts_in(tasks):
     for t in tasks or []:
         a = t.get("ansible.builtin.assert") or t.get("assert")
@@ -138,6 +143,26 @@ for gate, want in WANT_PREDICATES.items():
                     f"gate is partial or absent, so nothing else reliably notices "
                     f"it being emptied.")
 
+# managed_tls: the predicate lock above pins WHAT the readable assert checks;
+# this pins WHAT IT ITERATES. Every conjunct can be intact while the task loops
+# an empty list, which asserts nothing about anything -- codex demonstrated that
+# shape against the sibling dns classifier and it applies here identically.
+mt_path = os.path.join(root, "tasks", "preflight", "managed_tls.yml")
+if os.path.isfile(mt_path):
+    with open(mt_path) as fh:
+        mt_tasks = yaml.safe_load(fh) or []
+    readable = [t for t, a in asserts_in(mt_tasks)
+                if any("item.stat.readable" in _norm(str(c)) for c in (a.get("that") or []))]
+    if not readable:
+        fail.append("tasks/preflight/managed_tls.yml no longer asserts "
+                    "item.stat.readable; the controller-side source could be "
+                    "unreadable and the gate would still pass.")
+    elif "__vault_managed_tls_stat" not in _norm(str(readable[0].get("loop", ""))):
+        fail.append("tasks/preflight/managed_tls.yml readable assert no longer "
+                    "iterates __vault_managed_tls_stat; its loop is "
+                    f"{readable[0].get('loop')!r}. An empty loop asserts nothing "
+                    "while every conjunct above stays intact.")
+
 # dns POLARITY (#79). The predicate above proves the gate asks about routable
 # addresses; these two checks prove it fires on the right hosts. The gate is a
 # hard failure ONLY where the advertised addresses depend on the hostname, and a
@@ -148,9 +173,6 @@ dns_path = os.path.join(root, "tasks", "preflight", "dns.yml")
 if os.path.isfile(dns_path):
     with open(dns_path) as fh:
         dns_tasks = yaml.safe_load(fh) or []
-
-    def _norm(v):
-        return " ".join(str(v).split())
 
     # The DERIVATION, not just the variable name. Pinning only
     # "__vault_dns_routable | length > 0" leaves the set that name refers to
@@ -200,6 +222,17 @@ if os.path.isfile(dns_path):
             if _norm(term) not in got:
                 fail.append(f"tasks/preflight/dns.yml classification is missing the "
                             f"exact condition `{term}`. Conditions are: {got!r}")
+        # The LOOP, not just the conditions. Every term above can be intact
+        # while the task iterates an empty list, which passes a text-only lock
+        # and makes the gate accept everything. Caught by the harness, but a
+        # structural guard that ignores its own input is half a guard.
+        loop_src = _norm(str(classifiers[0].get("loop", "")))
+        for frag in ("__vault_dns_check.stdout_lines", "regex_replace"):
+            if _norm(frag) not in loop_src:
+                fail.append(f"tasks/preflight/dns.yml classification no longer loops "
+                            f"over the resolver's own answer ({frag!r} absent). Its "
+                            f"loop is: {loop_src!r}")
+
         # The canonical form must still be DERIVED, or every __vault_dns_canon
         # term above is testing an undefined variable.
         canon = _norm(str((classifiers[0].get("vars") or {}).get("__vault_dns_canon", "")))

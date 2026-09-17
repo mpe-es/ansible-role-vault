@@ -164,6 +164,8 @@ jobs:
       - name: Run the local preflight-gate harness
         run: |
           cd tests/local-preflight-harness
+          # $PWD first on PATH supplies BOTH shims: getent (absent on macOS) and
+          # command (absent on Ubuntu, present on every EL the role supports).
           PATH="$PWD:$PATH" GETENT_FIXTURE_DB="$PWD/hosts.db" \
             ansible-playbook run.yml
         env:

@@ -26,6 +26,20 @@ excuse.
 
 ## What the fixtures buy
 
+Two host binaries are shimmed, both for the same reason: a difference between
+the harness's runner and the platforms the role actually supports.
+
+`command` is shimmed because `tasks/preflight/{dns,port,chrony}.yml` probe with
+`ansible.builtin.command: command -v <binary>`. Bash ships `/usr/bin/command` on
+EL 8/9/10 and on macOS, so execvp resolves it with no shell — that choice is
+deliberate and documented in those files, and switching to `shell:` would trip
+ansible-lint. **Ubuntu ships no such executable**, and this harness runs on
+`ubuntu-latest` in CI. Weakening a probe that is correct on every supported
+platform, to satisfy a runner the role rejects at Phase 1, would be the tail
+wagging the dog. **Consequence, stated plainly: with the shim on PATH this
+harness does not exercise the real execvp resolution of `command`.**
+`molecule/preflight` proves that on the actual ubi8/9/10 images.
+
 `getent` is a shim, not the real tool. That is deliberate twice over:
 
 - macOS has no `getent` at all, so the dns gate is otherwise unrunnable on a
