@@ -200,6 +200,13 @@ reasons, each measured rather than assumed:
   fixed input either). `pip install pip-tools==7.6.1` alone admits more than one
   Click, and Click's version changes the generated output. That lock is itself a
   fixed point: installing it and regenerating it reproduces it byte for byte.
+- **The 7-day cooldown floor applies to the generator lock too**, including its
+  indirect pins — a transitive of a build tool is precisely where nobody looks. A
+  pin is held *down* in `requirements-generator.in` when the newest release has
+  not cleared the floor. Because `.github/dependabot.yml` deliberately excludes
+  the generator stack, `tests/assert-generator-lock-cooldown.sh` enforces the
+  floor instead: it reads `default-days` from that same file and fails CI on a
+  pin inside the floor or on a yanked release.
 
 > **The `--no-index` in the generated header was never passed and never reached
 > pip.** Do not "fix" the command above to match it, and do not pass it, or the

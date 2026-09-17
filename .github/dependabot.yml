@@ -58,6 +58,12 @@ updates:
     # provide. Moving the toolchain is a deliberate act: bump it by hand, then
     # regenerate requirements.txt from it in the same commit. None of these
     # names appear in requirements.txt, so nothing runtime is suppressed.
+    #
+    # These ignores DO remove the generator stack from the cooldown enforcement
+    # below, so the floor is re-enforced for it by
+    # tests/assert-generator-lock-cooldown.sh, which reads default-days from
+    # THIS file and fails CI on a pin inside the floor or on a yanked release.
+    # Without that guard the floor would be prose here and a control nowhere.
     ignore:
       - dependency-name: pip-tools
       - dependency-name: click

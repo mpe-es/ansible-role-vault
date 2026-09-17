@@ -129,7 +129,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   header under different Click versions, and `pip` — the resolver — is not fixed
   by the mutable `python:3.11-slim` tag either. Dependabot ignores those
   packages so the generator cannot be bumped out from under the lock it
-  produced. The `--no-index` recorded in the generated header was never passed
+  produced. Because that exclusion also removed the generator stack from
+  cooldown enforcement, a new guard re-enforces the 7-day floor on it directly —
+  reading the floor from the Dependabot config so the two cannot disagree, and
+  failing on a yanked release as well. The `--no-index` recorded in the generated header was never passed
   and never reached pip; it is a Click 8.5.0 rendering artifact, documented in
   `requirements-generator.in` so nobody "fixes" the command to match it.
 

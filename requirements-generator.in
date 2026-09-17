@@ -33,3 +33,13 @@
 # the command above reproduces requirements-generator.txt byte for byte.
 pip-tools==7.6.1
 click==8.5.0
+
+# Transitive of pip-tools/build, pinned DOWN deliberately. 1.3.3 and 1.3.0 were
+# both uploaded within the 7-day cooldown floor .github/dependabot.yml sets, and
+# an unconstrained resolve takes the newest. That floor applies to indirect
+# dependencies too -- it is what catches a malicious or yanked upstream release
+# before it is consumed -- and a lock that regenerates itself is exactly where a
+# fresh release slips in unnoticed, because nobody reviews a transitive of a
+# build tool. Neither pip-tools nor build constrains this package, so pinning it
+# costs nothing. tests/assert-generator-lock-cooldown.sh enforces the floor.
+pyproject-hooks==1.2.0
