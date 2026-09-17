@@ -14,7 +14,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export ROOT
 
 python3 - <<'PY'
-import os, sys, yaml
+import os, re, sys, yaml
 
 root = os.environ["ROOT"]
 orch = os.path.join(root, "tasks", "preflight.yml")
@@ -154,69 +154,54 @@ if os.path.isfile(dns_path):
 
     # The DERIVATION, not just the variable name. Pinning only
     # "__vault_dns_routable | length > 0" leaves the set that name refers to
-    # entirely free: deleting the reject filters, or reverting `getent ahosts`
-    # to `getent hosts`, restores the exact "did resolution return an answer"
-    # defect #79 removed -- with every guard green. Both were verified to
-    # survive the first version of this lock.
-    WANT_PROBE = "getent ahosts {{ ansible_fqdn }}"
-    probes = [t for t in dns_tasks
-              if _norm((t.get("ansible.builtin.command") or {}).get("cmd", "")) == WANT_PROBE]
-    if not probes:
-        fail.append("tasks/preflight/dns.yml no longer probes with exactly "
-                    f"{WANT_PROBE!r}. `getent hosts` returns the FIRST match only "
-                    "and prefers IPv6, so a loopback AAAA masks a routable A -- "
-                    "which is the defect this gate was rewritten to remove.")
-
-    # Each exclusion by exact filter form. Loopback is the case the gate exists
-    # for; link-local is what a failed DHCP lease leaves behind, and an
-    # advertised address on either is equally unreachable.
-    # Each exclusion by exact filter form, INCLUDING the IPv4-mapped
-    # normalisation. Codex found this list pinning a defective regex: `fe80:`
-    # covers only fe80, while the IPv6 link-local range is fe80 THROUGH febf --
-    # the first ten bits -- so fe90:: and febf:: were admitted as reachable, and
-    # `::ffff:127.0.0.1` matched no IPv4 pattern at all. A lock that pins the
-    # wrong predicate is worse than none: it certifies the defect.
-    # The complete non-unicast/non-global set. Two review rounds each found one
-    # more class admitted as reachable, so this enumerates all of them rather
-    # than the ones that happened to come up: loopback (both families, every
-    # spelling), IPv4 and IPv6 link-local, unspecified, and multicast.
-    WANT_REJECTS = ["map('regex_replace', '^::[Ff]{4}:', '')",
-                    "reject('match', '^127\\.')",
-                    "reject('match', '^169\\.254\\.')",
-                    "reject('match', '^0\\.0\\.0\\.0$')",
-                    "reject('match', '^(22[4-9]|23[0-9])\\.')",
-                    "reject('match', '^[0:]+$')",
-                    "reject('match', '^[0:]+1$')",
-                    "reject('match', '^[Ff][Ee][89AaBb]')",
-                    "reject('match', '^[Ff][Ff]')"]
-    derivations = [_norm(v) for t in dns_tasks
-                   for k, v in (t.get("ansible.builtin.set_fact") or {}).items()
-                   if k == "__vault_dns_routable"]
-    if not derivations:
-        fail.append("tasks/preflight/dns.yml no longer derives __vault_dns_routable; "
-                    "the predicate above pins a name with nothing behind it.")
+    # entirely free.
+    #
+    # Classification is now delegated to ansible.utils.ipaddr rather than
+    # hand-rolled regexes -- three review rounds each defeated a regex
+    # enumeration (::ffff:127.0.0.1, then ::, then 255.255.255.255), because
+    # reachability is address arithmetic. What this locks is that the delegation
+    # is still in place AND that the two checks the library provably does not
+    # cover on its own are still present: netaddr does not unwrap IPv4-mapped
+    # addresses, and it counts the unspecified and limited-broadcast addresses
+    # as unicast.
+    # (fragment, minimum occurrences, why). The COUNT matters: loopback and
+    # link-local are each tested TWICE -- once on the address as resolved and
+    # once on its ipv4() form -- because netaddr does not unwrap IPv4-mapped
+    # addresses. Requiring only one occurrence let a mutation delete the direct
+    # check while the mapped-form check still satisfied the substring, which my
+    # own negative control caught.
+    WANT_CLASSIFIER = [
+        ("ansible.utils.ipaddr('unicast')", 1,
+         "multicast and broadcast are not endpoints a peer dials"),
+        ("ansible.utils.ipaddr('loopback')", 2,
+         "loopback on BOTH the resolved address and its ipv4() form"),
+        ("ansible.utils.ipaddr('link-local')", 2,
+         "link-local on BOTH forms; the library implements the full fe80::/10, "
+         "which a hand-written regex got wrong twice"),
+        ("ansible.utils.ipaddr('ipv4')", 3,
+         "IPv4-mapped forms must be unwrapped before each classification; "
+         "netaddr does not treat ::ffff:127.0.0.1 as loopback"),
+        ("'0.0.0.0', '255.255.255.255'", 1,
+         "netaddr counts the unspecified and limited-broadcast addresses as "
+         "unicast, so they are excluded by name"),
+        ("'::', '0::0'", 1,
+         "the IPv6 unspecified address, likewise counted as unicast"),
+    ]
+    classifiers = [t for t in dns_tasks
+                   if "__vault_dns_routable" in str((t.get("ansible.builtin.set_fact") or {}))
+                   and t.get("when")]
+    if not classifiers:
+        fail.append("tasks/preflight/dns.yml no longer derives __vault_dns_routable "
+                    "under a when:; the predicate above pins a name with nothing "
+                    "behind it.")
     else:
-        derivation = derivations[0]
-        missing_rejects = [r for r in WANT_REJECTS if _norm(r) not in derivation]
-        if missing_rejects:
-            fail.append("tasks/preflight/dns.yml __vault_dns_routable no longer excludes "
-                        f"{missing_rejects!r}. Without every exclusion the 'routable' set "
-                        "admits an address nothing can reach, and the gate passes exactly "
-                        f"the hosts it exists to fail. Derivation is: {derivation!r}")
-        else:
-            # ORDER, not just membership. An IPv4 prefix inside `::ffff:...` is
-            # invisible to the IPv4 tests until the prefix is stripped, so moving
-            # the normalisation after the exclusions silently restores mapped
-            # loopback and mapped link-local as "reachable" -- and passed this
-            # lock when it checked membership alone.
-            norm_at = derivation.index(_norm(WANT_REJECTS[0]))
-            first_reject_at = min(derivation.index(_norm(r)) for r in WANT_REJECTS[1:])
-            if norm_at > first_reject_at:
-                fail.append("tasks/preflight/dns.yml normalises IPv4-mapped addresses "
-                            "AFTER the exclusions run. ::ffff:127.0.0.1 and "
-                            "::ffff:169.254.1.1 are then reachable, because their IPv4 "
-                            "prefixes only become visible once the ::ffff: is stripped. "
-                            "The normalisation must precede every reject.")
+        blob = " ".join(_norm(c) for c in (classifiers[0].get("when") or []))
+        for frag, want_n, why in WANT_CLASSIFIER:
+            got_n = blob.count(_norm(frag))
+            if got_n < want_n:
+                fail.append(f"tasks/preflight/dns.yml classification uses {frag!r} "
+                            f"{got_n} time(s), expected at least {want_n} -- {why}. "
+                            f"Condition is: {blob!r}")
 
     # The assert must be gated ON the dependency, so a host with explicitly
     # pinned addresses is never failed for a name it does not use.

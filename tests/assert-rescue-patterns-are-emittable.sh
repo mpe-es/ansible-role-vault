@@ -93,16 +93,19 @@ def messages(gate_path):
         for t in tasks or []:
             if not isinstance(t, dict):
                 continue
-            for v in t.values():
-                if isinstance(v, dict):
-                    # FAILURE text only. A rescue reads ansible_failed_result,
-                    # which carries fail_msg (assert) or msg (fail/debug) --
-                    # never success_msg. Counting success_msg let a fragment be
-                    # moved there while the failure message was reworded, and
-                    # the exemption still passed while the case went red.
-                    for key in ("fail_msg", "msg"):
-                        if key in v:
-                            yield str(v[key])
+            # Only a module that can FAIL can put text into
+            # ansible_failed_result. assert -> fail_msg, fail -> msg. A
+            # successful debug never reaches a rescue, and counting debug.msg
+            # certified a pattern the rescue could not receive: rewording an
+            # assert's fail_msg while adding a debug carrying the old phrase
+            # passed the guard while the case went red. success_msg is excluded
+            # for the same reason -- a rescue only ever sees failure text.
+            FAILING = {"assert": "fail_msg", "ansible.builtin.assert": "fail_msg",
+                       "fail": "msg", "ansible.builtin.fail": "msg"}
+            for mod, key in FAILING.items():
+                v = t.get(mod)
+                if isinstance(v, dict) and key in v:
+                    yield str(v[key])
             for k in ("block", "rescue", "always"):
                 if k in t:
                     yield from walk(t[k])

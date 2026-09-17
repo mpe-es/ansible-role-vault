@@ -8,3 +8,7 @@
 # https://pypi.org/project/hvac/
 # Supports Vault v1.4.7+, Python 3.8+
 hvac>=2.0.0
+
+# Address classification used by ansible.utils.ipaddr in tasks/preflight/dns.yml.
+# The collection declares netaddr>=0.10.1; it is a CONTROLLER-side requirement.
+netaddr>=0.10.1

@@ -45,7 +45,7 @@ one of them applies and the other does not.
 | TLS material | `vault_manage_tls: false` **(the default)** | `vault_tls_cert_file`, `vault_tls_key_file` and `vault_tls_ca_file` all exist and are regular files (symlinks followed). Whether the Vault account can READ them is tracked separately |
 | Managed TLS inputs | `vault_manage_tls: true` | under `vault_tls_source: file`, `vault_tls_src_cert`/`_key`/`_ca` are **set**. An *absolute* path is additionally statted **on the Ansible controller** and must be readable — `copy` resolves `src` there, so checking the target would answer a different question. A *relative* path (`files/vault-tls.crt`, as the examples below use) is reported as unverifiable and left to `copy`'s own search path, never rejected. Under `vault_tls_source: vault_pki`, `vault_pki_mount` and `vault_pki_role` are set; reachability of the PKI engine is not proven (#80) |
 | API port | always | `vault_listener_port` is free, or already held by the Vault service itself. Requires `iproute` (`ss`) — a missing query tool is a hard failure, not a skip |
-| DNS | `vault_api_addr` or `vault_cluster_addr` still contain `ansible_fqdn` (the default), **or** `vault_manage_tls: true` **with** `vault_tls_source: vault_pki` (which issues against `ansible_fqdn`) | the FQDN resolves **locally** to at least one address that is not loopback (`127.0.0.0/8`, `::1`) or link-local (`169.254.0.0/16`, `fe80::/10`). Checked with `getent ahosts` rather than `getent hosts`, which returns the first match only and prefers IPv6, so a loopback AAAA masks a routable A. Note `ahosts` applies `AI_ADDRCONFIG`, so it reports the families the host itself has configured — a host with no IPv6 address will not be told about AAAA records. Pin `vault_api_addr`/`vault_cluster_addr` explicitly and this becomes a warning instead (#79) |
+| DNS | `vault_api_addr` or `vault_cluster_addr` still contain `ansible_fqdn` (the default), **or** `vault_manage_tls: true` **with** `vault_tls_source: vault_pki` (which issues against `ansible_fqdn`) | the FQDN resolves **locally** to at least one address that is not loopback (`127.0.0.0/8`, `::1`) or link-local (`169.254.0.0/16`, `fe80::/10`). Checked with `getent ahosts` rather than `getent hosts`, which returns the first match only and prefers IPv6, so a loopback AAAA masks a routable A. Classification is delegated to `ansible.utils.ipaddr` rather than pattern-matched, so loopback, link-local (the full `fe80::/10`), multicast, unspecified and broadcast are excluded — while RFC1918, CGNAT and reserved ranges stay valid, since "not globally routable" is not the same claim as "no peer can reach it". Note `ahosts` applies `AI_ADDRCONFIG`, so it reports the families the host itself has configured — a host with no IPv6 address will not be told about AAAA records. Pin `vault_api_addr`/`vault_cluster_addr` explicitly and this becomes a warning instead (#79) |
 
 Every gate above is a hard failure. The DNS gate is the one that changes shape:
 pin `vault_api_addr` and `vault_cluster_addr` to explicit reachable addresses and
@@ -153,6 +153,7 @@ Install via `ansible-galaxy collection install -r requirements.yml`:
 | Collection | Min Version | Purpose |
 |------------|-------------|---------|
 | `ansible.posix` | 1.6.0 | `firewalld` module for port management |
+| `ansible.utils` | 6.0.0 | `ipaddr` filters — address classification in the DNS preflight gate |
 | `community.hashi_vault` | 7.0.0 | Vault initialization and post-install configuration |
 
 ### Python Libraries
@@ -162,6 +163,7 @@ Install via `pip install --require-hashes -r requirements.txt`:
 | Library | Version | Purpose |
 |---------|---------|---------|
 | `hvac` | 2.4.0 | HashiCorp Vault API client (required by `community.hashi_vault`) |
+| `netaddr` | 1.3.0 | Address classification for `ansible.utils.ipaddr` (required by that collection). **Controller-side only** — the filter runs on the controller, so the managed host needs nothing |
 
 Python dependencies are managed via `pip-compile` with SHA-256 hash pinning
 for supply chain integrity (NIST 800-53 SI-7). To regenerate after updating
