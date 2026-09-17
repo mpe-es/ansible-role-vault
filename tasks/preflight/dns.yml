@@ -2,23 +2,103 @@
 ###############################################################################
 # Filename: tasks/preflight/dns.yml
 # Role: ansible-role-vault
-# Summary: Preflight gate - DNS resolution (advisory, warn-only)
+# Summary: Preflight gate - the inventory hostname resolves to a ROUTABLE
+#   address (issue #79).
+#
+#   This gate used to probe `getent hosts` and warn only when it returned a
+#   non-zero rc -- measuring "did resolution return an answer", never "is the
+#   answer an address a peer can reach". The second is what the role depends on:
+#   defaults/main.yml derives BOTH advertised addresses from this same name.
+#
+#       vault_api_addr:     "https://{{ ansible_fqdn }}:{{ vault_listener_port }}"
+#       vault_cluster_addr: "https://{{ ansible_fqdn }}:8201"
+#
+#   A Debian-convention `127.0.1.1 <fqdn>` line in /etc/hosts, or nss-myhostname
+#   answering when nothing else does, satisfies the old predicate completely. The
+#   host converges, and Vault then advertises an api_addr clients cannot reach and
+#   a cluster_addr no Raft peer can dial -- surfacing at cluster-join time, far
+#   from its cause. Worse, on a stock RHEL 9 host the old rc != 0 branch is close
+#   to UNREACHABLE for the host's own name: `hosts: files dns myhostname` means
+#   nss-myhostname answers with a loopback address even with no DNS record and no
+#   hosts entry at all, so the advisory could essentially never fire.
+#
+#   `getent ahosts`, not `getent hosts`: hosts returns the first match only (and
+#   prefers IPv6), so a loopback AAAA masks a routable A. ahosts reports every
+#   family, which is the set this gate needs.
+#
+#   POLARITY. This is a hard gate ONLY when the advertised addresses actually
+#   depend on this name -- that is, when vault_api_addr or vault_cluster_addr
+#   still contain ansible_fqdn, which is the default. An operator who pinned
+#   explicit addresses has no dependency on the FQDN resolving, so failing them
+#   would be wrong; they get a warning instead. Detecting the dependency at
+#   runtime by substring needs no template introspection and no knowledge of
+#   whether a value came from a default or an override.
+# NIST 800-53: SC-8, CM-6 (Configuration Settings)
 # Classification: UNCLASSIFIED
 ###############################################################################
-- name: Test DNS resolution for inventory hostname
+- name: Resolve the inventory hostname across all address families
   ansible.builtin.command:
-    cmd: "getent hosts {{ ansible_fqdn }}"
+    cmd: "getent ahosts {{ ansible_fqdn }}"
   register: __vault_dns_check
   check_mode: false          # command/shell are skipped under --check;
-  # a skipped probe returns rc 0 with empty output, which every
-  # assert below would then read as a healthy host.
+  # a skipped probe returns rc 0 with empty output, which would read here as
+  # "resolved to nothing" and fail a healthy host.
   changed_when: false
   failed_when: false
+  environment:
+    LC_ALL: C
 
-- name: Warn if DNS resolution fails
+# First whitespace-delimited field of each ahosts line is the address; the same
+# address repeats once per socket type (STREAM/DGRAM/RAW), hence unique.
+# Loopback is what this gate exists to catch: 127.0.0.0/8 and ::1.
+- name: Extract the routable addresses the hostname resolves to
+  ansible.builtin.set_fact:
+    __vault_dns_routable: >-
+      {{ __vault_dns_check.stdout_lines | default([])
+         | map('regex_replace', '^(\S+).*$', '\1')
+         | reject('match', '^127\.')
+         | reject('equalto', '::1')
+         | select | unique | list }}
+
+# Substring, deliberately: it is true for the default templates and false for an
+# operator-pinned literal address, without needing to know which one produced the
+# value. A name that merely CONTAINS the fqdn as a substring is a false positive
+# in theory and a correct answer in practice -- if the advertised name embeds
+# this host's name, the host's name resolving matters.
+- name: Determine whether the advertised addresses depend on this hostname
+  ansible.builtin.set_fact:
+    __vault_dns_advertised: >-
+      {{ (ansible_fqdn in vault_api_addr) or (ansible_fqdn in vault_cluster_addr) }}
+
+- name: "Preflight | dns | inventory hostname resolves to a routable address"
+  ansible.builtin.assert:
+    that:
+      - __vault_dns_routable | length > 0
+    fail_msg: >-
+      {{ ansible_fqdn }} does not resolve to any routable address
+      {% if __vault_dns_check.stdout | default('') | length > 0 %}
+      (it resolves only to loopback: {{ __vault_dns_check.stdout_lines | map('regex_replace', '^(\S+).*$', '\1') | unique | join(', ') }})
+      {% else %}
+      (it does not resolve at all)
+      {% endif %}
+      -- and vault_api_addr / vault_cluster_addr are derived from it, so Vault
+      would advertise an address no client or Raft peer can reach. Fix the DNS
+      record or /etc/hosts entry for this host, or set vault_api_addr and
+      vault_cluster_addr to explicit reachable addresses. A Debian-style
+      127.0.1.1 line and nss-myhostname both produce this.
+    success_msg: "DNS: {{ ansible_fqdn }} -> {{ __vault_dns_routable | join(', ') }}"
+  when: __vault_dns_advertised | bool
+  register: __vault_dns_ok
+
+# The operator pinned explicit advertised addresses, so an unroutable hostname
+# breaks nothing the role does -- but it is still worth saying out loud, because
+# the next operator to remove that override inherits a broken deployment.
+- name: Warn when the hostname is unroutable but the advertised addresses are pinned
   ansible.builtin.debug:
     msg: >-
-      WARNING: DNS resolution failed for {{ ansible_fqdn }}.
-      Vault cluster communication relies on FQDN resolution.
-      Verify DNS configuration or use IP-based addresses.
-  when: __vault_dns_check.rc != 0
+      WARNING: {{ ansible_fqdn }} does not resolve to a routable address.
+      vault_api_addr and vault_cluster_addr are set explicitly, so this does not
+      block the run -- but remove those overrides and the deployment breaks.
+  when:
+    - not (__vault_dns_advertised | bool)
+    - __vault_dns_routable | length == 0

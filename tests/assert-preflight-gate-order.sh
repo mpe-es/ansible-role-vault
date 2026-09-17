@@ -82,10 +82,11 @@ for gate in EXPECTED:
 # included directly by verify.yml, so emptying either while leaving the file
 # present kept every guard and the whole scenario green.
 #
-# dns is deliberately absent from this map: it is ADVISORY by design (warn-only,
-# documented as such in the README), so a predicate requirement is the wrong
-# shape for it. What it must not lose is the warning itself, checked separately
-# below. Every entry here is an exact condition list -- there is no
+# dns WAS advisory-only and is now a conditional hard gate (#79): it fails when
+# the hostname resolves to no routable address AND the advertised addresses are
+# still derived from that hostname. Its predicate is pinned here like any other;
+# the residual warning for the pinned-address case is checked separately below.
+# Every entry here is an exact condition list -- there is no
 # "assert something" fallback, because a gate with no pinned predicate is a gate
 # whose semantics nothing checks.
 WANT_PREDICATES = {
@@ -98,6 +99,10 @@ WANT_PREDICATES = {
     # a platform the container is not.
     "os_family": ["ansible_os_family == 'RedHat'"],
     "os_version": ["ansible_distribution_major_version in ['8', '9', '10']"],
+    # The whole point of #79: "length > 0" over the ROUTABLE set, never over the
+    # raw resolver answer. `__vault_dns_check.rc == 0` would pass on a host whose
+    # name resolves only to 127.0.1.1 -- which is the defect this gate replaced.
+    "dns": ["__vault_dns_routable | length > 0"],
 }
 
 def asserts_in(tasks):
@@ -123,25 +128,46 @@ for gate, want in WANT_PREDICATES.items():
                     f"Asserted conditions are {conds!r}. This gate has no Molecule "
                     f"coverage, so nothing else would notice it being emptied.")
 
-# dns is advisory, so lock the ADVICE: a conditional warning that fires when
-# resolution failed. Losing the `when:` would warn on every host; losing the
-# task would drop the warning entirely, and neither is visible anywhere else.
+# dns POLARITY (#79). The predicate above proves the gate asks about routable
+# addresses; these two checks prove it fires on the right hosts. The gate is a
+# hard failure ONLY where the advertised addresses depend on the hostname, and a
+# warning where the operator pinned them -- inverting either condition silently
+# swaps which population is protected, and no behavioural case would notice on a
+# container whose name resolves one particular way.
 dns_path = os.path.join(root, "tasks", "preflight", "dns.yml")
 if os.path.isfile(dns_path):
     with open(dns_path) as fh:
         dns_tasks = yaml.safe_load(fh) or []
-    # The DIRECTION, not merely that 'rc' appears: flipping `rc != 0` to
-    # `rc == 0` warns every healthy host and stays silent on the failures the
-    # advice exists for, and a substring check accepts both.
-    WANT_DNS_WHEN = "__vault_dns_check.rc != 0"
+
+    def _norm(v):
+        return " ".join(str(v).split())
+
+    # The assert must be gated ON the dependency, so a host with explicitly
+    # pinned addresses is never failed for a name it does not use.
+    WANT_ASSERT_WHEN = "__vault_dns_advertised | bool"
+    gated = [t for t in dns_tasks
+             if ("ansible.builtin.assert" in t or "assert" in t)
+             and _norm(t.get("when", "")) == WANT_ASSERT_WHEN]
+    if not gated:
+        fail.append("tasks/preflight/dns.yml no longer gates its assert on exactly "
+                    f"{WANT_ASSERT_WHEN!r}. Ungated it fails operators who pinned "
+                    "vault_api_addr/vault_cluster_addr and have no dependency on "
+                    "the hostname resolving; inverted, it protects nobody.")
+
+    # The residual warning must remain for the pinned-address population, and
+    # must be conditioned on BOTH the absence of the dependency and the absence
+    # of a routable address -- dropping either warns every host or none.
+    WANT_WARN_WHEN = ["not (__vault_dns_advertised | bool)",
+                      "__vault_dns_routable | length == 0"]
     warns = [t for t in dns_tasks
              if "ansible.builtin.debug" in t
-             and " ".join(str(t.get("when", "")).split()) == WANT_DNS_WHEN
+             and [_norm(c) for c in (t.get("when") or [])] == WANT_WARN_WHEN
              and "WARNING" in str(t["ansible.builtin.debug"].get("msg", ""))]
     if not warns:
         fail.append("tasks/preflight/dns.yml no longer emits a WARNING conditioned on "
-                    f"exactly {WANT_DNS_WHEN!r}. It is advisory by design, so this warning is "
-                    "the entire contract; nothing else would notice it disappearing.")
+                    f"exactly {WANT_WARN_WHEN!r}. That warning is the entire contract "
+                    "for hosts whose advertised addresses are pinned; nothing else "
+                    "would notice it disappearing.")
 
 # tasks/main.yml must still route to the orchestrator under the same tags.
 with open(os.path.join(root, "tasks", "main.yml")) as fh:

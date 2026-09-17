@@ -129,6 +129,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bootstrap a first node, since issuing from Vault's PKI engine requires a Vault
   already serving on the certificate being requested. (#80)
 
+### Changed
+- **The DNS preflight check is now a conditional gate, not warn-only.** It probed
+  `getent hosts` and warned only on a non-zero rc, measuring *"did resolution
+  return an answer"* rather than *"is the answer reachable"* — while
+  `vault_api_addr` and `vault_cluster_addr` are both derived from that same name.
+  A Debian-style `127.0.1.1` line, or `nss-myhostname` answering when nothing
+  else does, satisfied it completely; the host converged and Vault then
+  advertised an address no client or Raft peer could reach, surfacing at
+  cluster-join time far from its cause. On a stock RHEL 9 host the old branch was
+  close to unreachable at all, since `hosts: files dns myhostname` answers with a
+  loopback address even with no DNS record and no hosts entry. It now resolves
+  with `getent ahosts` across every address family and requires at least one
+  non-loopback address — but **only when the advertised addresses still depend on
+  the hostname**. Pin `vault_api_addr`/`vault_cluster_addr` explicitly and the
+  role has no such dependency, so the check downgrades to a warning rather than
+  failing a deployment it does not affect. (#79)
+
 ### Fixed
 - **Operator-staged TLS material was never made readable by the Vault service.**
   `vault_manage_tls: false` is the role default and a documented path — preflight

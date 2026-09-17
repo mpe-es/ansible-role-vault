@@ -43,10 +43,12 @@ set that applies depends on how you configure the role.
 | TLS material | `vault_manage_tls: false` **(the default)** | `vault_tls_cert_file`, `vault_tls_key_file` and `vault_tls_ca_file` all exist and are regular files (symlinks followed). Whether the Vault account can READ them is tracked separately |
 | Managed TLS inputs | `vault_manage_tls: true` | under `vault_tls_source: file`, `vault_tls_src_cert`/`_key`/`_ca` are set, **absolute**, and readable **on the Ansible controller** — `copy` resolves `src` there, so this is deliberately not checked on the target. Under `vault_tls_source: vault_pki`, `vault_pki_mount` and `vault_pki_role` are set. Reachability of the PKI engine is not proven (#80) |
 | API port | always | `vault_listener_port` is free, or already held by the Vault service itself. Requires `iproute` (`ss`) — a missing query tool is a hard failure, not a skip |
+| DNS | `vault_api_addr` or `vault_cluster_addr` still contain `ansible_fqdn` (the default) | the hostname resolves to at least one **routable** address. Checked with `getent ahosts` across all families, and loopback (`127.0.0.0/8`, `::1`) does not count — a Debian-style `127.0.1.1` line or `nss-myhostname` otherwise satisfies a naive check while Vault advertises an address no client or Raft peer can reach. Pin `vault_api_addr`/`vault_cluster_addr` explicitly and this becomes a warning instead (#79) |
 
-One further check is advisory, not a gate:
-
-- **DNS resolution** of `ansible_fqdn` — prints a warning only.
+Every gate above is a hard failure. The DNS gate is the one that changes shape:
+pin `vault_api_addr` and `vault_cluster_addr` to explicit reachable addresses and
+it downgrades to a warning, because the role then has no dependency on the
+hostname resolving.
 
 The port gate covers the API port only. A conflict on the cluster port (8201)
 still surfaces at service start; see [#39](https://github.com/mpe-es/ansible-role-vault/issues/39).
