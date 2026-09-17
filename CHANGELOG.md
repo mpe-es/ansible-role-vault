@@ -96,6 +96,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 **BREAKING CHANGES**
 
+- **A host whose FQDN resolves only to loopback or link-local now fails
+  preflight** when `vault_api_addr`/`vault_cluster_addr` are left at their
+  defaults. Such a host converged before this release and produced a Vault
+  advertising an address nothing could reach. Fix the DNS record or the
+  `/etc/hosts` entry, or pin both addresses explicitly — pinning them downgrades
+  the check to a warning, because the role then has no dependency on the name.
+  (#79)
+
 
 - **`--tags preflight` now runs the gates.** It previously matched nothing and
   reported success having done nothing. A tag-scoped job that was green may now
@@ -134,15 +142,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `getent hosts` and warned only on a non-zero rc, measuring *"did resolution
   return an answer"* rather than *"is the answer reachable"* — while
   `vault_api_addr` and `vault_cluster_addr` are both derived from that same name.
-  A Debian-style `127.0.1.1` line, or `nss-myhostname` answering when nothing
-  else does, satisfied it completely; the host converged and Vault then
-  advertised an address no client or Raft peer could reach, surfacing at
-  cluster-join time far from its cause. On a stock RHEL 9 host the old branch was
-  close to unreachable at all, since `hosts: files dns myhostname` answers with a
-  loopback address even with no DNS record and no hosts entry. It now resolves
-  with `getent ahosts` across every address family and requires at least one
-  non-loopback address — but **only when the advertised addresses still depend on
-  the hostname**. Pin `vault_api_addr`/`vault_cluster_addr` explicitly and the
+  A Debian-style `127.0.1.1` line satisfied it completely; the host converged and
+  Vault then advertised an address no client or Raft peer could reach, surfacing
+  at cluster-join time far from its cause. It now resolves with `getent ahosts`
+  across every address family — `getent hosts` returns the first match only and
+  prefers IPv6, so a loopback AAAA masked a routable A — and requires at least
+  one address that is neither loopback nor link-local, the latter being what a
+  failed DHCP lease leaves behind. This is a **local** resolution check: it does
+  not prove a peer can resolve the name, because `nss-myhostname` answers with
+  the machine's own configured addresses, so a host with a working NIC and no DNS
+  record passes. The gate is armed **only when the advertised addresses still
+  depend on the hostname**. Pin `vault_api_addr`/`vault_cluster_addr` explicitly and the
   role has no such dependency, so the check downgrades to a warning rather than
   failing a deployment it does not affect. (#79)
 

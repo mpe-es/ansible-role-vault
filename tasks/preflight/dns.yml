@@ -2,41 +2,46 @@
 ###############################################################################
 # Filename: tasks/preflight/dns.yml
 # Role: ansible-role-vault
-# Summary: Preflight gate - the inventory hostname resolves to a ROUTABLE
-#   address (issue #79).
+# Summary: Preflight gate - the host's own FQDN resolves LOCALLY to a
+#   non-loopback, non-link-local address (issue #79).
 #
-#   This gate used to probe `getent hosts` and warn only when it returned a
-#   non-zero rc -- measuring "did resolution return an answer", never "is the
-#   answer an address a peer can reach". The second is what the role depends on:
-#   defaults/main.yml derives BOTH advertised addresses from this same name.
+#   This gate used to probe `getent hosts` and warn only on a non-zero rc,
+#   measuring "did resolution return an answer", never "is the answer an address
+#   anything can reach". The second is what the role depends on, because
+#   defaults/main.yml derives BOTH advertised addresses from this same name:
 #
 #       vault_api_addr:     "https://{{ ansible_fqdn }}:{{ vault_listener_port }}"
 #       vault_cluster_addr: "https://{{ ansible_fqdn }}:8201"
 #
-#   A Debian-convention `127.0.1.1 <fqdn>` line in /etc/hosts, or nss-myhostname
-#   answering when nothing else does, satisfies the old predicate completely. The
-#   host converges, and Vault then advertises an api_addr clients cannot reach and
-#   a cluster_addr no Raft peer can dial -- surfacing at cluster-join time, far
-#   from its cause. Worse, on a stock RHEL 9 host the old rc != 0 branch is close
-#   to UNREACHABLE for the host's own name: `hosts: files dns myhostname` means
-#   nss-myhostname answers with a loopback address even with no DNS record and no
-#   hosts entry at all, so the advisory could essentially never fire.
+#   A Debian-convention `127.0.1.1 <fqdn>` line in /etc/hosts satisfies the old
+#   predicate completely. The host converges and Vault advertises an api_addr
+#   clients cannot reach and a cluster_addr no Raft peer can dial -- surfacing at
+#   cluster-join time, far from its cause. That shape was hit on a real lab host.
 #
-#   `getent ahosts`, not `getent hosts`: hosts returns the first match only (and
-#   prefers IPv6), so a loopback AAAA masks a routable A. ahosts reports every
+#   WHAT THIS GATE DOES NOT PROVE, stated plainly because an earlier draft of
+#   this file claimed otherwise: it does not prove a PEER can resolve the name.
+#   `nss-myhostname` resolves the local hostname to the locally configured
+#   addresses -- the NIC address, not 127.0.0.2 -- whenever any are configured,
+#   so a host with a working interface and NO DNS record whatsoever passes this
+#   gate. What it catches is a name that resolves only to an address nothing can
+#   route to: an explicit loopback mapping in `files`, a link-local address from
+#   a failed DHCP lease, or a name that does not resolve at all. Proving the
+#   record exists in the zone a client will query is a different check, from a
+#   different vantage point, and is not attempted here.
+#
+#   `getent ahosts`, not `getent hosts`: hosts returns the first match only and
+#   prefers IPv6, so a loopback AAAA masks a routable A. ahosts reports every
 #   family, which is the set this gate needs.
 #
 #   POLARITY. This is a hard gate ONLY when the advertised addresses actually
 #   depend on this name -- that is, when vault_api_addr or vault_cluster_addr
 #   still contain ansible_fqdn, which is the default. An operator who pinned
 #   explicit addresses has no dependency on the FQDN resolving, so failing them
-#   would be wrong; they get a warning instead. Detecting the dependency at
-#   runtime by substring needs no template introspection and no knowledge of
-#   whether a value came from a default or an override.
+#   would be wrong; they get a warning instead.
 # NIST 800-53: SC-8, CM-6 (Configuration Settings)
 # Classification: UNCLASSIFIED
 ###############################################################################
-- name: Resolve the inventory hostname across all address families
+- name: Resolve the host FQDN across all address families
   ansible.builtin.command:
     cmd: "getent ahosts {{ ansible_fqdn }}"
   register: __vault_dns_check
@@ -48,55 +53,75 @@
   environment:
     LC_ALL: C
 
+# getent's contract: 0 = found, 2 = key not found. ANY other rc means the probe
+# itself could not answer (127 = no getent on the host), which is not the same
+# statement as "the name does not resolve" and must not be reported as one --
+# the port gate makes the same distinction for a missing `ss` (README).
+- name: "Preflight | dns | the resolver probe could run"
+  ansible.builtin.assert:
+    that:
+      - __vault_dns_check.rc in [0, 2]
+    fail_msg: >-
+      `getent ahosts {{ ansible_fqdn }}` exited {{ __vault_dns_check.rc }}, which
+      is neither 0 (resolved) nor 2 (not found), so this gate cannot tell whether
+      the name resolves. getent is part of glibc and should always be present;
+      rc 127 means it is not on PATH. stderr: {{ __vault_dns_check.stderr | default('') | trim }}
+    success_msg: "Resolver probe: usable (rc {{ __vault_dns_check.rc }})"
+
 # First whitespace-delimited field of each ahosts line is the address; the same
 # address repeats once per socket type (STREAM/DGRAM/RAW), hence unique.
-# Loopback is what this gate exists to catch: 127.0.0.0/8 and ::1.
-- name: Extract the routable addresses the hostname resolves to
+# Excluded: loopback (127.0.0.0/8, ::1) and link-local (169.254.0.0/16, fe80::/10).
+# Link-local is what a failed DHCP lease leaves behind, and nss-myhostname returns
+# it ordered by scope -- an advertised address on either is equally unreachable.
+- name: Extract the reachable addresses the FQDN resolves to
   ansible.builtin.set_fact:
     __vault_dns_routable: >-
       {{ __vault_dns_check.stdout_lines | default([])
          | map('regex_replace', '^(\S+).*$', '\1')
          | reject('match', '^127\.')
          | reject('equalto', '::1')
+         | reject('match', '^169\.254\.')
+         | reject('match', '^[Ff][Ee]80:')
          | select | unique | list }}
 
-# Substring, deliberately: it is true for the default templates and false for an
-# operator-pinned literal address, without needing to know which one produced the
-# value. A name that merely CONTAINS the fqdn as a substring is a false positive
-# in theory and a correct answer in practice -- if the advertised name embeds
-# this host's name, the host's name resolving matters.
+# Substring, deliberately: true for the default templates, false for an
+# operator-pinned literal address, without needing to know which produced the
+# value. default('', true) because an explicitly-null override is a real shape
+# and `in` against None raises rather than reporting the gate's own message.
 - name: Determine whether the advertised addresses depend on this hostname
   ansible.builtin.set_fact:
     __vault_dns_advertised: >-
-      {{ (ansible_fqdn in vault_api_addr) or (ansible_fqdn in vault_cluster_addr) }}
+      {{ (ansible_fqdn | default('', true) | length > 0)
+         and ((ansible_fqdn in (vault_api_addr | default('', true)))
+              or (ansible_fqdn in (vault_cluster_addr | default('', true)))) }}
 
-- name: "Preflight | dns | inventory hostname resolves to a routable address"
+- name: "Preflight | dns | FQDN resolves to a reachable address"
   ansible.builtin.assert:
     that:
       - __vault_dns_routable | length > 0
     fail_msg: >-
-      {{ ansible_fqdn }} does not resolve to any routable address
-      {% if __vault_dns_check.stdout | default('') | length > 0 %}
-      (it resolves only to loopback: {{ __vault_dns_check.stdout_lines | map('regex_replace', '^(\S+).*$', '\1') | unique | join(', ') }})
+      {{ ansible_fqdn }} resolves to no reachable address
+      {% if __vault_dns_check.rc == 0 %}
+      -- only to loopback or link-local
+      ({{ __vault_dns_check.stdout_lines | map('regex_replace', '^(\S+).*$', '\1') | unique | join(', ') }})
       {% else %}
-      (it does not resolve at all)
+      -- it does not resolve at all
       {% endif %}
-      -- and vault_api_addr / vault_cluster_addr are derived from it, so Vault
+      , and vault_api_addr / vault_cluster_addr are derived from it, so Vault
       would advertise an address no client or Raft peer can reach. Fix the DNS
-      record or /etc/hosts entry for this host, or set vault_api_addr and
+      record or the /etc/hosts entry for this host, or set vault_api_addr and
       vault_cluster_addr to explicit reachable addresses. A Debian-style
-      127.0.1.1 line and nss-myhostname both produce this.
+      127.0.1.1 line is the usual cause.
     success_msg: "DNS: {{ ansible_fqdn }} -> {{ __vault_dns_routable | join(', ') }}"
   when: __vault_dns_advertised | bool
-  register: __vault_dns_ok
 
-# The operator pinned explicit advertised addresses, so an unroutable hostname
+# The operator pinned explicit advertised addresses, so an unreachable hostname
 # breaks nothing the role does -- but it is still worth saying out loud, because
 # the next operator to remove that override inherits a broken deployment.
-- name: Warn when the hostname is unroutable but the advertised addresses are pinned
+- name: Warn when the FQDN is unreachable but the advertised addresses are pinned
   ansible.builtin.debug:
     msg: >-
-      WARNING: {{ ansible_fqdn }} does not resolve to a routable address.
+      WARNING: {{ ansible_fqdn }} does not resolve to a reachable address.
       vault_api_addr and vault_cluster_addr are set explicitly, so this does not
       block the run -- but remove those overrides and the deployment breaks.
   when:

@@ -284,8 +284,8 @@ argument_specs:
         description:
           - Path to the TLS certificate file on the Ansible controller.
           - Only used when vault_manage_tls is true.
-          - "Must be an ABSOLUTE path on the controller."
-          - "A relative path would be resolved against the role's files/ directory; preflight rejects it rather than reimplementing that search order (issue #80)."
+          - "An ABSOLUTE path is statted on the controller by preflight and must be readable."
+          - "A RELATIVE path is resolved by ansible.builtin.copy through its own search path; preflight reports that it cannot verify it, and does not reject it (issue #80)."
         type: path
         default: ""
 
@@ -293,8 +293,8 @@ argument_specs:
         description:
           - Path to the TLS private key file on the Ansible controller.
           - Only used when vault_manage_tls is true.
-          - "Must be an ABSOLUTE path on the controller."
-          - "A relative path would be resolved against the role's files/ directory; preflight rejects it rather than reimplementing that search order (issue #80)."
+          - "An ABSOLUTE path is statted on the controller by preflight and must be readable."
+          - "A RELATIVE path is resolved by ansible.builtin.copy through its own search path; preflight reports that it cannot verify it, and does not reject it (issue #80)."
         type: path
         default: ""
 
@@ -302,8 +302,8 @@ argument_specs:
         description:
           - Path to the CA certificate file on the Ansible controller.
           - Only used when vault_manage_tls is true.
-          - "Must be an ABSOLUTE path on the controller."
-          - "A relative path would be resolved against the role's files/ directory; preflight rejects it rather than reimplementing that search order (issue #80)."
+          - "An ABSOLUTE path is statted on the controller by preflight and must be readable."
+          - "A RELATIVE path is resolved by ansible.builtin.copy through its own search path; preflight reports that it cannot verify it, and does not reject it (issue #80)."
         type: path
         default: ""
 

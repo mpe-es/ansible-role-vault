@@ -21,10 +21,18 @@
 #   delegated to localhost with become: false -- the controller user is the one
 #   that must be able to read them.
 #
-#   Absolute paths only, by contract. `copy` also accepts a relative src resolved
-#   against the role's files/ directory, and reimplementing Ansible's search
-#   order inside a gate is how a gate grows into a subsystem (#36). The contract
-#   is narrowed instead, and meta/argument_specs.yml says so.
+#   RELATIVE PATHS ARE ACCEPTED AND NOT VERIFIED. `copy` resolves a relative src
+#   through Ansible's own search path (the role's files/, the playbook's files/,
+#   the playbook directory), and the README's own example playbooks ship
+#   `files/vault-tls.crt`. An earlier draft of this gate rejected those outright
+#   -- a hard failure for configurations that worked before it existed, which is
+#   not what a preflight gate is for. Reimplementing that search order here is
+#   the other wrong answer: it is how a gate grows into a subsystem (#36).
+#
+#   So the gate verifies what it can answer without guessing. An ABSOLUTE path is
+#   statted and must be readable; a RELATIVE one is reported as unverifiable and
+#   left to `copy`. The empty-variable case -- the actual #80 defect -- is a hard
+#   failure either way, because no search order rescues an unset source.
 #
 #   Scope: this gate proves the INPUTS exist and are readable. It does not
 #   contact Vault, so it cannot prove a vault_pki mount is reachable or that the
@@ -57,7 +65,11 @@
         - name: "Preflight | managed_tls | source path is set"
           ansible.builtin.assert:
             that:
-              - item.path | length > 0
+              # default('', true) replaces a NULL override, not merely an
+              # undefined one: `vault_tls_src_cert:` with nothing after it is a
+              # common group_vars shape, and `None | length` raises a filter
+              # error instead of this task's remediation text.
+              - item.path | default('', true) | length > 0
             fail_msg: >-
               vault_manage_tls is true with vault_tls_source 'file', so the role
               copies the {{ item.role }} from the Ansible controller -- but
@@ -72,16 +84,16 @@
           loop_control:
             label: "{{ item.var }}"
 
-        - name: "Preflight | managed_tls | source path is absolute"
-          ansible.builtin.assert:
-            that:
-              - item.path is match('/')
-            fail_msg: >-
-              {{ item.var }} is '{{ item.path }}', which is not an absolute path.
-              ansible.builtin.copy would resolve it against the role's files/
-              directory, and this gate does not reimplement that search order.
-              Give {{ item.var }} an absolute path on the controller.
-            success_msg: "{{ item.var }}: absolute"
+        - name: Report sources this gate cannot verify
+          ansible.builtin.debug:
+            msg: >-
+              {{ item.var }} is '{{ item.path }}', a relative path.
+              ansible.builtin.copy will resolve it through Ansible's search path
+              (the role's files/, the playbook's files/, the playbook directory);
+              this gate does not reimplement that order, so it cannot confirm the
+              file exists before the run mutates the host. Give {{ item.var }} an
+              absolute controller path to have it verified here.
+          when: not (item.path is match('/'))
           loop: *vault_tls_src_trio
           loop_control:
             label: "{{ item.var }}"
@@ -101,6 +113,8 @@
           become: false
           check_mode: false
           failed_when: false
+          # Absolute only; a relative src was reported above and belongs to copy.
+          when: item.path is match('/')
           loop: *vault_tls_src_trio
           loop_control:
             label: "{{ item.var }}"
@@ -131,7 +145,7 @@
               be copied to the target.
               {% endif %}
             success_msg: "{{ item.item.var }} ({{ item.item.path }}): readable"
-          loop: "{{ __vault_managed_tls_stat.results }}"
+          loop: "{{ __vault_managed_tls_stat.results | default([]) | rejectattr('skipped', 'defined') | list }}"
           loop_control:
             label: "{{ item.item.var }}"
           register: __vault_managed_tls_readable
@@ -142,7 +156,7 @@
     - name: "Preflight | managed_tls | Vault PKI coordinates are set"
       ansible.builtin.assert:
         that:
-          - item.value | length > 0
+          - item.value | default('', true) | length > 0
         fail_msg: >-
           vault_manage_tls is true with vault_tls_source 'vault_pki', so the role
           issues the certificate from Vault's PKI secrets engine -- but

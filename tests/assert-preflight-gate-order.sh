@@ -142,6 +142,43 @@ if os.path.isfile(dns_path):
     def _norm(v):
         return " ".join(str(v).split())
 
+    # The DERIVATION, not just the variable name. Pinning only
+    # "__vault_dns_routable | length > 0" leaves the set that name refers to
+    # entirely free: deleting the reject filters, or reverting `getent ahosts`
+    # to `getent hosts`, restores the exact "did resolution return an answer"
+    # defect #79 removed -- with every guard green. Both were verified to
+    # survive the first version of this lock.
+    WANT_PROBE = "getent ahosts {{ ansible_fqdn }}"
+    probes = [t for t in dns_tasks
+              if _norm((t.get("ansible.builtin.command") or {}).get("cmd", "")) == WANT_PROBE]
+    if not probes:
+        fail.append("tasks/preflight/dns.yml no longer probes with exactly "
+                    f"{WANT_PROBE!r}. `getent hosts` returns the FIRST match only "
+                    "and prefers IPv6, so a loopback AAAA masks a routable A -- "
+                    "which is the defect this gate was rewritten to remove.")
+
+    # Each exclusion by exact filter form. Loopback is the case the gate exists
+    # for; link-local is what a failed DHCP lease leaves behind, and an
+    # advertised address on either is equally unreachable.
+    WANT_REJECTS = ["reject('match', '^127\\.')",
+                    "reject('equalto', '::1')",
+                    "reject('match', '^169\\.254\\.')",
+                    "reject('match', '^[Ff][Ee]80:')"]
+    derivations = [_norm(v) for t in dns_tasks
+                   for k, v in (t.get("ansible.builtin.set_fact") or {}).items()
+                   if k == "__vault_dns_routable"]
+    if not derivations:
+        fail.append("tasks/preflight/dns.yml no longer derives __vault_dns_routable; "
+                    "the predicate above pins a name with nothing behind it.")
+    else:
+        derivation = derivations[0]
+        missing_rejects = [r for r in WANT_REJECTS if _norm(r) not in derivation]
+        if missing_rejects:
+            fail.append("tasks/preflight/dns.yml __vault_dns_routable no longer excludes "
+                        f"{missing_rejects!r}. Without every exclusion the 'routable' set "
+                        "admits an address nothing can reach, and the gate passes exactly "
+                        f"the hosts it exists to fail. Derivation is: {derivation!r}")
+
     # The assert must be gated ON the dependency, so a host with explicitly
     # pinned addresses is never failed for a name it does not use.
     WANT_ASSERT_WHEN = "__vault_dns_advertised | bool"

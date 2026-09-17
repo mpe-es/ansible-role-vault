@@ -180,6 +180,19 @@
         - good.key
         - good.ca
 
+    # DNS fixtures (#79). ansible_fqdn is overridable per-include (vars
+    # precedence 21 beats host facts 15), and /etc/hosts is writable here, so
+    # the scenario controls BOTH inputs the dns gate reads -- it does not have
+    # to settle for the container's own name, which it cannot control.
+    - name: Stage /etc/hosts fixtures for the dns gate
+      ansible.builtin.blockinfile:
+        path: /etc/hosts
+        marker: "# {mark} preflight dns fixtures"
+        block: |
+          127.0.1.1 dns-loopback-fixture.test
+          169.254.7.7 dns-linklocal-fixture.test
+          10.99.0.1 dns-routable-fixture.test
+
     - name: Symlink a staged certificate (the certmonger/certbot pattern)
       ansible.builtin.file:
         src: good.crt

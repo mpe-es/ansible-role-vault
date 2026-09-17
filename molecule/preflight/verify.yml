@@ -244,6 +244,17 @@
             state: directory
             mode: '0755'
 
+        # follow: true on the gate's stat is load-bearing for the same reason it
+        # is on the sibling tls gate: certmonger/certbot material is normally a
+        # symlink, and lstat would report isreg false and reject a working
+        # controller-side source.
+        - name: Symlink a controller-side source (the certmonger/certbot pattern)
+          ansible.builtin.file:
+            src: /tmp/managed-tls-fixtures/good.crt
+            dest: /tmp/managed-tls-fixtures/link.crt
+            state: link
+            force: true
+
     - name: "FIRES - vault_tls_src_cert is unset"
       block:
         - name: Run managed_tls with an empty source variable
@@ -358,6 +369,41 @@
                 | map(attribute='msg', default='') | join(' ') is search('vault_pki_mount is empty')
             fail_msg: "wrong cause: {{ ansible_failed_result | default('') }}"
 
+    - name: "PASSES - a symlinked controller-side source is accepted"
+      ansible.builtin.include_role:
+        name: ansible-role-vault
+        tasks_from: preflight/managed_tls.yml
+      vars:
+        vault_manage_tls: true
+        vault_tls_source: file
+        vault_tls_src_cert: /tmp/managed-tls-fixtures/link.crt
+        vault_tls_src_key: /tmp/managed-tls-fixtures/good.key
+        vault_tls_src_ca: /tmp/managed-tls-fixtures/good.ca
+
+    - name: "PASSES - a relative source is reported, not rejected"
+      ansible.builtin.include_role:
+        name: ansible-role-vault
+        tasks_from: preflight/managed_tls.yml
+      vars:
+        vault_manage_tls: true
+        vault_tls_source: file
+        # The shape the README's own example playbooks ship. copy resolves it
+        # through Ansible's search path; the gate cannot verify it and must not
+        # fail it (an earlier draft did, which would have broken every operator
+        # who copied those examples).
+        vault_tls_src_cert: files/vault-tls.crt
+        vault_tls_src_key: /tmp/managed-tls-fixtures/good.key
+        vault_tls_src_ca: /tmp/managed-tls-fixtures/good.ca
+
+    - name: Assert the relative source was skipped by the stat, not failed
+      ansible.builtin.assert:
+        that:
+          - __vault_managed_tls_stat.results | default([])
+            | selectattr('skipped', 'defined') | list | length == 1
+        fail_msg: >-
+          The relative source was not skipped by the controller-side stat:
+          {{ __vault_managed_tls_stat | default('undefined') }}
+
     - name: "PASSES - all three controller-side sources are present and readable"
       ansible.builtin.include_role:
         name: ansible-role-vault
@@ -374,9 +420,11 @@
         that:
           - __vault_managed_tls_readable is defined
           - __vault_managed_tls_readable.results | default([]) | length == 3
-          # rejectattr on TRUTHINESS, never on 'defined': the stat carries
-          # failed_when: false, which DEFINES .failed as False on every result,
-          # so testing for the key's existence rejects all three (#36).
+          # rejectattr on TRUTHINESS, never on 'defined'. Note this register is
+          # the ASSERT's, not the stat's -- a looped assert result always carries
+          # a `failed` key, so 'defined' would reject every element here too. The
+          # #36 lesson is the same either way: discriminate on the value, never
+          # on the key's presence.
           - __vault_managed_tls_readable.results | default([])
             | rejectattr('failed') | list | length == 3
         fail_msg: >-
@@ -407,6 +455,103 @@
           The managed-input gate ran while the operator stages TLS. All three
           source variables were empty, so "nothing failed" is also what a
           deleted when: condition looks like.
+
+    ###########################################################################
+    # The dns gate - the FQDN resolves to a reachable address (issue #79)
+    #
+    # ansible_fqdn is overridable per-include (vars precedence 21 beats host
+    # facts 15) and prepare.yml owns /etc/hosts, so both of this gate's inputs
+    # are under the scenario's control. It does NOT have to settle for whatever
+    # the container's own name resolves to.
+    #
+    # vault_api_addr is set per case ON PURPOSE: it is the polarity input, and
+    # a case that left it at the default would prove only one half.
+    ###########################################################################
+    - name: "FIRES - FQDN resolves only to loopback and the addresses derive from it"
+      block:
+        - name: Run dns against a loopback-only name
+          ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/dns.yml
+          vars:
+            ansible_fqdn: dns-loopback-fixture.test
+            vault_api_addr: "https://dns-loopback-fixture.test:8200"
+            vault_cluster_addr: "https://dns-loopback-fixture.test:8201"
+        - name: A loopback-only name should not have passed
+          # Deliberately does NOT name the address: the rescue asserts on it, and
+          # a scaffold message containing it would satisfy that search even when
+          # the gate never fired (caught by assert-verify-rescues-discriminate).
+          ansible.builtin.fail:
+            msg: "dns did not fire for a loopback-only name"
+      rescue:
+        - name: Assert the message names the reachability cause
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg | default('') is search('resolves to no reachable address')
+              - ansible_failed_result.msg | default('') is search('127.0.1.1')
+            fail_msg: "wrong cause: {{ ansible_failed_result | default('') }}"
+
+    - name: "FIRES - FQDN resolves only to a link-local address"
+      block:
+        - name: Run dns against a link-local-only name
+          ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/dns.yml
+          vars:
+            ansible_fqdn: dns-linklocal-fixture.test
+            vault_api_addr: "https://dns-linklocal-fixture.test:8200"
+            vault_cluster_addr: "https://dns-linklocal-fixture.test:8201"
+        - name: A link-local-only name should not have passed
+          ansible.builtin.fail:
+            msg: "dns did not fire for a link-local-only name"
+      rescue:
+        - name: Assert link-local was not counted as reachable
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg | default('') is search('resolves to no reachable address')
+            fail_msg: "wrong cause: {{ ansible_failed_result | default('') }}"
+
+    - name: "PASSES - FQDN resolves to a routable address"
+      ansible.builtin.include_role:
+        name: ansible-role-vault
+        tasks_from: preflight/dns.yml
+      vars:
+        ansible_fqdn: dns-routable-fixture.test
+        vault_api_addr: "https://dns-routable-fixture.test:8200"
+        vault_cluster_addr: "https://dns-routable-fixture.test:8201"
+
+    - name: Assert the pass case saw the routable address and nothing else
+      ansible.builtin.assert:
+        that:
+          - __vault_dns_routable == ['10.99.0.1']
+        fail_msg: >-
+          The routable set is {{ __vault_dns_routable | default('undefined') }},
+          expected exactly ['10.99.0.1'].
+
+    # The polarity oracle. Every FIRES case above sets vault_api_addr to a URL
+    # containing the fqdn, so deleting the production `when: __vault_dns_advertised`
+    # would not change the scenario at all. This is the case that notices -- the
+    # same loopback-only name, with the advertised addresses pinned to literals.
+    - name: "DID NOT FIRE - loopback-only FQDN but the advertised addresses are pinned"
+      ansible.builtin.include_role:
+        name: ansible-role-vault
+        tasks_from: preflight/dns.yml
+      vars:
+        ansible_fqdn: dns-loopback-fixture.test
+        vault_api_addr: "https://10.99.0.1:8200"
+        vault_cluster_addr: "https://10.99.0.1:8201"
+
+    - name: Assert the dns gate was suppressed, not merely non-failing
+      ansible.builtin.assert:
+        that:
+          - not (__vault_dns_advertised | bool)
+          - __vault_dns_routable | length == 0
+        fail_msg: >-
+          The dns gate did not treat pinned addresses as removing the dependency:
+          advertised={{ __vault_dns_advertised | default('undefined') }},
+          routable={{ __vault_dns_routable | default('undefined') }}. The same
+          name failed two cases above, so "nothing failed" is also what a deleted
+          when: condition looks like.
 
     - name: "DID NOT FIRE - firewalld absent but management disabled"
       ansible.builtin.include_role:

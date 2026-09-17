@@ -7,17 +7,21 @@
 #   assert FIRES on its own cause and does NOT fire when its feature is toggled
 #   off.
 #
-#   NOT every gate is covered. verify.yml includes chrony, firewalld, port,
-#   repo_source, rhsm and tls directly. It does NOT include:
+#   NOT every gate is covered. verify.yml includes chrony, dns, firewalld,
+#   managed_tls, port, repo_source, rhsm and tls directly. It does NOT include:
 #     - fips and selinux (no FIPS runner, no enforcing container),
 #     - os_family and os_version (the container is one platform, so a
-#       behavioural case could only assert the platform it is already on),
-#     - dns (its behaviour depends on how the CONTAINER's own name resolves,
-#       which the scenario does not control; locked by predicate and polarity in
-#       tests/assert-preflight-gate-order.sh instead -- see #79).
-#   Those five are locked by tests/assert-preflight-gate-order.sh instead --
-#   fips, selinux, os_family and os_version on their exact predicates, dns on
-#   its conditional warning.
+#       behavioural case could only assert the platform it is already on).
+#   Those four are locked by tests/assert-preflight-gate-order.sh instead, on
+#   their exact predicates.
+#
+#   dns IS covered, and getting there took correcting an assumption: the gate
+#   reads ansible_fqdn, which is overridable per-include (vars precedence 21
+#   beats host facts 15), and /etc/hosts is writable in prepare.yml. So the
+#   scenario controls both of the gate's inputs and does not have to settle for
+#   whatever the container's own name happens to resolve to. Its predicate and
+#   polarity are ALSO pinned in the order guard, because a container cannot
+#   exercise the 'no getent on the host' arm (#79).
 #
 #   Also untested: the "ss entirely absent" arm; removing iproute perturbs every
 #   other port case in the same container.
