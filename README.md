@@ -352,6 +352,15 @@ The airgap and Satellite examples leave `vault_manage_tls` at its default of
 rejects the host otherwise. Set `vault_manage_tls: true` **and** populate
 `vault_tls_src_cert` / `_key` / `_ca` if you want the role to place them.
 
+On that staged path the role also **rewrites the ownership and mode of the files
+you staged**, to `root:vault 0640` — otherwise the `vault` account cannot read
+its own private key and the service fails at start (#77). Two bounds apply, and
+material outside them is reported and left alone rather than silently changed:
+only paths whose direct parent is `vault_tls_dir` are touched, and symlinks are
+never followed. So pointing `vault_tls_ca_file` at a shared anchor such as
+`/etc/ipa/ca.crt`, or at certmonger/certbot-managed links, is safe — but you
+must make that material readable by the `vault` group yourself.
+
 ### HA Cluster (3-Node with Load Balancer) — developmental
 
 > **This example configures nodes; it does not stand up a working cluster.**
@@ -535,9 +544,11 @@ it needs and OWNS nothing that defines its posture. The role sets:
 | helper scripts | `root:root` | `0750` | (already; #30) — the process cannot edit what root executes |
 | `/opt/vault/data`, `/var/log/vault` | `vault:vault` | `0750` | the process legitimately WRITES its data and audit logs |
 
-A CI gate (`tests/assert-root-owned-posture.sh`) and a molecule negative test
-(`runuser -u vault` writes to the posture files are denied; writes to the data dir
-succeed) enforce this. The fapolicyd trust file pins size+sha256, which ownership
+Two CI gates (`tests/assert-root-owned-posture.sh` for the deploys the role
+writes, `tests/assert-staged-tls-posture.sh` for material the *operator* stages
+under `vault_manage_tls: false`) and a molecule negative test (`runuser -u vault`
+writes to the posture files are denied — including `tls.key` — while reads of
+`tls.key` and writes to the data dir succeed) enforce this. The fapolicyd trust file pins size+sha256, which ownership
 does not change, so trust stays valid. Note: an out-of-band `dnf update vault` may
 revert `/etc/vault.d` to the RPM's shipped ownership until the next role run —
 the unseal script fails closed (refuses to unseal) rather than trusting

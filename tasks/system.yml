@@ -70,20 +70,86 @@
 #
 # state: file (not touch) so a missing path is an error rather than a
 # zero-byte certificate silently created where one was expected.
+#
+# TWO BOUNDS, both load-bearing, because vault_tls_cert_file/_key_file/_ca_file
+# are free-form `type: path` variables and this task WRITES to whatever they name:
+#
+#   1. Only paths whose direct parent IS vault_tls_dir are converged. An operator
+#      may legitimately point vault_tls_ca_file at a SHARED anchor such as
+#      /etc/ipa/ca.crt or the system trust bundle; chgrp'ing that to vault and
+#      dropping world-read would break every other consumer on the host. The role
+#      owns vault_tls_dir (it creates it above) and nothing else.
+#   2. Symlinks are never followed and never converged. ansible.builtin.file
+#      defaults to follow: true, which would resolve the link and rewrite its
+#      TARGET -- outside vault_tls_dir, and reverted by the next certmonger or
+#      certbot renewal -- while state: file on a dangling link or a link to a
+#      directory aborts the play at Phase 4, AFTER Phase 3 installed the package.
+#      tasks/preflight/tls.yml:15-19 explicitly blesses symlinked material, so
+#      this shape is supported and must not be mutated or fatal here.
+#
+# Both excluded cases are REPORTED, not silently dropped, and both are readability
+# problems for the vault account that only #69 can properly evaluate.
 # NIST 800-53: AC-6 (Least Privilege), SC-8 (Transmission Confidentiality)
 ###############################################################################
-- name: Enforce ownership on operator-staged TLS material
-  ansible.builtin.file:
+- name: Inspect operator-staged TLS material
+  ansible.builtin.stat:
     path: "{{ item }}"
-    state: file
-    owner: root
-    group: "{{ vault_group }}"
-    mode: "{{ vault_tls_file_mode }}"
+    # follow: false is the whole point -- see the LINK, not what it resolves to.
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: __vault_staged_tls
   loop:
     - "{{ vault_tls_cert_file }}"
     - "{{ vault_tls_key_file }}"
     - "{{ vault_tls_ca_file }}"
   when: not (vault_manage_tls | bool)
+
+- name: Enforce ownership on operator-staged TLS material
+  ansible.builtin.file:
+    path: "{{ item.item }}"
+    state: file
+    follow: false
+    owner: root
+    group: "{{ vault_group }}"
+    mode: "{{ vault_tls_file_mode }}"
+  loop: "{{ __vault_staged_tls.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when:
+    - not (vault_manage_tls | bool)
+    - item.stat is defined
+    - item.stat.exists | default(false)
+    - not (item.stat.islnk | default(false))
+    - item.item | dirname == vault_tls_dir
+
+- name: Report staged TLS material the role will not converge
+  ansible.builtin.debug:
+    msg: >-
+      {% if not (item.stat.exists | default(false)) %}
+      {{ item.item }} does not exist, so its posture was not set. Preflight
+      rejects this host for exactly that reason; you are seeing this instead
+      because the preflight tag was skipped.
+      {% elif item.stat.islnk | default(false) %}
+      {{ item.item }} is a symlink and was left untouched: following it would
+      rewrite a file outside {{ vault_tls_dir }}, and a certmonger/certbot
+      renewal would revert it anyway. Ensure the link TARGET is readable by
+      the {{ vault_group }} group, or Vault will not start. See issue #69.
+      {% else %}
+      {{ item.item }} is outside {{ vault_tls_dir }}, which the role does not
+      own, so its posture was left untouched. Ensure it is readable by the
+      {{ vault_group }} group, or Vault will not start. See issue #69.
+      {% endif %}
+  loop: "{{ __vault_staged_tls.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when:
+    - not (vault_manage_tls | bool)
+    - item.stat is defined
+    - not (item.stat.exists | default(false))
+      or (item.stat.islnk | default(false))
+      or item.item | dirname != vault_tls_dir
 
 ###############################################################################
 # SELinux File Contexts

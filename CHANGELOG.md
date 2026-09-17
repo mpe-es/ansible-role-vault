@@ -112,6 +112,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Install `iproute` on minimal images. (#36)
 
 ### Fixed
+- **Operator-staged TLS material was never made readable by the Vault service.**
+  `vault_manage_tls: false` is the role default and a documented path — preflight
+  instructs the operator to stage the certificate, key and CA — but the only code
+  setting ownership on them lived in `tasks/tls.yml`, which `tasks/main.yml` gates
+  on `vault_manage_tls`. On the default path that file never ran, so a host
+  converged cleanly and then failed at service start because `vault` could not
+  read its own private key. `tasks/system.yml` now converges the trio to
+  `root:vault 0640`, the same posture it already applied unconditionally to
+  `/opt/vault/tls` itself. Bounded deliberately: only direct children of
+  `vault_tls_dir` are touched, and symlinks are never followed — an operator may
+  legitimately point `vault_tls_ca_file` at a shared system anchor, and
+  certmonger/certbot material is normally a link to material outside the
+  directory. Both excluded cases are reported rather than silently skipped;
+  proving such material is *readable* remains #69. (#77)
 - **The API port-availability assert could never fail.** `wait_for` with
   `failed_when: false` forces the result's `failed` key to False, so the assert
   was a tautology and an occupied port surfaced as an opaque Vault

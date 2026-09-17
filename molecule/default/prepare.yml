@@ -105,7 +105,28 @@
           loop:
             - /opt/vault/tls/tls.crt
             - /opt/vault/tls/tls.key
-            - /opt/vault/tls/ca.crt
+
+        # The CA is staged as a SYMLINK to material outside vault_tls_dir --
+        # the certmonger/certbot shape tasks/preflight/tls.yml:15-19 explicitly
+        # blesses. ansible.builtin.file defaults to follow: true, so an
+        # unbounded enforcement would chgrp this TARGET to vault and drop its
+        # world-read, breaking every other consumer on the host and getting
+        # reverted by the next renewal. The role must leave BOTH the link and
+        # its target alone and say so (issue #77 scope bound; readability of
+        # such material is #69). verify.yml asserts the target is untouched.
+        - name: Create out-of-tree CA target (shared-anchor shape)
+          ansible.builtin.copy:
+            content: "mock ca certificate"
+            dest: /etc/pki/mock-shared-ca.crt
+            owner: root
+            group: root
+            mode: '0644'
+
+        - name: Stage the CA as a symlink to that shared anchor
+          ansible.builtin.file:
+            src: /etc/pki/mock-shared-ca.crt
+            dest: /opt/vault/tls/ca.crt
+            state: link
 
     # Upgrade-path fixture: seed a LEGACY unseal unit (WantedBy=multi-user
     # only) and enable it, reproducing an already-enabled host whose
