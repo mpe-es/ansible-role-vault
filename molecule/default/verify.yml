@@ -50,6 +50,142 @@
         label: "{{ item.item.path }}"
 
     ###########################################################################
+    # Operator-staged TLS material (issue #77)
+    #
+    # vault_manage_tls is false in this scenario, so tasks/tls.yml is gated off
+    # by tasks/main.yml and never executes. prepare.yml stages the trio
+    # root:root 0600 -- the posture openssl actually produces. The role must
+    # converge it to root:vault 0640 itself, in tasks/system.yml, or vault.service
+    # cannot read its own private key.
+    #
+    # gr_name AND mode are the discriminating assertions: the fixture stages
+    # root:root 0600, so both must change for the assert to pass. pw_name is
+    # the one the fixture already satisfies by accident -- it is kept as a
+    # regression guard against an implementation that hands the files to the
+    # vault account (#38), not as evidence of convergence.
+    # Hardcoded rather than read from vault_tls_file_mode/vault_group because
+    # verify.yml is a plain playbook and loads neither defaults/ nor vars/.
+    #
+    # Only the cert and key are asserted here: prepare.yml stages ca.crt as a
+    # SYMLINK to exercise the scope bound below, so this scenario cannot also
+    # prove the CA converges on the in-directory regular-file shape. That shape
+    # is covered by molecule/init, which stages all three root:root 0600 as
+    # regular files and then starts a REAL vault server on them.
+    # NIST 800-53: AC-6 (Least Privilege), SC-8
+    ###########################################################################
+    - name: Verify operator-staged TLS material
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        follow: false
+      register: __verify_staged_tls
+      loop:
+        - /opt/vault/tls/tls.crt
+        - /opt/vault/tls/tls.key
+
+    - name: Assert staged TLS material was converged to root vault 0640
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.isreg
+          - item.stat.mode == '0640'
+          - item.stat.pw_name | default('') == 'root'
+          - item.stat.gr_name | default('') == 'vault'
+        fail_msg: >-
+          {{ item.item }} was left as staged instead of being converged:
+          mode={{ item.stat.mode | default('missing') }} (expected 0640),
+          owner={{ item.stat.pw_name | default('missing') }}:{{ item.stat.gr_name | default('missing') }}
+          (expected root:vault). vault_manage_tls is false, so tasks/tls.yml
+          never runs -- tasks/system.yml must enforce this posture (issue #77).
+        success_msg: "{{ item.item }}: root:vault 0640"
+      loop: "{{ __verify_staged_tls.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    ###########################################################################
+    # Scope bound: symlinked material and its out-of-tree target are NOT touched
+    #
+    # prepare.yml stages ca.crt as a symlink to /etc/pki/mock-shared-ca.crt, the
+    # certmonger/certbot shape. ansible.builtin.file defaults to follow: true,
+    # so an unbounded enforcement would resolve the link and rewrite the SHARED
+    # anchor -- chgrp'ing it to vault and dropping world-read from a file other
+    # consumers on the host depend on. This asserts the role did neither.
+    #
+    # The target assertion is the load-bearing one: the link's own mode is
+    # meaningless on Linux, so only the target's posture proves follow was not
+    # taken. Readability of symlinked material is issue #69's subject.
+    ###########################################################################
+    - name: Stat the symlinked CA and its out-of-tree target
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        follow: false
+      register: __verify_symlink_ca
+      loop:
+        - /opt/vault/tls/ca.crt
+        - /etc/pki/mock-shared-ca.crt
+
+    - name: Assert the symlinked CA and its shared target were left untouched
+      ansible.builtin.assert:
+        that:
+          # still a link, and still pointing where prepare.yml put it:
+          # "is a symlink" alone passes even if the role repointed it elsewhere
+          - __verify_symlink_ca.results[0].stat.islnk | default(false)
+          - __verify_symlink_ca.results[0].stat.lnk_target | default('') == '/etc/pki/mock-shared-ca.crt'
+          # the shared anchor kept root:root 0644
+          - __verify_symlink_ca.results[1].stat.mode == '0644'
+          - __verify_symlink_ca.results[1].stat.pw_name | default('') == 'root'
+          - __verify_symlink_ca.results[1].stat.gr_name | default('') == 'root'
+        fail_msg: >-
+          The role followed a symlinked CA and mutated material outside
+          /opt/vault/tls: ca.crt islnk={{ __verify_symlink_ca.results[0].stat.islnk | default('missing') }},
+          target /etc/pki/mock-shared-ca.crt is now
+          {{ __verify_symlink_ca.results[1].stat.pw_name | default('missing') }}:{{ __verify_symlink_ca.results[1].stat.gr_name | default('missing') }}
+          {{ __verify_symlink_ca.results[1].stat.mode | default('missing') }}
+          (expected root:root 0644, unchanged). See issue #77 scope bounds.
+        success_msg: "symlinked CA and its shared target: untouched"
+
+    ###########################################################################
+    # The property the posture exists FOR: vault can READ the key, and cannot
+    # REPLACE it. Mode and owner strings are a proxy; this asks the kernel.
+    # Before #77 the fixture was vault:vault 0640, so the write probe PASSED --
+    # this is the regression that change closes.
+    ###########################################################################
+    # Mechanism sanity FIRST. `runuser` with failed_when: false returns non-zero
+    # when util-linux is absent, and the assert below would then report that as
+    # "vault cannot read its own private key" -- a false #77 regression. The
+    # same guard precedes the #38 probe block later in this file.
+    - name: Confirm runuser is available before the staged-TLS probe
+      ansible.builtin.command: runuser --version
+      changed_when: false
+
+    - name: Probe the staged key AS the vault user
+      ansible.builtin.command: "runuser -u vault -- sh -c '{{ item.cmd }}'"
+      register: __verify_tls_asvault
+      changed_when: false
+      failed_when: false
+      loop:
+        - { label: "read tls.key", cmd: "test -r /opt/vault/tls/tls.key", want: 0 }
+        - { label: "overwrite tls.key", cmd: "echo x >> /opt/vault/tls/tls.key", want: 1 }
+      loop_control:
+        label: "{{ item.label }}"
+
+    - name: Assert vault can read the key but cannot replace it
+      ansible.builtin.assert:
+        that:
+          - (item.rc == 0) == (item.item.want == 0)
+        fail_msg: >-
+          {{ item.item.label }} returned rc={{ item.rc }};
+          {% if item.item.want == 0 %}
+          the vault account cannot read its own private key, so vault.service
+          would fail at start (issue #77).
+          {% else %}
+          the vault account can REPLACE its own private key, which #38 forbids.
+          {% endif %}
+        success_msg: "{{ item.item.label }}: rc={{ item.rc }} as expected"
+      loop: "{{ __verify_tls_asvault.results }}"
+      loop_control:
+        label: "{{ item.item.label }}"
+
+    ###########################################################################
     # Vault configuration files
     ###########################################################################
     - name: Verify vault.hcl exists with correct permissions

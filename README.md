@@ -352,6 +352,27 @@ The airgap and Satellite examples leave `vault_manage_tls` at its default of
 rejects the host otherwise. Set `vault_manage_tls: true` **and** populate
 `vault_tls_src_cert` / `_key` / `_ca` if you want the role to place them.
 
+#### Operator-staged TLS material
+
+On that staged path the role also **rewrites the ownership and mode of the files
+you staged**, to `root:vault 0640` — otherwise the `vault` account cannot read
+its own private key and the service fails at start (#77). Two bounds apply, and
+material outside them is reported and left alone rather than silently changed:
+only paths whose direct parent is `vault_tls_dir` are touched, and symlinks are
+never followed. So pointing `vault_tls_ca_file` at a shared anchor such as
+`/etc/ipa/ca.crt`, or at certmonger/certbot-managed links, is safe — but you
+must make that material readable by the `vault` group yourself. A hardlink is
+treated the same way, because its inode is shared with the other name for it. A
+path that exists but is not a regular file (a directory left where a certificate
+was expected), or one that cannot be inspected at all, is likewise reported and
+skipped rather than converged.
+
+Two further caveats. The parent check is **lexical**: if `vault_tls_dir` is itself a
+symlink, a staged path under it still matches and the write lands on the
+resolved target. And this repair only happens on a **full** role run — the
+phases are dynamic `include_tasks`, which do not propagate tags, so a
+`--tags system` run does not perform it (see [issue #28](https://github.com/mpe-es/ansible-role-vault/issues/28)).
+
 ### HA Cluster (3-Node with Load Balancer) — developmental
 
 > **This example configures nodes; it does not stand up a working cluster.**
@@ -529,15 +550,17 @@ it needs and OWNS nothing that defines its posture. The role sets:
 |---|---|---|---|
 | `vault.hcl` | `root:vault` | `0640` | process reads config via the group; cannot rewrite it |
 | `vault.env` | `root:root` | `0600` | only systemd (root) reads it via `EnvironmentFile`; holds the HSM PIN (#41) — the process needs no access |
-| TLS cert / key / CA | `root:vault` | `0640` | process reads the key via the group; cannot swap its trust anchors |
+| TLS cert / key / CA | `root:vault` | `0640` | process reads the key via the group; cannot swap its trust anchors — for operator-staged material (`vault_manage_tls: false`) the bounds in [Operator-staged TLS material](#operator-staged-tls-material) apply |
 | `/opt/vault/tls` (dir) | `root:vault` | `0750` | root-owned dir blocks the process from unlink/replacing cert files (dir write ≠ file ownership) |
 | `vault.hcl`/`vault.env` dir `/etc/vault.d` | `root:vault` | `0750` | (already; #30/#34) |
 | helper scripts | `root:root` | `0750` | (already; #30) — the process cannot edit what root executes |
 | `/opt/vault/data`, `/var/log/vault` | `vault:vault` | `0750` | the process legitimately WRITES its data and audit logs |
 
-A CI gate (`tests/assert-root-owned-posture.sh`) and a molecule negative test
-(`runuser -u vault` writes to the posture files are denied; writes to the data dir
-succeed) enforce this. The fapolicyd trust file pins size+sha256, which ownership
+Two CI gates (`tests/assert-root-owned-posture.sh` for the deploys the role
+writes, `tests/assert-staged-tls-posture.sh` for material the *operator* stages
+under `vault_manage_tls: false`) and a molecule negative test (`runuser -u vault`
+writes to the posture files are denied — including `tls.key` — while reads of
+`tls.key` and writes to the data dir succeed) enforce this. The fapolicyd trust file pins size+sha256, which ownership
 does not change, so trust stays valid. Note: an out-of-band `dnf update vault` may
 revert `/etc/vault.d` to the RPM's shipped ownership until the next role run —
 the unseal script fails closed (refuses to unseal) rather than trusting

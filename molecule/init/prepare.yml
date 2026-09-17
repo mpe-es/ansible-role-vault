@@ -117,12 +117,23 @@
       args:
         creates: /opt/vault/tls/tls.crt
 
-    - name: Own + mode the TLS files so User=vault can read them
+    # Staged root:root 0600 ON PURPOSE (issue #77) -- what openssl above
+    # actually leaves behind, and unreadable by User=vault. This fixture used
+    # to hand the files to vault itself ("so User=vault can read them"), which
+    # did the ROLE's job and meant this scenario proved nothing about it.
+    #
+    # vault_manage_tls is false here, so tasks/tls.yml never runs; tasks/system.yml
+    # must converge these to root:vault 0640. This is the end-to-end proof of
+    # #77's first acceptance item: a REAL vault server (not the /bin/true mock
+    # in molecule/default) starting on role-converged material. If the
+    # convergence regresses, vault cannot read tls.key and the scenario fails at
+    # service start rather than on a permission-string assertion.
+    - name: Stage the TLS files as an operator would (root:root 0600)
       ansible.builtin.file:
         path: "/opt/vault/tls/{{ item }}"
-        owner: vault
-        group: vault
-        mode: '0640'
+        owner: root
+        group: root
+        mode: '0600'
       loop:
         - ca.crt
         - tls.crt

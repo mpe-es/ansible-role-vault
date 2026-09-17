@@ -49,6 +49,176 @@
     label: "{{ item.path }} ({{ item.mode }})"
 
 ###############################################################################
+# Operator-staged TLS material (issue #77)
+#
+# tasks/main.yml gates tasks/tls.yml on vault_manage_tls, so on the DEFAULT
+# path (false) nothing there ever runs and nothing sets ownership on the trio
+# the operator staged -- yet tasks/preflight/tls.yml explicitly instructs them
+# to stage it. The role therefore converges that posture here, exactly as it
+# already does unconditionally for vault_tls_dir above.
+#
+# root:{{ vault_group }} {{ vault_tls_file_mode }} is the same pairing
+# tasks/tls.yml applies on the managed path: vault READS the key via the group
+# but must not OWN its trust anchors, or a compromised process could swap them
+# (#38). The when: keeps the two off each other -- exactly one of this task and
+# tasks/tls.yml enforces posture on any given run, never both.
+#
+# No handler notify: ownership is read at service start, and on a first run
+# this executes in Phase 4, long before service.yml starts Vault in Phase 9.
+# Notifying would restart a HEALTHY Vault to correct drift that does not affect
+# the running process -- sealing a cluster to fix a permission bit.
+#
+# state: file (not touch) because touch CREATES a zero-byte file at any path
+# that is missing, and the whole point here is that the role never manufactures
+# TLS material it was told the operator would supply. A missing path is neither
+# created nor fatal: the when: below excludes it and the report task explains it.
+#
+# FIVE EXCLUSIONS, every one load-bearing, because vault_tls_cert_file/_key_file/
+# _ca_file are free-form `type: path` variables and this task WRITES to whatever
+# they name. The two scope bounds are (1) and (2); (3)-(5) keep `state: file`
+# from aborting the play or converging something that is not a certificate:
+#
+#   1. Only paths whose direct parent IS vault_tls_dir are converged. An operator
+#      may legitimately point vault_tls_ca_file at a SHARED anchor such as
+#      /etc/ipa/ca.crt or the system trust bundle; chgrp'ing that to vault and
+#      dropping world-read would break every other consumer on the host. The role
+#      owns vault_tls_dir (it creates it above) and nothing else.
+#   2. Symlinks are never followed and never converged. ansible.builtin.file
+#      defaults to follow: true, which would resolve the link and rewrite its
+#      TARGET -- outside vault_tls_dir, and reverted by the next certmonger or
+#      certbot renewal -- while state: file on a dangling link or a link to a
+#      directory aborts the play at Phase 4, AFTER Phase 3 installed the package.
+#      tasks/preflight/tls.yml:15-19 explicitly blesses symlinked material, so
+#      this shape is supported and must not be mutated or fatal here.
+#
+#   3. Hardlinks are excluded: one inode, several names, and the role cannot
+#      prove from here that the others are inside vault_tls_dir.
+#   4. Non-regular files are excluded: `mkdir /opt/vault/tls/tls.crt` makes
+#      state: file abort the play after the package phase.
+#   5. Missing paths are excluded: nothing to converge, and touch would
+#      manufacture a certificate.
+#
+# EVERY excluded path is REPORTED with its cause -- including one that cannot be
+# stat'd at all -- never silently dropped. All of them are readability problems
+# for the vault account that only #69 can properly evaluate.
+# NIST 800-53: AC-6 (Least Privilege), SC-8 (Transmission Confidentiality)
+###############################################################################
+- name: Inspect operator-staged TLS material
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    # follow: false is the whole point -- see the LINK, not what it resolves to.
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: __vault_staged_tls
+  # An unreadable TLS directory (a become-less run) must route to the report
+  # below, not crash the play -- the same reason tasks/preflight/tls.yml:49
+  # carries it. The ENFORCEMENT is keyed on `item.stat is defined`, which only a
+  # successful stat produces; the REPORT treats its absence as a reportable
+  # cause. Neither keys on `.failed`, which failed_when: false DEFINES as False
+  # for every result -- the #36 port-gate tautology.
+  failed_when: false
+  loop:
+    - "{{ vault_tls_cert_file }}"
+    - "{{ vault_tls_key_file }}"
+    - "{{ vault_tls_ca_file }}"
+  when: not (vault_manage_tls | bool)
+
+- name: Enforce ownership on operator-staged TLS material
+  ansible.builtin.file:
+    path: "{{ item.item }}"
+    state: file
+    follow: false
+    owner: root
+    group: "{{ vault_group }}"
+    mode: "{{ vault_tls_file_mode }}"
+  loop: "{{ __vault_staged_tls.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when:
+    - not (vault_manage_tls | bool)
+    - item.stat is defined
+    - item.stat.exists | default(false)
+    # isreg is NOT redundant with islnk. `mkdir /opt/vault/tls/tls.crt` is a
+    # real operator error -- tasks/preflight/tls.yml:28-30 exists because of it
+    # -- and a directory satisfies exists, is not a link, and sits in
+    # vault_tls_dir. ansible.builtin.file with state: file then aborts the play
+    # with "is directory, cannot continue" at Phase 4, AFTER Phase 3 installed
+    # the package. That is the late-failure-after-mutation class this gate is
+    # supposed to prevent, so the case is excluded and reported instead.
+    - item.stat.isreg | default(false)
+    - not (item.stat.islnk | default(false))
+    # A HARDLINK defeats the parent bound below: `ln /etc/ipa/ca.crt
+    # /opt/vault/tls/ca.crt` is a regular file, is not a symlink, and its
+    # dirname IS vault_tls_dir -- but the inode is shared, so chgrp/chmod lands
+    # on the out-of-tree material anyway. nlink > 1 is the only signal stat
+    # gives for it.
+    - item.stat.nlink | default(1) == 1
+    - item.item | dirname == vault_tls_dir
+
+- name: Report staged TLS material the role will not converge
+  ansible.builtin.debug:
+    # Branch order matters: a symlink is also not isreg, so islnk must be
+    # tested first or every link reports as "not a regular file".
+    msg: >-
+      {% if item.stat is not defined %}
+      {{ item.item }} could not be inspected ({{ item.msg | default('unknown error') }}),
+      so its posture was not set. A path component that is not a directory, or a
+      directory this play cannot traverse, is the usual cause -- the latter
+      usually means the play needs become: true.
+      {% elif not (item.stat.exists | default(false)) %}
+      {{ item.item }} does not exist, so its posture was not set. Preflight
+      rejects this host for exactly that reason; you are seeing this instead
+      because the preflight tag was skipped.
+      {% elif item.stat.islnk | default(false) %}
+      {{ item.item }} is a symlink and was left untouched: following it would
+      rewrite a file outside {{ vault_tls_dir }}, and a certmonger/certbot
+      renewal would revert it anyway. Ensure the link TARGET is readable by
+      the {{ vault_group }} group, or Vault will not start. See issue #69.
+      {% elif not (item.stat.isreg | default(false)) %}
+      {{ item.item }} exists but is not a regular file, so its posture was not
+      set and Vault cannot read a certificate from it. A directory at this path
+      is the usual cause. Remove it and stage the real file; preflight rejects
+      this host for the same reason when its tag is not skipped.
+      {% elif (item.stat.nlink | default(1)) != 1 %}
+      {{ item.item }} is a hardlink ({{ item.stat.nlink }} names for one inode),
+      so its posture was left untouched: changing it changes every other name
+      for that inode, and the role cannot prove from here that they are all
+      inside {{ vault_tls_dir }}. Stage a copy instead, or make the shared inode
+      readable by the {{ vault_group }} group yourself. Resolving the other
+      names is issue #69.
+      {% else %}
+      {{ item.item }} is outside {{ vault_tls_dir }}, which the role does not
+      own, so its posture was left untouched. Ensure it is readable by the
+      {{ vault_group }} group, or Vault will not start. See issue #69.
+      {% endif %}
+  loop: "{{ __vault_staged_tls.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item }}"
+  # The exact complement of the enforcement's when:, so every staged path is
+  # either converged or explained -- never silently skipped.
+  #
+  # `item.stat is not defined` is the FIRST or-term, not a precondition. stat
+  # fail_json's on every OSError except ENOENT (e.g. ENOTDIR, when a path
+  # component is a regular file), returning a result with a msg and NO stat key.
+  # Requiring `item.stat is defined` here -- as this task did -- made that shape
+  # fall through both tasks and vanish, while three artifacts claimed it was
+  # reported. `item.skipped` discriminates the genuinely-skipped items (the
+  # managed path) from the failed ones, because failed_when: false on the stat
+  # defines `.failed` as False for every result and keying on it would be the
+  # same tautology as the #36 port gate.
+  when:
+    - not (vault_manage_tls | bool)
+    - not (item.skipped | default(false))
+    - item.stat is not defined
+      or not (item.stat.exists | default(false))
+      or not (item.stat.isreg | default(false))
+      or (item.stat.islnk | default(false))
+      or (item.stat.nlink | default(1)) != 1
+      or item.item | dirname != vault_tls_dir
+
+###############################################################################
 # SELinux File Contexts
 ###############################################################################
 - name: Set SELinux file contexts for Vault paths
