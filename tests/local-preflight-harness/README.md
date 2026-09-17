@@ -47,11 +47,18 @@ gate's stat could be deleted and the harness would stay green. Only
 `molecule/preflight` proves that, because there the fixtures exist solely on the
 controller and the container cannot see them.
 
-This is a developer tool, not a CI gate — CI globs `tests/assert-*.sh`, and this
-directory deliberately does not match. `molecule/preflight` remains the
-authority: it runs on the real EL 8/9/10 images, uses the real `getent`, and
-exercises the container-dependent gates this harness cannot (firewalld, port,
-rhsm). Run this while iterating; trust molecule before merging.
+**This now RUNS IN CI**, as a step in the `syntax` job — that job already
+installs `requirements.txt` (netaddr, which `ansible.utils.ipaddr` needs) and the
+collections. It is deliberately outside the lint job's `tests/assert-*.sh` glob,
+so it is wired in explicitly rather than by naming convention. Until that step
+existed, the dns regression cases — IPv4-mapped loopback, mapped multicast, the
+case-folding fix — were exercised only on a developer machine and would have
+rotted unobserved.
+
+`molecule/preflight` remains the authority for what this cannot reach: the real
+EL 8/9/10 images, the real `getent`, cross-machine delegation, and the
+container-dependent gates (firewalld, port, rhsm). Run this while iterating;
+trust molecule before merging.
 
 ## Coverage
 

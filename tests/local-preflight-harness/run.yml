@@ -342,6 +342,81 @@
               - ansible_failed_result.msg | default('') is search('resolves to no reachable address')
             success_msg: "D13 fired: DNS names are case-insensitive and so is the dependency test"
 
+    - name: "D14 FIRES - ::ffff:0.0.0.0 -- ipaddr('ipv4') yields a CIDR, so a bare-string exclusion missed it"
+      block:
+        - ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/dns.yml
+          vars: {ansible_fqdn: dns-mapped-unspec.test,
+                 vault_api_addr: "https://dns-mapped-unspec.test:8200",
+                 vault_cluster_addr: "https://dns-mapped-unspec.test:8201"}
+        - ansible.builtin.fail: {msg: "D14 did not fire"}
+      rescue:
+        - ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg | default('') is search('resolves to no reachable address')
+            success_msg: "D14 fired: ::ffff:0.0.0.0 -- ipaddr('ipv4') yields a CIDR, so a bare-string exclusion missed it"
+
+    - name: "D15 FIRES - ::ffff:255.255.255.255 -- same CIDR trap as D14"
+      block:
+        - ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/dns.yml
+          vars: {ansible_fqdn: dns-mapped-bcast.test,
+                 vault_api_addr: "https://dns-mapped-bcast.test:8200",
+                 vault_cluster_addr: "https://dns-mapped-bcast.test:8201"}
+        - ansible.builtin.fail: {msg: "D15 did not fire"}
+      rescue:
+        - ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg | default('') is search('resolves to no reachable address')
+            success_msg: "D15 fired: ::ffff:255.255.255.255 -- same CIDR trap as D14"
+
+    - name: "D16 FIRES - ::ffff:224.0.0.1 -- IPv6 unicast as written, multicast once unwrapped"
+      block:
+        - ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/dns.yml
+          vars: {ansible_fqdn: dns-mapped-mcast.test,
+                 vault_api_addr: "https://dns-mapped-mcast.test:8200",
+                 vault_cluster_addr: "https://dns-mapped-mcast.test:8201"}
+        - ansible.builtin.fail: {msg: "D16 did not fire"}
+      rescue:
+        - ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg | default('') is search('resolves to no reachable address')
+            success_msg: "D16 fired: ::ffff:224.0.0.1 -- IPv6 unicast as written, multicast once unwrapped"
+
+    - name: "D17 FIRES - ::224.0.0.1 -- the IPv4-COMPATIBLE form, distinct from mapped"
+      block:
+        - ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/dns.yml
+          vars: {ansible_fqdn: dns-compat-mcast.test,
+                 vault_api_addr: "https://dns-compat-mcast.test:8200",
+                 vault_cluster_addr: "https://dns-compat-mcast.test:8201"}
+        - ansible.builtin.fail: {msg: "D17 did not fire"}
+      rescue:
+        - ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg | default('') is search('resolves to no reachable address')
+            success_msg: "D17 fired: ::224.0.0.1 -- the IPv4-COMPATIBLE form, distinct from mapped"
+
+    - name: "D18 FIRES - ::127.0.0.1 -- IPv4-compatible loopback"
+      block:
+        - ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/dns.yml
+          vars: {ansible_fqdn: dns-compat-loop.test,
+                 vault_api_addr: "https://dns-compat-loop.test:8200",
+                 vault_cluster_addr: "https://dns-compat-loop.test:8201"}
+        - ansible.builtin.fail: {msg: "D18 did not fire"}
+      rescue:
+        - ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg | default('') is search('resolves to no reachable address')
+            success_msg: "D18 fired: ::127.0.0.1 -- IPv4-compatible loopback"
+
     - name: "D5 PASSES - routable"
       ansible.builtin.include_role:
         name: ansible-role-vault

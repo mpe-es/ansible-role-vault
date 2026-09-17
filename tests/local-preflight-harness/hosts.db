@@ -9,3 +9,8 @@ fe90::1 dns-highlinklocal-fixture.test
 :: dns-unspecified-fixture.test
 224.0.0.1 dns-multicast-fixture.test
 ff02::1 dns-mcast6-fixture.test
+::ffff:0.0.0.0 dns-mapped-unspec.test
+::ffff:255.255.255.255 dns-mapped-bcast.test
+::ffff:224.0.0.1 dns-mapped-mcast.test
+::224.0.0.1 dns-compat-mcast.test
+::127.0.0.1 dns-compat-loop.test

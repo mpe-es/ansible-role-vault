@@ -154,6 +154,21 @@ jobs:
         env:
           ANSIBLE_ROLES_PATH: "${{ github.workspace }}/.."
 
+      # The preflight gate harness: drives the managed_tls and dns gates against
+      # localhost with a getent shim and a fixture host database. Runs here
+      # because this job already installs requirements.txt (netaddr, which
+      # ansible.utils.ipaddr needs) and the collections. It is NOT in the lint
+      # job's static-guard glob, and until this step existed the dns regression
+      # cases -- IPv4-mapped loopback, mapped multicast, the case-folding fix --
+      # were exercised only on a developer machine and rotted silently in CI.
+      - name: Run the local preflight-gate harness
+        run: |
+          cd tests/local-preflight-harness
+          PATH="$PWD:$PATH" GETENT_FIXTURE_DB="$PWD/hosts.db" \
+            ansible-playbook run.yml
+        env:
+          ANSIBLE_ROLES_PATH: "${{ github.workspace }}/.."
+
   ###########################################################
   # Molecule Test Stage
   ###########################################################

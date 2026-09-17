@@ -164,28 +164,28 @@ if os.path.isfile(dns_path):
     # cover on its own are still present: netaddr does not unwrap IPv4-mapped
     # addresses, and it counts the unspecified and limited-broadcast addresses
     # as unicast.
-    # (fragment, minimum occurrences, why). The COUNT matters: loopback and
-    # link-local are each tested TWICE -- once on the address as resolved and
-    # once on its ipv4() form -- because netaddr does not unwrap IPv4-mapped
-    # addresses. Requiring only one occurrence let a mutation delete the direct
-    # check while the mapped-form check still satisfied the substring, which my
-    # own negative control caught.
-    WANT_CLASSIFIER = [
-        ("ansible.utils.ipaddr('unicast')", 1,
-         "multicast and broadcast are not endpoints a peer dials"),
-        ("ansible.utils.ipaddr('loopback')", 2,
-         "loopback on BOTH the resolved address and its ipv4() form"),
-        ("ansible.utils.ipaddr('link-local')", 2,
-         "link-local on BOTH forms; the library implements the full fe80::/10, "
-         "which a hand-written regex got wrong twice"),
-        ("ansible.utils.ipaddr('ipv4')", 3,
-         "IPv4-mapped forms must be unwrapped before each classification; "
-         "netaddr does not treat ::ffff:127.0.0.1 as loopback"),
-        ("'0.0.0.0', '255.255.255.255'", 1,
-         "netaddr counts the unspecified and limited-broadcast addresses as "
-         "unicast, so they are excluded by name"),
-        ("'::', '0::0'", 1,
-         "the IPv6 unspecified address, likewise counted as unicast"),
+    # EXACT TERMS, not substrings and not occurrence counts. Counting was the
+    # previous approach and codex defeated it by appending ` or true` to one
+    # condition: the substring still appeared the required number of times while
+    # the check it named had been neutered. A whole-term match makes the text of
+    # each condition the contract.
+    #
+    # Every class test appears TWICE -- once against the address as resolved and
+    # once against its canonical (IPv4-unwrapped) form -- because netaddr does
+    # not unwrap IPv4-mapped addresses, and because it converts '::1' to
+    # '0.0.0.1', which is neither loopback nor non-unicast. Checking one form
+    # only is what let ::ffff:224.0.0.1 and ::ffff:0.0.0.0 through.
+    WANT_TERMS = [
+        "(item | ansible.utils.ipaddr('unicast')) is truthy",
+        "(__vault_dns_canon | ansible.utils.ipaddr('unicast')) is truthy",
+        "(item | ansible.utils.ipaddr('loopback')) is falsy",
+        "(__vault_dns_canon | ansible.utils.ipaddr('loopback')) is falsy",
+        "(item | ansible.utils.ipaddr('link-local')) is falsy",
+        "(__vault_dns_canon | ansible.utils.ipaddr('link-local')) is falsy",
+        "(item | ansible.utils.ipaddr('multicast')) is falsy",
+        "(__vault_dns_canon | ansible.utils.ipaddr('multicast')) is falsy",
+        "__vault_dns_canon not in ['0.0.0.0', '255.255.255.255']",
+        "item not in ['::', '0::0', '0:0:0:0:0:0:0:0']",
     ]
     classifiers = [t for t in dns_tasks
                    if "__vault_dns_routable" in str((t.get("ansible.builtin.set_fact") or {}))
@@ -195,13 +195,21 @@ if os.path.isfile(dns_path):
                     "under a when:; the predicate above pins a name with nothing "
                     "behind it.")
     else:
-        blob = " ".join(_norm(c) for c in (classifiers[0].get("when") or []))
-        for frag, want_n, why in WANT_CLASSIFIER:
-            got_n = blob.count(_norm(frag))
-            if got_n < want_n:
-                fail.append(f"tasks/preflight/dns.yml classification uses {frag!r} "
-                            f"{got_n} time(s), expected at least {want_n} -- {why}. "
-                            f"Condition is: {blob!r}")
+        got = [_norm(c) for c in (classifiers[0].get("when") or [])]
+        for term in WANT_TERMS:
+            if _norm(term) not in got:
+                fail.append(f"tasks/preflight/dns.yml classification is missing the "
+                            f"exact condition `{term}`. Conditions are: {got!r}")
+        # The canonical form must still be DERIVED, or every __vault_dns_canon
+        # term above is testing an undefined variable.
+        canon = _norm(str((classifiers[0].get("vars") or {}).get("__vault_dns_canon", "")))
+        for frag in ("ansible.utils.ipaddr('ipv4')", "ansible.utils.ipaddr('address')"):
+            if _norm(frag) not in canon:
+                fail.append(f"tasks/preflight/dns.yml no longer builds "
+                            f"__vault_dns_canon with {frag!r}. ipaddr('ipv4') returns "
+                            "a CIDR, so without ipaddr('address') the bare-string "
+                            "exclusions never match and mapped unspecified and "
+                            f"broadcast addresses pass. Derivation is: {canon!r}")
 
     # The assert must be gated ON the dependency, so a host with explicitly
     # pinned addresses is never failed for a name it does not use.

@@ -109,10 +109,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   failed DHCP lease leaves behind. This is a **local** resolution check: it does
   not prove a peer can resolve the name, because `nss-myhostname` answers with
   the machine's own configured addresses, so a host with a working NIC and no DNS
-  record passes. The gate is armed **only when the advertised addresses still
-  depend on the hostname**. Pin `vault_api_addr`/`vault_cluster_addr` explicitly and the
-  role has no such dependency, so the check downgrades to a warning rather than
-  failing a deployment it does not affect. (#79)
+  record passes. The gate is armed **only when the role still needs the name to
+  resolve** — when `vault_api_addr`/`vault_cluster_addr` still contain
+  `ansible_fqdn`, **or** when the role is managing TLS with
+  `vault_tls_source: vault_pki`, because `tasks/tls.yml` issues that certificate
+  with `common_name: "{{ ansible_fqdn }}"` whatever the advertised addresses say.
+  Pin both addresses explicitly and, absent PKI issuance, the role has no such
+  dependency, so the check downgrades to a warning rather than failing a
+  deployment it does not affect. Classification of "reachable" is delegated to
+  `ansible.utils.ipaddr` rather than pattern-matched. (#79)
 
 - Molecule now executes the real role rather than a hand-copied replica, so
   the tests exercise what ships. (#50, closes #43)

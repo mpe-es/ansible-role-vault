@@ -112,28 +112,45 @@
 - name: Keep the resolved addresses a peer could actually dial
   ansible.builtin.set_fact:
     __vault_dns_routable: "{{ __vault_dns_routable + [item] }}"
+  vars:
+    # The CANONICAL form: an IPv4-mapped or IPv4-compatible address reduced to
+    # its bare IPv4 host address, anything else left alone.
+    #
+    # ipaddr('ipv4') returns a CIDR -- '::ffff:0.0.0.0' becomes '0.0.0.0/32',
+    # not '0.0.0.0' -- so a bare-string comparison against it silently never
+    # matched, and mapped unspecified and mapped broadcast both passed the gate.
+    # ipaddr('address') strips the prefix. For a genuine IPv6 address the ipv4
+    # conversion yields False and default(item, true) restores the original.
+    __vault_dns_canon: >-
+      {{ item | ansible.utils.ipaddr('ipv4') | ansible.utils.ipaddr('address')
+         | default(item, true) }}
+  # EVERY class test runs against BOTH forms. Checking only one is what let
+  # ::ffff:224.0.0.1 through: it is IPv6 unicast as written, and its converted
+  # form was tested for loopback and link-local but never for unicast.
+  #
+  # Both forms are needed, not just the canonical one: netaddr converts '::1' to
+  # '0.0.0.1', which is unicast and NOT loopback, so the direct test on the
+  # address as resolved is what catches IPv6 loopback.
+  #
+  # `is truthy` / `is falsy`, not bare filter output: ansible.utils.ipaddr
+  # returns the ADDRESS on a match and False otherwise, and ansible-core 2.21
+  # rejects a non-boolean `when:` ("Conditionals must have a boolean result").
+  # `| bool` would be worse than useless -- it returns False for '10.0.0.1'.
+  when:
+    - (item | ansible.utils.ipaddr('unicast')) is truthy
+    - (__vault_dns_canon | ansible.utils.ipaddr('unicast')) is truthy
+    - (item | ansible.utils.ipaddr('loopback')) is falsy
+    - (__vault_dns_canon | ansible.utils.ipaddr('loopback')) is falsy
+    - (item | ansible.utils.ipaddr('link-local')) is falsy
+    - (__vault_dns_canon | ansible.utils.ipaddr('link-local')) is falsy
+    - (item | ansible.utils.ipaddr('multicast')) is falsy
+    - (__vault_dns_canon | ansible.utils.ipaddr('multicast')) is falsy
+    - __vault_dns_canon not in ['0.0.0.0', '255.255.255.255']
+    - item not in ['::', '0::0', '0:0:0:0:0:0:0:0']
   loop: >-
     {{ __vault_dns_check.stdout_lines | default([])
        | map('regex_replace', '^(\S+).*$', '\1')
        | unique | list }}
-  # `is truthy` / `is falsy`, not bare filter output. ansible.utils.ipaddr
-  # returns the ADDRESS on a match and False otherwise, and ansible-core 2.21
-  # rejects a non-boolean `when:` outright ("Conditionals must have a boolean
-  # result"). An earlier draft used the bare filter and every host errored --
-  # which a set_fact/ternary probe could not have shown, because set_fact has no
-  # such constraint. `| bool` would be worse than useless here: it returns False
-  # for an arbitrary non-empty string like '10.0.0.1'.
-  when:
-    - (item | ansible.utils.ipaddr('unicast')) is truthy
-    - (item | ansible.utils.ipaddr('loopback')) is falsy
-    - (item | ansible.utils.ipaddr('link-local')) is falsy
-    - ((item | ansible.utils.ipaddr('ipv4') | default(item, true))
-       | ansible.utils.ipaddr('loopback')) is falsy
-    - ((item | ansible.utils.ipaddr('ipv4') | default(item, true))
-       | ansible.utils.ipaddr('link-local')) is falsy
-    - (item | ansible.utils.ipaddr('ipv4') | default(item, true))
-      not in ['0.0.0.0', '255.255.255.255']
-    - item not in ['::', '0::0', '0:0:0:0:0:0:0:0']
 
 # Substring, deliberately: true for the default templates, false for an
 # operator-pinned literal address, without needing to know which produced the
