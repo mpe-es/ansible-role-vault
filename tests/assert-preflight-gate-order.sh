@@ -103,6 +103,15 @@ WANT_PREDICATES = {
     # raw resolver answer. `__vault_dns_check.rc == 0` would pass on a host whose
     # name resolves only to 127.0.1.1 -- which is the defect this gate replaced.
     "dns": ["__vault_dns_routable | length > 0"],
+    # managed_tls was shipped without an entry here, which made it the only gate
+    # in tasks/preflight/ whose semantics nothing pinned -- in the guard whose
+    # own comment above forbids exactly that. `stat.readable` in particular was
+    # deletable with every test and every guard green while README,
+    # argument_specs and CHANGELOG all promised the source "must be readable".
+    "managed_tls": ["item.stat is defined",
+                    "item.stat.exists | default(false)",
+                    "item.stat.isreg | default(false)",
+                    "item.stat.readable | default(false)"],
 }
 
 def asserts_in(tasks):

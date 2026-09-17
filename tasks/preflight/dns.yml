@@ -35,7 +35,8 @@
 #
 #   POLARITY. This is a hard gate only when the ROLE needs the name to resolve:
 #   when vault_api_addr or vault_cluster_addr still contain ansible_fqdn (the
-#   default), OR when vault_tls_source is 'vault_pki', because tasks/tls.yml
+#   default), OR when vault_manage_tls is true AND vault_tls_source is
+#   'vault_pki', because tasks/tls.yml
 #   issues that certificate with `common_name: "{{ ansible_fqdn }}"` regardless
 #   of what the advertised addresses say. An operator with neither dependency
 #   gets a warning instead of a failure. An earlier draft armed on the addresses
@@ -100,7 +101,11 @@
 
 # Substring, deliberately: true for the default templates, false for an
 # operator-pinned literal address, without needing to know which produced the
-# value. default('', true) because an explicitly-null override is a real shape
+# value. It errs toward ARMING: a short hostname (socket.getfqdn() returns one
+# when the host has no domain) is a substring of a pinned FQDN address, so such
+# an operator is gated on a name they meant to stop depending on. Arming a host
+# that did not need it is the safe direction to be wrong in; the reverse would
+# ship the defect this gate exists to catch. default('', true) because an explicitly-null override is a real shape
 # and `in` against None raises rather than reporting the gate's own message.
 - name: Determine whether the advertised addresses depend on this hostname
   ansible.builtin.set_fact:

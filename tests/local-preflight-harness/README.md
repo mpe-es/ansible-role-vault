@@ -40,6 +40,13 @@ than silently answering nothing, so a mis-invocation cannot look like a pass.
 
 ## Relationship to molecule
 
+**What this harness cannot prove.** `run.yml` is `hosts: localhost` with
+`connection: local`, so the controller and the target are the same machine. No
+case here can distinguish them, which means `delegate_to: localhost` on the
+gate's stat could be deleted and the harness would stay green. Only
+`molecule/preflight` proves that, because there the fixtures exist solely on the
+controller and the container cannot see them.
+
 This is a developer tool, not a CI gate — CI globs `tests/assert-*.sh`, and this
 directory deliberately does not match. `molecule/preflight` remains the
 authority: it runs on the real EL 8/9/10 images, uses the real `getent`, and
@@ -52,16 +59,17 @@ rhsm). Run this while iterating; trust molecule before merging.
 |---|---|
 | M1 | unset source fails, naming the variable |
 | M2 | a `null` override gets the gate's message, not a Jinja type error |
-| M3 | an absolute source absent **on the controller**, with the message pointing there |
+| M3 | an absolute source that does not exist, and that the message points the operator at the controller. It does **not** prove the stat ran on the controller — see below |
 | M4 | a directory in place of a certificate |
 | M5 | `vault_pki` with an empty mount |
-| M6 | a **relative** source is skipped by the stat and reported, never rejected — the shape this project's own README examples use |
+| M6 | a **relative** source is skipped by the stat, the report task fires for exactly it, and the gate does not fail — the shape this project's own README examples use |
 | M7 | a symlinked source is accepted (`follow: true` is load-bearing) |
 | M8 | the gate is suppressed, not merely non-failing, when the operator stages TLS |
+| M9 | an absolute source that exists but is unreadable. Skipped when running as root, where `os.access()` answers True regardless of mode — so it is meaningful on a developer machine and deliberately vacuous in molecule's root container |
 | D1 | loopback-only resolution fails, naming the address |
 | D2 | link-local-only fails |
 | D3 | no resolution at all fails, with its own branch |
-| D4 | `vault_tls_source: vault_pki` arms the gate **even with pinned addresses**, because `tasks/tls.yml` issues against `ansible_fqdn` |
+| D4 | `vault_manage_tls: true` with `vault_tls_source: vault_pki` arms the gate **even with pinned addresses**, because `tasks/tls.yml` issues against `ansible_fqdn` |
 | D5 | a routable answer passes, with the routable set exactly right |
 | D6 | loopback alongside a routable address does **not** mask it |
 | D7 | pinned addresses with no PKI remove the dependency entirely |

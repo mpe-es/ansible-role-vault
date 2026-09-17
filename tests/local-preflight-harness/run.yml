@@ -29,6 +29,17 @@
             path: "{{ fx }}/isdir.crt"
             state: directory
             mode: '0755'
+        - name: An unreadable source (mode 0000)
+          # Meaningful only as a non-root user, which is the normal case for a
+          # developer machine and NOT the case in molecule's root container --
+          # os.access() returns True for root regardless of mode. Skipped rather
+          # than silently vacuous when running as root.
+          ansible.builtin.copy:
+            content: "mock\n"
+            dest: "{{ fx }}/unreadable.crt"
+            mode: '0000'
+          when: lookup('env', 'USER') != 'root'
+
         - name: A symlinked source (certmonger shape)
           ansible.builtin.file:
             src: "{{ fx }}/good.crt"
@@ -131,7 +142,29 @@
         that:
           - __vault_managed_tls_stat.results | selectattr('skipped', 'defined') | list | length == 1
           - __vault_managed_tls_readable.results | length == 2
-        success_msg: "M6: relative source skipped by the stat, other two verified"
+          # The report must have FIRED for exactly the relative source. Without
+          # this the whole report task is deletable with the suite green, while
+          # three artifacts promise relative sources are reported.
+          - __vault_managed_tls_unverifiable.results | default([])
+            | rejectattr('skipped', 'defined') | list | length == 1
+        success_msg: "M6: relative source skipped by the stat, reported, other two verified"
+
+    - name: "M9 FIRES - absolute source exists but is not readable"
+      when: lookup('env', 'USER') != 'root'
+      block:
+        - ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/managed_tls.yml
+          vars: {vault_manage_tls: true, vault_tls_source: file,
+                 vault_tls_src_cert: "{{ fx }}/unreadable.crt",
+                 vault_tls_src_key: "{{ fx }}/good.key", vault_tls_src_ca: "{{ fx }}/good.ca"}
+        - ansible.builtin.fail: {msg: "M9 did not fire"}
+      rescue:
+        - ansible.builtin.assert:
+            that:
+              - ansible_failed_result.results | default([]) | map(attribute='msg', default='')
+                | join(' ') is search('is not readable by the')
+            success_msg: "M9 fired on an unreadable source"
 
     - name: "M7 PASSES - symlinked source accepted (follow: true)"
       ansible.builtin.include_role:

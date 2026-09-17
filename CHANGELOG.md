@@ -139,7 +139,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   advertising an address nothing could reach; the previous check warned and
   continued. The gate is armed when `vault_api_addr`/`vault_cluster_addr` are
   left at their defaults (they are templated from `ansible_fqdn`), **or** when
-  `vault_tls_source: vault_pki` is selected, because `tasks/tls.yml` issues that
+  the role is managing TLS (`vault_manage_tls: true`) with
+  `vault_tls_source: vault_pki`, because `tasks/tls.yml` issues that
   certificate with `common_name: "{{ ansible_fqdn }}"` whatever the advertised
   addresses say. Fix the DNS record or the `/etc/hosts` entry; pinning both
   addresses downgrades the check to a warning only when PKI issuance is not also

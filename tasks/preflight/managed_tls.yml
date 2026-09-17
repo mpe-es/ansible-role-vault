@@ -97,6 +97,10 @@
           loop: *vault_tls_src_trio
           loop_control:
             label: "{{ item.var }}"
+          # Registered so a case can assert the report actually FIRED. README,
+          # argument_specs and CHANGELOG all promise relative sources are
+          # "reported"; without this the whole task was deletable green.
+          register: __vault_managed_tls_unverifiable
 
         # ON THE CONTROLLER. copy resolves src there, so statting the managed
         # host would answer a question nobody asked. become: false because the

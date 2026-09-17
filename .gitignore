@@ -50,3 +50,8 @@ sensitive.txt
 # Log files
 log/
 *.log
+
+# Local gate-harness fixtures (created by tests/local-preflight-harness/run.yml).
+# One of them is a symlink carrying an absolute developer path, and this
+# repository is public.
+tests/local-preflight-harness/fixtures/
