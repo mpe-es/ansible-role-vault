@@ -8,14 +8,36 @@
 # reason. CI is ubuntu-latest x86_64 with Python 3.11, so:
 #
 #   docker run --rm --platform linux/amd64 -v "$PWD:/w" -w /w python:3.11-slim \
-#     sh -c 'pip install -q pip-tools && \
+#     sh -c 'pip install -q pip-tools==7.6.1 && \
 #            pip-compile --generate-hashes --output-file=requirements.txt requirements.in'
+#
+# PIN THE GENERATOR. An unpinned `pip install pip-tools` makes the output depend
+# on whichever release is current at regeneration time; the committed lock was
+# produced by 7.6.1. Running that exact command twice yields BYTE-IDENTICAL
+# output, which is what makes the artifact reproducible from its own procedure.
 #
 # Run it against the EXISTING requirements.txt, never a fresh path. pip-compile
 # honours the pins already in its output file, so an unrelated transitive is not
 # silently upgraded -- a fresh-path run pulled urllib3 2.8.0, which was ONE DAY
 # OLD and inside the 7-day cooldown floor .github/dependabot.yml sets precisely
 # to catch a malicious or yanked upstream release.
+#
+# THE `--no-index` IN THE GENERATED HEADER IS A pip-tools RENDERING BUG, not a
+# flag anyone passed and not one that reached pip. Do not "fix" the documented
+# command to match it, and do not pass it: the lock would then be resolved from
+# whatever happens to be in the local cache.
+#
+#   Mechanism (piptools/utils.py get_compile_command, 7.6.1): the header builder
+#   skips an option when `option.default == value`. For --no-index click reports
+#   default `Sentinel.UNSET`, so UNSET == False is False and the guard never
+#   fires; the option has no secondary `--index` opt, so the emitter falls to
+#   `arg = option_long_name` and prints the flag regardless of its False value.
+#
+#   Evidence it was never in effect: in a fresh container with an empty pip cache
+#   and `--network none`, pip-compile FAILS with
+#   "DistributionNotFound: No matching distribution found for hvac>=2.0.0".
+#   Resolution requires the index; with --no-index genuinely active it could not
+#   have succeeded with the network up either.
 #
 # Classification: UNCLASSIFIED
 

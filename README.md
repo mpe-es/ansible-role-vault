@@ -171,9 +171,12 @@ for supply chain integrity (NIST 800-53 SI-7). To regenerate after updating
 
 ```bash
 docker run --rm --platform linux/amd64 -v "$PWD:/w" -w /w python:3.11-slim \
-  sh -c 'pip install -q pip-tools && \
+  sh -c 'pip install -q pip-tools==7.6.1 && \
          pip-compile --generate-hashes --output-file=requirements.txt requirements.in'
 ```
+
+Running that exact command twice produces **byte-identical** output — which is
+what makes the lock reproducible from its own documented procedure.
 
 **Run it in that container, and against the existing `requirements.txt`.** Two
 reasons, both measured rather than assumed:
@@ -189,6 +192,25 @@ reasons, both measured rather than assumed:
   floor `.github/dependabot.yml` sets precisely so a malicious or yanked upstream
   release has time to be caught. Dependency *upgrades* belong to Dependabot,
   which enforces that cooldown; regeneration should only add what you asked for.
+- **Pin the generator.** An unpinned `pip install pip-tools` makes the output
+  depend on whichever release is current when someone regenerates. The committed
+  lock was produced by 7.6.1.
+
+> **The `--no-index` in the generated header is a pip-tools rendering bug.** It
+> was never passed and never reached pip — do not "fix" the command above to
+> match it, and do not pass it, or the lock would be resolved from whatever
+> happens to sit in the local cache.
+>
+> *Mechanism* (`piptools/utils.py::get_compile_command`, 7.6.1): the header
+> builder skips an option when `option.default == value`. For `--no-index` click
+> reports the default as `Sentinel.UNSET`, so `UNSET == False` is false and the
+> guard never fires; the option has no secondary `--index` opt, so the emitter
+> falls through to `arg = option_long_name` and prints the flag regardless of its
+> `False` value.
+>
+> *Evidence it was never in effect*: in a fresh container with an empty pip cache
+> and `--network none`, `pip-compile` fails with `DistributionNotFound: No
+> matching distribution found for hvac>=2.0.0`. Resolution requires index access.
 
 ### Execution Environment (AAP)
 
