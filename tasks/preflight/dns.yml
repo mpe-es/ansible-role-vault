@@ -85,18 +85,31 @@
 
 # First whitespace-delimited field of each ahosts line is the address; the same
 # address repeats once per socket type (STREAM/DGRAM/RAW), hence unique.
-# Excluded: loopback (127.0.0.0/8, ::1) and link-local (169.254.0.0/16, fe80::/10).
-# Link-local is what a failed DHCP lease leaves behind, and nss-myhostname returns
-# it ordered by scope -- an advertised address on either is equally unreachable.
+#
+# IPv4-MAPPED FORMS ARE NORMALISED FIRST. `::ffff:127.0.0.1` is loopback wearing
+# an IPv6 costume: it matches none of the IPv4 patterns and is not `::1`, so
+# without stripping the prefix it counted as reachable. Measured, not assumed.
+#
+# Excluded after that: loopback (127.0.0.0/8, ::1), the unspecified address
+# (0.0.0.0), and link-local (169.254.0.0/16 and fe80::/10). Note the IPv6
+# link-local range is fe80 through febf -- the first TEN bits, not the first
+# sixteen -- so the test is [Ff][Ee][89AaBb], not fe80. An earlier draft matched
+# `fe80:` only and admitted fe90:: and febf:: as reachable.
+#
+# Link-local is what a failed DHCP lease leaves behind, and nss-myhostname
+# returns it ordered by scope -- an advertised address on any of these is
+# equally unreachable.
 - name: Extract the reachable addresses the FQDN resolves to
   ansible.builtin.set_fact:
     __vault_dns_routable: >-
       {{ __vault_dns_check.stdout_lines | default([])
          | map('regex_replace', '^(\S+).*$', '\1')
+         | map('regex_replace', '^::[Ff]{4}:', '')
          | reject('match', '^127\.')
          | reject('equalto', '::1')
+         | reject('equalto', '0.0.0.0')
          | reject('match', '^169\.254\.')
-         | reject('match', '^[Ff][Ee]80:')
+         | reject('match', '^[Ff][Ee][89AaBb]')
          | select | unique | list }}
 
 # Substring, deliberately: true for the default templates, false for an

@@ -170,10 +170,18 @@ if os.path.isfile(dns_path):
     # Each exclusion by exact filter form. Loopback is the case the gate exists
     # for; link-local is what a failed DHCP lease leaves behind, and an
     # advertised address on either is equally unreachable.
-    WANT_REJECTS = ["reject('match', '^127\\.')",
+    # Each exclusion by exact filter form, INCLUDING the IPv4-mapped
+    # normalisation. Codex found this list pinning a defective regex: `fe80:`
+    # covers only fe80, while the IPv6 link-local range is fe80 THROUGH febf --
+    # the first ten bits -- so fe90:: and febf:: were admitted as reachable, and
+    # `::ffff:127.0.0.1` matched no IPv4 pattern at all. A lock that pins the
+    # wrong predicate is worse than none: it certifies the defect.
+    WANT_REJECTS = ["map('regex_replace', '^::[Ff]{4}:', '')",
+                    "reject('match', '^127\\.')",
                     "reject('equalto', '::1')",
+                    "reject('equalto', '0.0.0.0')",
                     "reject('match', '^169\\.254\\.')",
-                    "reject('match', '^[Ff][Ee]80:')"]
+                    "reject('match', '^[Ff][Ee][89AaBb]')"]
     derivations = [_norm(v) for t in dns_tasks
                    for k, v in (t.get("ansible.builtin.set_fact") or {}).items()
                    if k == "__vault_dns_routable"]

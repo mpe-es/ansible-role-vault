@@ -4,3 +4,5 @@
 10.99.0.1 dns-routable-fixture.test
 127.0.0.1 dns-mixed-fixture.test
 10.99.0.2 dns-mixed-fixture.test
+::ffff:127.0.0.1 dns-mapped-loopback-fixture.test
+fe90::1 dns-highlinklocal-fixture.test
