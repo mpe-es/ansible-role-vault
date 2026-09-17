@@ -23,9 +23,14 @@ orch = os.path.join(root, "tasks", "preflight.yml")
 # an unsupported OS is reported as such rather than through a downstream gate's
 # symptom, and rhsm precedes repo_source so an unregistered host is told it is
 # not registered.
+# managed_tls sits immediately after tls because the two are exact mirrors:
+# tls fires when vault_manage_tls is FALSE (the operator staged the material),
+# managed_tls when it is TRUE (the role will place it). Adjacency keeps the
+# inverted-polarity pair readable, and an operator reading the output sees the
+# TLS question answered in one place whichever mode they are in (#80).
 EXPECTED = [
     "os_family", "os_version", "fips", "selinux", "chrony", "firewalld",
-    "rhsm", "repo_source", "tls", "port", "dns",
+    "rhsm", "repo_source", "tls", "managed_tls", "port", "dns",
 ]
 # A dynamic include does not propagate its own tags. With only apply: the
 # include is skipped entirely under --tags; with only tags: the file is

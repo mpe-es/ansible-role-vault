@@ -209,6 +209,205 @@
           files were supplied, so "nothing failed" is also what a deleted
           when: condition looks like.
 
+    ###########################################################################
+    # The managed_tls gate - role-managed TLS inputs (issue #80)
+    #
+    # The exact mirror of the TLS gate above: that one fires when
+    # vault_manage_tls is FALSE, this one when it is TRUE.
+    #
+    # Its fixtures live on the CONTROLLER, not in the container, because the
+    # gate delegates its stat to localhost -- vault_tls_src_* are paths that
+    # ansible.builtin.copy resolves controller-side. Every other case in this
+    # scenario stages into the container; staging these there would make the
+    # gate pass or fail for reasons unrelated to what it measures.
+    ###########################################################################
+    - name: Stage controller-side managed-TLS fixtures
+      delegate_to: localhost
+      become: false
+      block:
+        - name: Create the controller fixture directory
+          ansible.builtin.file:
+            path: /tmp/managed-tls-fixtures
+            state: directory
+            mode: '0755'
+
+        - name: Create readable controller-side sources
+          ansible.builtin.copy:
+            content: "mock material"
+            dest: "/tmp/managed-tls-fixtures/{{ item }}"
+            mode: '0644'
+          loop: [good.crt, good.key, good.ca]
+
+        - name: Create a directory where a certificate is expected
+          ansible.builtin.file:
+            path: /tmp/managed-tls-fixtures/isdir.crt
+            state: directory
+            mode: '0755'
+
+    - name: "FIRES - vault_tls_src_cert is unset"
+      block:
+        - name: Run managed_tls with an empty source variable
+          ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/managed_tls.yml
+          vars:
+            vault_manage_tls: true
+            vault_tls_source: file
+            vault_tls_src_cert: ""
+            vault_tls_src_key: /tmp/managed-tls-fixtures/good.key
+            vault_tls_src_ca: /tmp/managed-tls-fixtures/good.ca
+        - name: An empty source should not have passed
+          ansible.builtin.fail:
+            msg: "managed_tls did not fire for an empty vault_tls_src_cert"
+      rescue:
+        - name: Assert the message names the unset variable
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.results | default([])
+                | map(attribute='msg', default='') | join(' ') is search('vault_tls_src_cert is empty')
+            fail_msg: "wrong cause: {{ ansible_failed_result | default('') }}"
+
+    - name: "FIRES - source path is relative, not absolute"
+      block:
+        - name: Run managed_tls with a relative source path
+          ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/managed_tls.yml
+          vars:
+            vault_manage_tls: true
+            vault_tls_source: file
+            vault_tls_src_cert: certs/vault.crt
+            vault_tls_src_key: /tmp/managed-tls-fixtures/good.key
+            vault_tls_src_ca: /tmp/managed-tls-fixtures/good.ca
+        - name: A relative path should not have passed
+          ansible.builtin.fail:
+            msg: "managed_tls did not fire for a relative source path"
+      rescue:
+        - name: Assert the message names the absolute-path contract
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.results | default([])
+                | map(attribute='msg', default='') | join(' ') is search('not an absolute path')
+            fail_msg: "wrong cause: {{ ansible_failed_result | default('') }}"
+
+    - name: "FIRES - source is absent on the CONTROLLER"
+      block:
+        - name: Run managed_tls against a controller path that does not exist
+          ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/managed_tls.yml
+          vars:
+            vault_manage_tls: true
+            vault_tls_source: file
+            vault_tls_src_cert: /tmp/managed-tls-fixtures/absent.crt
+            vault_tls_src_key: /tmp/managed-tls-fixtures/good.key
+            vault_tls_src_ca: /tmp/managed-tls-fixtures/good.ca
+        - name: An absent controller source should not have passed
+          ansible.builtin.fail:
+            msg: "managed_tls did not fire for a source absent on the controller"
+      rescue:
+        - name: Assert the message points at the controller, not the target
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.results | default([])
+                | map(attribute='msg', default='') | join(' ') is search('does not exist on the Ansible controller')
+            fail_msg: "wrong cause: {{ ansible_failed_result | default('') }}"
+
+    - name: "FIRES - source is a directory on the controller"
+      block:
+        - name: Run managed_tls against a controller directory
+          ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/managed_tls.yml
+          vars:
+            vault_manage_tls: true
+            vault_tls_source: file
+            vault_tls_src_cert: /tmp/managed-tls-fixtures/isdir.crt
+            vault_tls_src_key: /tmp/managed-tls-fixtures/good.key
+            vault_tls_src_ca: /tmp/managed-tls-fixtures/good.ca
+        - name: A directory should not have passed
+          ansible.builtin.fail:
+            msg: "managed_tls did not fire for a directory in place of a certificate"
+      rescue:
+        - name: Assert the message names the file-type cause
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.results | default([])
+                | map(attribute='msg', default='') | join(' ') is search('not a regular file')
+            fail_msg: "wrong cause: {{ ansible_failed_result | default('') }}"
+
+    - name: "FIRES - vault_pki selected with no mount configured"
+      block:
+        - name: Run managed_tls with vault_pki and an empty mount
+          ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/managed_tls.yml
+          vars:
+            vault_manage_tls: true
+            vault_tls_source: vault_pki
+            vault_pki_mount: ""
+            vault_pki_role: vault-listener
+        - name: An empty PKI mount should not have passed
+          ansible.builtin.fail:
+            msg: "managed_tls did not fire for an empty vault_pki_mount"
+      rescue:
+        - name: Assert the message names the PKI variable
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.results | default([])
+                | map(attribute='msg', default='') | join(' ') is search('vault_pki_mount is empty')
+            fail_msg: "wrong cause: {{ ansible_failed_result | default('') }}"
+
+    - name: "PASSES - all three controller-side sources are present and readable"
+      ansible.builtin.include_role:
+        name: ansible-role-vault
+        tasks_from: preflight/managed_tls.yml
+      vars:
+        vault_manage_tls: true
+        vault_tls_source: file
+        vault_tls_src_cert: /tmp/managed-tls-fixtures/good.crt
+        vault_tls_src_key: /tmp/managed-tls-fixtures/good.key
+        vault_tls_src_ca: /tmp/managed-tls-fixtures/good.ca
+
+    - name: Assert that pass-case actually evaluated all three sources
+      ansible.builtin.assert:
+        that:
+          - __vault_managed_tls_readable is defined
+          - __vault_managed_tls_readable.results | default([]) | length == 3
+          # rejectattr on TRUTHINESS, never on 'defined': the stat carries
+          # failed_when: false, which DEFINES .failed as False on every result,
+          # so testing for the key's existence rejects all three (#36).
+          - __vault_managed_tls_readable.results | default([])
+            | rejectattr('failed') | list | length == 3
+        fail_msg: >-
+          The pass case did not evaluate all three controller-side sources:
+          {{ __vault_managed_tls_readable | default('undefined') }}
+
+    # Every other managed_tls case sets vault_manage_tls: true, so deleting the
+    # production `when: vault_manage_tls | bool` would not change the scenario
+    # at all. This is the oracle that notices -- and it is the mirror image of
+    # the staged-material suppression case above.
+    - name: "DID NOT FIRE - operator stages TLS, so the managed-input gate is suppressed"
+      ansible.builtin.include_role:
+        name: ansible-role-vault
+        tasks_from: preflight/managed_tls.yml
+      vars:
+        vault_manage_tls: false
+        vault_tls_source: file
+        vault_tls_src_cert: ""
+        vault_tls_src_key: ""
+        vault_tls_src_ca: ""
+
+    - name: Assert the managed-input gate was suppressed, not merely non-failing
+      ansible.builtin.assert:
+        that:
+          - __vault_managed_tls_marker is defined
+          - __vault_managed_tls_marker.skipped | default(false)
+        fail_msg: >-
+          The managed-input gate ran while the operator stages TLS. All three
+          source variables were empty, so "nothing failed" is also what a
+          deleted when: condition looks like.
+
     - name: "DID NOT FIRE - firewalld absent but management disabled"
       ansible.builtin.include_role:
         name: ansible-role-vault

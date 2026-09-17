@@ -106,6 +106,16 @@
     - vault
     - preflight
 
+- name: Include preflight gate - managed_tls
+  ansible.builtin.include_tasks:
+    file: preflight/managed_tls.yml
+    apply:
+      tags:
+        - preflight
+  tags:
+    - vault
+    - preflight
+
 - name: Include preflight gate - port
   ansible.builtin.include_tasks:
     file: preflight/port.yml

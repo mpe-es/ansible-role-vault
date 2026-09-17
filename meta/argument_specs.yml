@@ -284,6 +284,8 @@ argument_specs:
         description:
           - Path to the TLS certificate file on the Ansible controller.
           - Only used when vault_manage_tls is true.
+          - "Must be an ABSOLUTE path on the controller."
+          - "A relative path would be resolved against the role's files/ directory; preflight rejects it rather than reimplementing that search order (issue #80)."
         type: path
         default: ""
 
@@ -291,6 +293,8 @@ argument_specs:
         description:
           - Path to the TLS private key file on the Ansible controller.
           - Only used when vault_manage_tls is true.
+          - "Must be an ABSOLUTE path on the controller."
+          - "A relative path would be resolved against the role's files/ directory; preflight rejects it rather than reimplementing that search order (issue #80)."
         type: path
         default: ""
 
@@ -298,6 +302,8 @@ argument_specs:
         description:
           - Path to the CA certificate file on the Ansible controller.
           - Only used when vault_manage_tls is true.
+          - "Must be an ABSOLUTE path on the controller."
+          - "A relative path would be resolved against the role's files/ directory; preflight rejects it rather than reimplementing that search order (issue #80)."
         type: path
         default: ""
 
@@ -431,6 +437,9 @@ argument_specs:
         description:
           - Source for TLS certificates.
           - "'file' copies from controller; 'vault_pki' generates via Vault PKI engine."
+          - "'vault_pki' requires a Vault that is already reachable, authenticated and unsealed."
+          - "It therefore CANNOT issue the listener certificate for the first node of a new cluster - that Vault cannot serve its PKI engine until it has the certificate being requested."
+          - "Use 'file' to bootstrap; 'vault_pki' suits nodes 2..N and re-issuance."
         type: str
         default: "file"
         choices:

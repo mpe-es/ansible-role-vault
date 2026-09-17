@@ -41,6 +41,7 @@ set that applies depends on how you configure the role.
 | RHSM | RHEL **and** `vault_manage_repo` **and** `vault_repo_source: satellite` | host registered. Only meaningful for Satellite-sourced content; the role-managed repository — HashiCorp's or your mirror's — needs no Red Hat subscription |
 | Repo source | `vault_manage_repo` | `mirror` mode must not name `rpm.releases.hashicorp.com` — checked for **both** `vault_repo_url` and `vault_repo_gpg_key`, since the target host fetches the key directly. This proves inequality with the shipped host, **not** that the endpoint is internal or airgap-safe. `satellite` mode requires RHEL |
 | TLS material | `vault_manage_tls: false` **(the default)** | `vault_tls_cert_file`, `vault_tls_key_file` and `vault_tls_ca_file` all exist and are regular files (symlinks followed). Whether the Vault account can READ them is tracked separately |
+| Managed TLS inputs | `vault_manage_tls: true` | under `vault_tls_source: file`, `vault_tls_src_cert`/`_key`/`_ca` are set, **absolute**, and readable **on the Ansible controller** — `copy` resolves `src` there, so this is deliberately not checked on the target. Under `vault_tls_source: vault_pki`, `vault_pki_mount` and `vault_pki_role` are set. Reachability of the PKI engine is not proven (#80) |
 | API port | always | `vault_listener_port` is free, or already held by the Vault service itself. Requires `iproute` (`ss`) — a missing query tool is a hard failure, not a skip |
 
 One further check is advisory, not a gate:

@@ -111,6 +111,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   skip: degrading to a skip would silently restore the inert gate this repairs.
   Install `iproute` on minimal images. (#36)
 
+### Added
+- **Preflight gate for the role-managed TLS path.** `vault_manage_tls: true` had
+  no preflight coverage at all: `vault_tls_src_cert`/`_key`/`_ca` and
+  `vault_pki_mount`/`_role` all default to `""` and pass argspec validation, so an
+  operator who enabled managed TLS and forgot the sources got a converged
+  repository, an installed package, created directories and applied SELinux
+  contexts — and only then a copy failure on an empty `src`. The new
+  `managed_tls` gate is the exact mirror of the existing `tls` gate's inverted
+  polarity, and proves the sources are set, absolute, and readable **on the
+  Ansible controller**, since that is where `copy` resolves `src`; checking the
+  target host would answer a different question. The absolute-path requirement
+  is a deliberate narrowing of the contract, documented in
+  `meta/argument_specs.yml` — `copy` also accepts a path relative to the role's
+  `files/` directory, and reimplementing Ansible's search order inside a gate is
+  how a gate becomes a subsystem. Also documents that `vault_pki` cannot
+  bootstrap a first node, since issuing from Vault's PKI engine requires a Vault
+  already serving on the certificate being requested. (#80)
+
 ### Fixed
 - **Operator-staged TLS material was never made readable by the Vault service.**
   `vault_manage_tls: false` is the role default and a documented path — preflight
