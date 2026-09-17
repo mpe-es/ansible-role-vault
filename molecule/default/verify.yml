@@ -50,6 +50,50 @@
         label: "{{ item.item.path }}"
 
     ###########################################################################
+    # Operator-staged TLS material (issue #77)
+    #
+    # vault_manage_tls is false in this scenario, so tasks/tls.yml is gated off
+    # by tasks/main.yml and never executes. prepare.yml stages the trio
+    # root:root 0600 -- the posture openssl actually produces. The role must
+    # converge it to root:vault 0640 itself, in tasks/system.yml, or vault.service
+    # cannot read its own private key.
+    #
+    # gr_name is the load-bearing assertion: it is the ONLY one the staged
+    # fixture does not already satisfy by accident, so it is what discriminates
+    # "the role converged this" from "the fixture was already correct".
+    # Hardcoded rather than read from vault_tls_file_mode/vault_group because
+    # verify.yml is a plain playbook and loads neither defaults/ nor vars/.
+    # NIST 800-53: AC-6 (Least Privilege), SC-8
+    ###########################################################################
+    - name: Verify operator-staged TLS material
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: __verify_staged_tls
+      loop:
+        - /opt/vault/tls/tls.crt
+        - /opt/vault/tls/tls.key
+        - /opt/vault/tls/ca.crt
+
+    - name: Assert staged TLS material was converged to root vault 0640
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.isreg
+          - item.stat.mode == '0640'
+          - item.stat.pw_name | default('') == 'root'
+          - item.stat.gr_name | default('') == 'vault'
+        fail_msg: >-
+          {{ item.item }} was left as staged instead of being converged:
+          mode={{ item.stat.mode | default('missing') }} (expected 0640),
+          owner={{ item.stat.pw_name | default('missing') }}:{{ item.stat.gr_name | default('missing') }}
+          (expected root:vault). vault_manage_tls is false, so tasks/tls.yml
+          never runs -- tasks/system.yml must enforce this posture (issue #77).
+        success_msg: "{{ item.item }}: root:vault 0640"
+      loop: "{{ __verify_staged_tls.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    ###########################################################################
     # Vault configuration files
     ###########################################################################
     - name: Verify vault.hcl exists with correct permissions
