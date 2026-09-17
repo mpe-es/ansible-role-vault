@@ -65,6 +65,12 @@
     # vault account (#38), not as evidence of convergence.
     # Hardcoded rather than read from vault_tls_file_mode/vault_group because
     # verify.yml is a plain playbook and loads neither defaults/ nor vars/.
+    #
+    # Only the cert and key are asserted here: prepare.yml stages ca.crt as a
+    # SYMLINK to exercise the scope bound below, so this scenario cannot also
+    # prove the CA converges on the in-directory regular-file shape. That shape
+    # is covered by molecule/init, which stages all three root:root 0600 as
+    # regular files and then starts a REAL vault server on them.
     # NIST 800-53: AC-6 (Least Privilege), SC-8
     ###########################################################################
     - name: Verify operator-staged TLS material
@@ -141,6 +147,14 @@
     # Before #77 the fixture was vault:vault 0640, so the write probe PASSED --
     # this is the regression that change closes.
     ###########################################################################
+    # Mechanism sanity FIRST. `runuser` with failed_when: false returns non-zero
+    # when util-linux is absent, and the assert below would then report that as
+    # "vault cannot read its own private key" -- a false #77 regression. The
+    # same guard precedes the #38 probe block later in this file.
+    - name: Confirm runuser is available before probing as vault
+      ansible.builtin.command: runuser --version
+      changed_when: false
+
     - name: Probe the staged key AS the vault user
       ansible.builtin.command: "runuser -u vault -- sh -c '{{ item.cmd }}'"
       register: __verify_tls_asvault

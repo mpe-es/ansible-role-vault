@@ -68,8 +68,10 @@
 # Notifying would restart a HEALTHY Vault to correct drift that does not affect
 # the running process -- sealing a cluster to fix a permission bit.
 #
-# state: file (not touch) so a missing path is an error rather than a
-# zero-byte certificate silently created where one was expected.
+# state: file (not touch) because touch CREATES a zero-byte file at any path
+# that is missing, and the whole point here is that the role never manufactures
+# TLS material it was told the operator would supply. A missing path is neither
+# created nor fatal: the when: below excludes it and the report task explains it.
 #
 # TWO BOUNDS, both load-bearing, because vault_tls_cert_file/_key_file/_ca_file
 # are free-form `type: path` variables and this task WRITES to whatever they name:
@@ -100,6 +102,12 @@
     get_mime: false
     get_attributes: false
   register: __vault_staged_tls
+  # An unreadable TLS directory (a become-less run) must route to the report
+  # below, not crash the play -- the same reason tasks/preflight/tls.yml:49
+  # carries it. Every consumer below is keyed on `item.stat is defined`, which
+  # only a successful stat produces; `.failed` would be a tautology here
+  # because failed_when: false DEFINES it as False (#36).
+  failed_when: false
   loop:
     - "{{ vault_tls_cert_file }}"
     - "{{ vault_tls_key_file }}"
@@ -121,11 +129,21 @@
     - not (vault_manage_tls | bool)
     - item.stat is defined
     - item.stat.exists | default(false)
+    # isreg is NOT redundant with islnk. `mkdir /opt/vault/tls/tls.crt` is a
+    # real operator error -- tasks/preflight/tls.yml:28-30 exists because of it
+    # -- and a directory satisfies exists, is not a link, and sits in
+    # vault_tls_dir. ansible.builtin.file with state: file then aborts the play
+    # with "is directory, cannot continue" at Phase 4, AFTER Phase 3 installed
+    # the package. That is the late-failure-after-mutation class this gate is
+    # supposed to prevent, so the case is excluded and reported instead.
+    - item.stat.isreg | default(false)
     - not (item.stat.islnk | default(false))
     - item.item | dirname == vault_tls_dir
 
 - name: Report staged TLS material the role will not converge
   ansible.builtin.debug:
+    # Branch order matters: a symlink is also not isreg, so islnk must be
+    # tested first or every link reports as "not a regular file".
     msg: >-
       {% if not (item.stat.exists | default(false)) %}
       {{ item.item }} does not exist, so its posture was not set. Preflight
@@ -136,6 +154,11 @@
       rewrite a file outside {{ vault_tls_dir }}, and a certmonger/certbot
       renewal would revert it anyway. Ensure the link TARGET is readable by
       the {{ vault_group }} group, or Vault will not start. See issue #69.
+      {% elif not (item.stat.isreg | default(false)) %}
+      {{ item.item }} exists but is not a regular file, so its posture was not
+      set and Vault cannot read a certificate from it. A directory at this path
+      is the usual cause. Remove it and stage the real file; preflight rejects
+      this host for the same reason when its tag is not skipped.
       {% else %}
       {{ item.item }} is outside {{ vault_tls_dir }}, which the role does not
       own, so its posture was left untouched. Ensure it is readable by the
@@ -144,10 +167,13 @@
   loop: "{{ __vault_staged_tls.results | default([]) }}"
   loop_control:
     label: "{{ item.item }}"
+  # The exact complement of the enforcement's when:, so every staged path is
+  # either converged or explained -- never silently skipped.
   when:
     - not (vault_manage_tls | bool)
     - item.stat is defined
     - not (item.stat.exists | default(false))
+      or not (item.stat.isreg | default(false))
       or (item.stat.islnk | default(false))
       or item.item | dirname != vault_tls_dir
 

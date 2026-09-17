@@ -359,7 +359,15 @@ material outside them is reported and left alone rather than silently changed:
 only paths whose direct parent is `vault_tls_dir` are touched, and symlinks are
 never followed. So pointing `vault_tls_ca_file` at a shared anchor such as
 `/etc/ipa/ca.crt`, or at certmonger/certbot-managed links, is safe — but you
-must make that material readable by the `vault` group yourself.
+must make that material readable by the `vault` group yourself. A path that
+exists but is not a regular file (a directory left where a certificate was
+expected) is reported and skipped rather than converged.
+
+Two caveats. The parent check is **lexical**: if `vault_tls_dir` is itself a
+symlink, a staged path under it still matches and the write lands on the
+resolved target. And this repair only happens on a **full** role run — the
+phases are dynamic `include_tasks`, which do not propagate tags, so a
+`--tags system` run does not perform it (see [issue #28](https://github.com/mpe-es/ansible-role-vault/issues/28)).
 
 ### HA Cluster (3-Node with Load Balancer) — developmental
 
@@ -538,7 +546,7 @@ it needs and OWNS nothing that defines its posture. The role sets:
 |---|---|---|---|
 | `vault.hcl` | `root:vault` | `0640` | process reads config via the group; cannot rewrite it |
 | `vault.env` | `root:root` | `0600` | only systemd (root) reads it via `EnvironmentFile`; holds the HSM PIN (#41) — the process needs no access |
-| TLS cert / key / CA | `root:vault` | `0640` | process reads the key via the group; cannot swap its trust anchors |
+| TLS cert / key / CA | `root:vault` | `0640` | process reads the key via the group; cannot swap its trust anchors — for operator-staged material (`vault_manage_tls: false`) the bounds in [TLS Certificate Deployment](#tls-certificate-deployment) apply |
 | `/opt/vault/tls` (dir) | `root:vault` | `0750` | root-owned dir blocks the process from unlink/replacing cert files (dir write ≠ file ownership) |
 | `vault.hcl`/`vault.env` dir `/etc/vault.d` | `root:vault` | `0750` | (already; #30/#34) |
 | helper scripts | `root:root` | `0750` | (already; #30) — the process cannot edit what root executes |

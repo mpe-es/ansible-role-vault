@@ -121,11 +121,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   read its own private key. `tasks/system.yml` now converges the trio to
   `root:vault 0640`, the same posture it already applied unconditionally to
   `/opt/vault/tls` itself. Bounded deliberately: only direct children of
-  `vault_tls_dir` are touched, and symlinks are never followed — an operator may
-  legitimately point `vault_tls_ca_file` at a shared system anchor, and
-  certmonger/certbot material is normally a link to material outside the
-  directory. Both excluded cases are reported rather than silently skipped;
-  proving such material is *readable* remains #69. (#77)
+  `vault_tls_dir` are touched, symlinks are never followed, and non-regular
+  files are left alone — an operator may legitimately point `vault_tls_ca_file`
+  at a shared system anchor, certmonger/certbot material is normally a link to
+  material outside the directory, and a directory left where a certificate was
+  expected would otherwise abort the run after the package phase. Every excluded
+  case is reported with its cause rather than silently skipped; proving such
+  material is *readable* remains #69. (#77)
 - **The API port-availability assert could never fail.** `wait_for` with
   `failed_when: false` forces the result's `failed` key to False, so the assert
   was a tautology and an occupied port surfaced as an opaque Vault
