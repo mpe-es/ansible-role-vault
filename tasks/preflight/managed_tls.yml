@@ -171,4 +171,3 @@
         - {value: "{{ vault_pki_role }}", role: "PKI issuing role name", var: "vault_pki_role"}
       loop_control:
         label: "{{ item.var }}"
-      register: __vault_managed_tls_pki

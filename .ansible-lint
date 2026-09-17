@@ -37,7 +37,12 @@ exclude_paths:
   - .cache/
   - .ansible/
   - stigs/
+  # Test scaffolding, not shipped role content. molecule's verify/prepare
+  # playbooks have always been excluded for this reason; the local gate harness
+  # is the same kind of artifact and is excluded on the same grounds. The gates
+  # it exercises are themselves linted, under tasks/.
   - molecule/
+  - tests/local-preflight-harness/
 
 # Offline mode (don't download Galaxy dependencies during lint)
 offline: false

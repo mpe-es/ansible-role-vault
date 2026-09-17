@@ -1,0 +1,67 @@
+# Local preflight-gate harness
+
+Runs the `managed_tls` (#80) and `dns` (#79) gates against `localhost` with
+controlled fixtures — **no podman, no container, a few seconds**.
+
+```bash
+cd tests/local-preflight-harness
+PATH="$PWD:$PATH" GETENT_FIXTURE_DB="$PWD/hosts.db" \
+  ANSIBLE_ROLES_PATH="$(git rev-parse --show-toplevel)/.." \
+  ansible-playbook run.yml
+```
+
+Expect `failed=0`. The `fatal:` lines in the output are in-block failures the
+rescues catch — a case that must FIRE is wrapped in `block`/`rescue` and asserts
+the gate's *own* remediation text, because "it failed" cannot distinguish the
+gate under test from an unrelated defect.
+
+## Why this exists
+
+These two gates were written, reviewed twice, and remediated twice before anyone
+executed them. Both rounds of review found defects that **only execution** could
+surface — including one that would have failed CI on every EL cell — and both
+times the excuse was that molecule needs podman, which this machine does not
+have. The gates themselves never needed a container. This harness removes the
+excuse.
+
+## What the fixtures buy
+
+`getent` is a shim, not the real tool. That is deliberate twice over:
+
+- macOS has no `getent` at all, so the dns gate is otherwise unrunnable on a
+  common developer machine. **Run without the shim on PATH** and you exercise the
+  gate's missing-tool assert for real.
+- Resolution outcomes (loopback-only, link-local-only, mixed, absent) are
+  controlled by `hosts.db` rather than by editing the developer's `/etc/hosts`,
+  which a test has no business doing.
+
+`GETENT_FIXTURE_DB` is required by the shim; unset, it exits non-zero rather
+than silently answering nothing, so a mis-invocation cannot look like a pass.
+
+## Relationship to molecule
+
+This is a developer tool, not a CI gate — CI globs `tests/assert-*.sh`, and this
+directory deliberately does not match. `molecule/preflight` remains the
+authority: it runs on the real EL 8/9/10 images, uses the real `getent`, and
+exercises the container-dependent gates this harness cannot (firewalld, port,
+rhsm). Run this while iterating; trust molecule before merging.
+
+## Coverage
+
+| Case | Proves |
+|---|---|
+| M1 | unset source fails, naming the variable |
+| M2 | a `null` override gets the gate's message, not a Jinja type error |
+| M3 | an absolute source absent **on the controller**, with the message pointing there |
+| M4 | a directory in place of a certificate |
+| M5 | `vault_pki` with an empty mount |
+| M6 | a **relative** source is skipped by the stat and reported, never rejected — the shape this project's own README examples use |
+| M7 | a symlinked source is accepted (`follow: true` is load-bearing) |
+| M8 | the gate is suppressed, not merely non-failing, when the operator stages TLS |
+| D1 | loopback-only resolution fails, naming the address |
+| D2 | link-local-only fails |
+| D3 | no resolution at all fails, with its own branch |
+| D4 | `vault_tls_source: vault_pki` arms the gate **even with pinned addresses**, because `tasks/tls.yml` issues against `ansible_fqdn` |
+| D5 | a routable answer passes, with the routable set exactly right |
+| D6 | loopback alongside a routable address does **not** mask it |
+| D7 | pinned addresses with no PKI remove the dependency entirely |

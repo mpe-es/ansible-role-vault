@@ -1,0 +1,6 @@
+127.0.1.1 dns-loopback-fixture.test
+::1 dns-loopback-fixture.test
+169.254.7.7 dns-linklocal-fixture.test
+10.99.0.1 dns-routable-fixture.test
+127.0.0.1 dns-mixed-fixture.test
+10.99.0.2 dns-mixed-fixture.test

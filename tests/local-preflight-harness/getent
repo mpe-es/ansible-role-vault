@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# getent shim: answers from a control file so the dns gate can be exercised
+# without touching this machine's /etc/hosts. Mirrors real getent's contract:
+# rc 0 with ahosts-shaped output when the key is known, rc 2 when it is not.
+db="${GETENT_FIXTURE_DB:?GETENT_FIXTURE_DB not set}"
+[ "$1" = "ahosts" ] || { echo "shim supports ahosts only" >&2; exit 1; }
+key="$2"
+out="$(awk -v k="$key" '$2 == k { print $1 }' "$db")"
+[ -n "$out" ] || exit 2
+for a in $out; do
+  printf '%s  STREAM %s\n%s  DGRAM\n%s  RAW\n' "$a" "$key" "$a" "$a"
+done
+exit 0

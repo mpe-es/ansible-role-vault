@@ -509,7 +509,7 @@
           expected exactly ['10.99.0.1'].
 
     # The polarity oracle. Every FIRES case above sets vault_api_addr to a URL
-    # containing the fqdn, so deleting the production `when: __vault_dns_advertised`
+    # containing the fqdn, so deleting the production `when: __vault_dns_required`
     # would not change the scenario at all. This is the case that notices -- the
     # same loopback-only name, with the advertised addresses pinned to literals.
     - name: "DID NOT FIRE - loopback-only FQDN but the advertised addresses are pinned"
