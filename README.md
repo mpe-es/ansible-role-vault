@@ -45,12 +45,16 @@ one of them applies and the other does not.
 | TLS material | `vault_manage_tls: false` **(the default)** | `vault_tls_cert_file`, `vault_tls_key_file` and `vault_tls_ca_file` all exist and are regular files (symlinks followed). Whether the Vault account can READ them is tracked separately |
 | Managed TLS inputs | `vault_manage_tls: true` | under `vault_tls_source: file`, `vault_tls_src_cert`/`_key`/`_ca` are **set**. An *absolute* path is additionally statted **on the Ansible controller** and must be readable — `copy` resolves `src` there, so checking the target would answer a different question. A *relative* path (`files/vault-tls.crt`, as the examples below use) is reported as unverifiable and left to `copy`'s own search path, never rejected. Under `vault_tls_source: vault_pki`, `vault_pki_mount` and `vault_pki_role` are set; reachability of the PKI engine is not proven (#80) |
 | API port | always | `vault_listener_port` is free, or already held by the Vault service itself. Requires `iproute` (`ss`) — a missing query tool is a hard failure, not a skip |
-| DNS | `vault_api_addr` or `vault_cluster_addr` still contain `ansible_fqdn` (the default) | the FQDN resolves **locally** to at least one address that is not loopback (`127.0.0.0/8`, `::1`) or link-local (`169.254.0.0/16`, `fe80::/10`). Checked with `getent ahosts`, which reports every address family — `getent hosts` returns the first match only and prefers IPv6, so a loopback AAAA masks a routable A. Pin `vault_api_addr`/`vault_cluster_addr` explicitly and this becomes a warning instead (#79) |
+| DNS | `vault_api_addr` or `vault_cluster_addr` still contain `ansible_fqdn` (the default), **or** `vault_tls_source: vault_pki` (which issues against `ansible_fqdn`) | the FQDN resolves **locally** to at least one address that is not loopback (`127.0.0.0/8`, `::1`) or link-local (`169.254.0.0/16`, `fe80::/10`). Checked with `getent ahosts`, which reports every address family — `getent hosts` returns the first match only and prefers IPv6, so a loopback AAAA masks a routable A. Pin `vault_api_addr`/`vault_cluster_addr` explicitly and this becomes a warning instead (#79) |
 
 Every gate above is a hard failure. The DNS gate is the one that changes shape:
 pin `vault_api_addr` and `vault_cluster_addr` to explicit reachable addresses and
-it downgrades to a warning, because the role then has no dependency on the
-hostname resolving.
+it downgrades to a warning — **unless** you also selected
+`vault_tls_source: vault_pki`, which issues a certificate whose common name is
+`ansible_fqdn` regardless of what the advertised addresses say. Note that the
+availability of `getent` itself is checked unconditionally and is a hard failure
+for everyone, the same posture the port gate takes for a missing `ss`: a host
+without it is broken, not misconfigured.
 
 **What the DNS gate does not prove.** It resolves the name the way the *target
 host* does, so it catches a name mapped to loopback or link-local, or one that

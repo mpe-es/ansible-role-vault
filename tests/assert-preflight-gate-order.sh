@@ -125,8 +125,9 @@ for gate, want in WANT_PREDICATES.items():
     missing = [w for w in want if w not in conds]
     if missing:
         fail.append(f"tasks/preflight/{gate}.yml no longer asserts {missing!r}. "
-                    f"Asserted conditions are {conds!r}. This gate has no Molecule "
-                    f"coverage, so nothing else would notice it being emptied.")
+                    f"Asserted conditions are {conds!r}. Molecule coverage for this "
+                    f"gate is partial or absent, so nothing else reliably notices "
+                    f"it being emptied.")
 
 # dns POLARITY (#79). The predicate above proves the gate asks about routable
 # addresses; these two checks prove it fires on the right hosts. The gate is a
@@ -181,7 +182,7 @@ if os.path.isfile(dns_path):
 
     # The assert must be gated ON the dependency, so a host with explicitly
     # pinned addresses is never failed for a name it does not use.
-    WANT_ASSERT_WHEN = "__vault_dns_advertised | bool"
+    WANT_ASSERT_WHEN = "__vault_dns_required | bool"
     gated = [t for t in dns_tasks
              if ("ansible.builtin.assert" in t or "assert" in t)
              and _norm(t.get("when", "")) == WANT_ASSERT_WHEN]
@@ -194,7 +195,7 @@ if os.path.isfile(dns_path):
     # The residual warning must remain for the pinned-address population, and
     # must be conditioned on BOTH the absence of the dependency and the absence
     # of a routable address -- dropping either warns every host or none.
-    WANT_WARN_WHEN = ["not (__vault_dns_advertised | bool)",
+    WANT_WARN_WHEN = ["not (__vault_dns_required | bool)",
                       "__vault_dns_routable | length == 0"]
     warns = [t for t in dns_tasks
              if "ansible.builtin.debug" in t

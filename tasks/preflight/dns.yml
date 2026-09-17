@@ -33,14 +33,43 @@
 #   prefers IPv6, so a loopback AAAA masks a routable A. ahosts reports every
 #   family, which is the set this gate needs.
 #
-#   POLARITY. This is a hard gate ONLY when the advertised addresses actually
-#   depend on this name -- that is, when vault_api_addr or vault_cluster_addr
-#   still contain ansible_fqdn, which is the default. An operator who pinned
-#   explicit addresses has no dependency on the FQDN resolving, so failing them
-#   would be wrong; they get a warning instead.
+#   POLARITY. This is a hard gate only when the ROLE needs the name to resolve:
+#   when vault_api_addr or vault_cluster_addr still contain ansible_fqdn (the
+#   default), OR when vault_tls_source is 'vault_pki', because tasks/tls.yml
+#   issues that certificate with `common_name: "{{ ansible_fqdn }}"` regardless
+#   of what the advertised addresses say. An operator with neither dependency
+#   gets a warning instead of a failure. An earlier draft armed on the addresses
+#   alone and claimed in three places that pinning them removed the dependency
+#   entirely -- `grep -rn ansible_fqdn` across the role disproves that.
 # NIST 800-53: SC-8, CM-6 (Configuration Settings)
 # Classification: UNCLASSIFIED
 ###############################################################################
+# `command -v getent` as its own probe, exactly as tasks/preflight/port.yml
+# does for `ss` and tasks/preflight/chrony.yml for `chronyc`. An earlier draft
+# tried to discriminate on the resolve command's own rc and could not: a missing
+# binary makes ansible.builtin.command fail_json with rc = ENOENT = 2, which is
+# byte-identical to getent's own "key not found" exit. rc 127 is a SHELL
+# convention and `command` execs directly, so it never appears.
+- name: Detect getent
+  ansible.builtin.command:
+    cmd: command -v getent
+  register: __vault_getent_bin
+  check_mode: false
+  changed_when: false
+  failed_when: false
+  environment:
+    LC_ALL: C
+
+- name: "Preflight | dns | resolver query tool is available"
+  ansible.builtin.assert:
+    that:
+      - __vault_getent_bin.rc == 0
+    fail_msg: >-
+      `getent` is not on PATH, so this gate cannot determine whether
+      {{ ansible_fqdn }} resolves. getent ships with glibc and should always be
+      present; its absence is a broken host, not a DNS problem. Install glibc-common.
+    success_msg: "Resolver query tool: present"
+
 - name: Resolve the host FQDN across all address families
   ansible.builtin.command:
     cmd: "getent ahosts {{ ansible_fqdn }}"
@@ -52,21 +81,6 @@
   failed_when: false
   environment:
     LC_ALL: C
-
-# getent's contract: 0 = found, 2 = key not found. ANY other rc means the probe
-# itself could not answer (127 = no getent on the host), which is not the same
-# statement as "the name does not resolve" and must not be reported as one --
-# the port gate makes the same distinction for a missing `ss` (README).
-- name: "Preflight | dns | the resolver probe could run"
-  ansible.builtin.assert:
-    that:
-      - __vault_dns_check.rc in [0, 2]
-    fail_msg: >-
-      `getent ahosts {{ ansible_fqdn }}` exited {{ __vault_dns_check.rc }}, which
-      is neither 0 (resolved) nor 2 (not found), so this gate cannot tell whether
-      the name resolves. getent is part of glibc and should always be present;
-      rc 127 means it is not on PATH. stderr: {{ __vault_dns_check.stderr | default('') | trim }}
-    success_msg: "Resolver probe: usable (rc {{ __vault_dns_check.rc }})"
 
 # First whitespace-delimited field of each ahosts line is the address; the same
 # address repeats once per socket type (STREAM/DGRAM/RAW), hence unique.
@@ -95,6 +109,19 @@
          and ((ansible_fqdn in (vault_api_addr | default('', true)))
               or (ansible_fqdn in (vault_cluster_addr | default('', true)))) }}
 
+# The addresses are not the only consumer of this name. tasks/tls.yml issues a
+# Vault-PKI certificate with `common_name: "{{ ansible_fqdn }}"`, so an operator
+# who pinned both advertised addresses AND selected vault_pki still depends on
+# the FQDN -- and would otherwise be downgraded to a warning while the role mints
+# a certificate for a name nothing resolves. An earlier draft asserted in three
+# artifacts that pinning removes the dependency; it does not.
+- name: Determine whether the role needs this hostname to resolve
+  ansible.builtin.set_fact:
+    __vault_dns_required: >-
+      {{ (__vault_dns_advertised | bool)
+         or ((vault_manage_tls | default(false) | bool)
+             and (vault_tls_source | default('file')) == 'vault_pki') }}
+
 - name: "Preflight | dns | FQDN resolves to a reachable address"
   ansible.builtin.assert:
     that:
@@ -107,13 +134,19 @@
       {% else %}
       -- it does not resolve at all
       {% endif %}
+      {% if __vault_dns_advertised | bool %}
       , and vault_api_addr / vault_cluster_addr are derived from it, so Vault
       would advertise an address no client or Raft peer can reach. Fix the DNS
       record or the /etc/hosts entry for this host, or set vault_api_addr and
-      vault_cluster_addr to explicit reachable addresses. A Debian-style
-      127.0.1.1 line is the usual cause.
+      vault_cluster_addr to explicit reachable addresses.
+      {% else %}
+      , and vault_tls_source is 'vault_pki', so the role would issue a listener
+      certificate whose common name is this unresolvable FQDN. Fix the DNS record
+      or the /etc/hosts entry for this host.
+      {% endif %}
+      A Debian-style 127.0.1.1 line is the usual cause.
     success_msg: "DNS: {{ ansible_fqdn }} -> {{ __vault_dns_routable | join(', ') }}"
-  when: __vault_dns_advertised | bool
+  when: __vault_dns_required | bool
 
 # The operator pinned explicit advertised addresses, so an unreachable hostname
 # breaks nothing the role does -- but it is still worth saying out loud, because
@@ -125,5 +158,5 @@
       vault_api_addr and vault_cluster_addr are set explicitly, so this does not
       block the run -- but remove those overrides and the deployment breaks.
   when:
-    - not (__vault_dns_advertised | bool)
+    - not (__vault_dns_required | bool)
     - __vault_dns_routable | length == 0

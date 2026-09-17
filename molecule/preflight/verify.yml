@@ -278,29 +278,6 @@
                 | map(attribute='msg', default='') | join(' ') is search('vault_tls_src_cert is empty')
             fail_msg: "wrong cause: {{ ansible_failed_result | default('') }}"
 
-    - name: "FIRES - source path is relative, not absolute"
-      block:
-        - name: Run managed_tls with a relative source path
-          ansible.builtin.include_role:
-            name: ansible-role-vault
-            tasks_from: preflight/managed_tls.yml
-          vars:
-            vault_manage_tls: true
-            vault_tls_source: file
-            vault_tls_src_cert: certs/vault.crt
-            vault_tls_src_key: /tmp/managed-tls-fixtures/good.key
-            vault_tls_src_ca: /tmp/managed-tls-fixtures/good.ca
-        - name: A relative path should not have passed
-          ansible.builtin.fail:
-            msg: "managed_tls did not fire for a relative source path"
-      rescue:
-        - name: Assert the message names the absolute-path contract
-          ansible.builtin.assert:
-            that:
-              - ansible_failed_result.results | default([])
-                | map(attribute='msg', default='') | join(' ') is search('not an absolute path')
-            fail_msg: "wrong cause: {{ ansible_failed_result | default('') }}"
-
     - name: "FIRES - source is absent on the CONTROLLER"
       block:
         - name: Run managed_tls against a controller path that does not exist
@@ -509,6 +486,9 @@
           ansible.builtin.assert:
             that:
               - ansible_failed_result.msg | default('') is search('resolves to no reachable address')
+              # Names the fixture: without this the case also passes when the
+              # 169.254 fixture never landed and the name simply did not resolve.
+              - ansible_failed_result.msg | default('') is search('169.254.7.7')
             fail_msg: "wrong cause: {{ ansible_failed_result | default('') }}"
 
     - name: "PASSES - FQDN resolves to a routable address"
@@ -544,11 +524,11 @@
     - name: Assert the dns gate was suppressed, not merely non-failing
       ansible.builtin.assert:
         that:
-          - not (__vault_dns_advertised | bool)
+          - not (__vault_dns_required | bool)
           - __vault_dns_routable | length == 0
         fail_msg: >-
           The dns gate did not treat pinned addresses as removing the dependency:
-          advertised={{ __vault_dns_advertised | default('undefined') }},
+          required={{ __vault_dns_required | default('undefined') }},
           routable={{ __vault_dns_routable | default('undefined') }}. The same
           name failed two cases above, so "nothing failed" is also what a deleted
           when: condition looks like.

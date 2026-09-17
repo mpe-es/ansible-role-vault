@@ -8,6 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Preflight gate for the role-managed TLS path.** `vault_manage_tls: true` had
+  no preflight coverage at all: `vault_tls_src_cert`/`_key`/`_ca` and
+  `vault_pki_mount`/`_role` all default to `""` and pass argspec validation, so an
+  operator who enabled managed TLS and forgot the sources got a converged
+  repository, an installed package, created directories and applied SELinux
+  contexts — and only then a copy failure on an empty `src`. The new
+  `managed_tls` gate is the exact mirror of the existing `tls` gate's inverted
+  polarity. A source being **set** is always required — no search order rescues
+  an unset variable. Beyond that the gate verifies only what it can answer
+  without guessing: an **absolute** path is statted **on the Ansible controller**
+  (where `copy` resolves `src`; checking the target would answer a different
+  question) and must be readable, while a **relative** path — the
+  `files/vault-tls.crt` shape this project's own examples use — is reported as
+  unverifiable and left to `copy`'s search path, never rejected. Reimplementing
+  that search order inside a gate is how a gate becomes a subsystem. Also
+  documents that `vault_pki` cannot
+  bootstrap a first node, since issuing from Vault's PKI engine requires a Vault
+  already serving on the certificate being requested. (#80)
+
 - Initial Vault role implementing all nine task phases: install, user and
   directory layout, TLS, configuration, systemd, initialization, audit, STIG
   remediation, and verification. (#1)
@@ -77,6 +96,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [#69](https://github.com/mpe-es/ansible-role-vault/issues/69).
 
 ### Changed
+- **The DNS preflight check is now a conditional gate, not warn-only.** It probed
+  `getent hosts` and warned only on a non-zero rc, measuring *"did resolution
+  return an answer"* rather than *"is the answer reachable"* — while
+  `vault_api_addr` and `vault_cluster_addr` are both derived from that same name.
+  A Debian-style `127.0.1.1` line satisfied it completely; the host converged and
+  Vault then advertised an address no client or Raft peer could reach, surfacing
+  at cluster-join time far from its cause. It now resolves with `getent ahosts`
+  across every address family — `getent hosts` returns the first match only and
+  prefers IPv6, so a loopback AAAA masked a routable A — and requires at least
+  one address that is neither loopback nor link-local, the latter being what a
+  failed DHCP lease leaves behind. This is a **local** resolution check: it does
+  not prove a peer can resolve the name, because `nss-myhostname` answers with
+  the machine's own configured addresses, so a host with a working NIC and no DNS
+  record passes. The gate is armed **only when the advertised addresses still
+  depend on the hostname**. Pin `vault_api_addr`/`vault_cluster_addr` explicitly and the
+  role has no such dependency, so the check downgrades to a warning rather than
+  failing a deployment it does not affect. (#79)
+
 - Molecule now executes the real role rather than a hand-copied replica, so
   the tests exercise what ships. (#50, closes #43)
 - Initialization is now a single transaction that unseals and enables audit by
@@ -96,13 +133,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 **BREAKING CHANGES**
 
-- **A host whose FQDN resolves only to loopback or link-local now fails
-  preflight** when `vault_api_addr`/`vault_cluster_addr` are left at their
-  defaults. Such a host converged before this release and produced a Vault
-  advertising an address nothing could reach. Fix the DNS record or the
-  `/etc/hosts` entry, or pin both addresses explicitly — pinning them downgrades
-  the check to a warning, because the role then has no dependency on the name.
-  (#79)
+- **A host whose FQDN does not resolve, or resolves only to loopback or
+  link-local, now fails preflight** when the role still needs that name. All
+  three populations converged before this release and produced a Vault
+  advertising an address nothing could reach; the previous check warned and
+  continued. The gate is armed when `vault_api_addr`/`vault_cluster_addr` are
+  left at their defaults (they are templated from `ansible_fqdn`), **or** when
+  `vault_tls_source: vault_pki` is selected, because `tasks/tls.yml` issues that
+  certificate with `common_name: "{{ ansible_fqdn }}"` whatever the advertised
+  addresses say. Fix the DNS record or the `/etc/hosts` entry; pinning both
+  addresses downgrades the check to a warning only when PKI issuance is not also
+  in play. Note the gate now also hard-fails when `getent` is absent, which is a
+  broken host rather than a DNS problem — the same posture the port gate takes
+  for a missing `ss`. (#79)
 
 
 - **`--tags preflight` now runs the gates.** It previously matched nothing and
@@ -118,43 +161,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The port gate requires `iproute`.** A missing `ss` is a hard failure, not a
   skip: degrading to a skip would silently restore the inert gate this repairs.
   Install `iproute` on minimal images. (#36)
-
-### Added
-- **Preflight gate for the role-managed TLS path.** `vault_manage_tls: true` had
-  no preflight coverage at all: `vault_tls_src_cert`/`_key`/`_ca` and
-  `vault_pki_mount`/`_role` all default to `""` and pass argspec validation, so an
-  operator who enabled managed TLS and forgot the sources got a converged
-  repository, an installed package, created directories and applied SELinux
-  contexts — and only then a copy failure on an empty `src`. The new
-  `managed_tls` gate is the exact mirror of the existing `tls` gate's inverted
-  polarity, and proves the sources are set, absolute, and readable **on the
-  Ansible controller**, since that is where `copy` resolves `src`; checking the
-  target host would answer a different question. The absolute-path requirement
-  is a deliberate narrowing of the contract, documented in
-  `meta/argument_specs.yml` — `copy` also accepts a path relative to the role's
-  `files/` directory, and reimplementing Ansible's search order inside a gate is
-  how a gate becomes a subsystem. Also documents that `vault_pki` cannot
-  bootstrap a first node, since issuing from Vault's PKI engine requires a Vault
-  already serving on the certificate being requested. (#80)
-
-### Changed
-- **The DNS preflight check is now a conditional gate, not warn-only.** It probed
-  `getent hosts` and warned only on a non-zero rc, measuring *"did resolution
-  return an answer"* rather than *"is the answer reachable"* — while
-  `vault_api_addr` and `vault_cluster_addr` are both derived from that same name.
-  A Debian-style `127.0.1.1` line satisfied it completely; the host converged and
-  Vault then advertised an address no client or Raft peer could reach, surfacing
-  at cluster-join time far from its cause. It now resolves with `getent ahosts`
-  across every address family — `getent hosts` returns the first match only and
-  prefers IPv6, so a loopback AAAA masked a routable A — and requires at least
-  one address that is neither loopback nor link-local, the latter being what a
-  failed DHCP lease leaves behind. This is a **local** resolution check: it does
-  not prove a peer can resolve the name, because `nss-myhostname` answers with
-  the machine's own configured addresses, so a host with a working NIC and no DNS
-  record passes. The gate is armed **only when the advertised addresses still
-  depend on the hostname**. Pin `vault_api_addr`/`vault_cluster_addr` explicitly and the
-  role has no such dependency, so the check downgrades to a warning rather than
-  failing a deployment it does not affect. (#79)
 
 ### Fixed
 - **Operator-staged TLS material was never made readable by the Vault service.**
