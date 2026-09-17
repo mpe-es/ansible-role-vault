@@ -1,6 +1,21 @@
 # Python dependencies for ansible-role-vault
 # Source file for pip-compile. DO NOT edit requirements.txt directly.
-# Regenerate with: pip-compile --generate-hashes requirements.in
+#
+# REGENERATE REPRODUCIBLY. The lock is a generated artifact and must be produced
+# on the platform CI installs it on, or the hash set drifts: --generate-hashes
+# enumerates the wheels the resolver can SEE, which depends on OS, architecture
+# and Python version. Regenerating on macOS rewrote ~184 lines for no semantic
+# reason. CI is ubuntu-latest x86_64 with Python 3.11, so:
+#
+#   docker run --rm --platform linux/amd64 -v "$PWD:/w" -w /w python:3.11-slim \
+#     sh -c 'pip install -q pip-tools && \
+#            pip-compile --generate-hashes --output-file=requirements.txt requirements.in'
+#
+# Run it against the EXISTING requirements.txt, never a fresh path. pip-compile
+# honours the pins already in its output file, so an unrelated transitive is not
+# silently upgraded -- a fresh-path run pulled urllib3 2.8.0, which was ONE DAY
+# OLD and inside the 7-day cooldown floor .github/dependabot.yml sets precisely
+# to catch a malicious or yanked upstream release.
 #
 # Classification: UNCLASSIFIED
 

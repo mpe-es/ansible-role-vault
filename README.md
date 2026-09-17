@@ -170,8 +170,25 @@ for supply chain integrity (NIST 800-53 SI-7). To regenerate after updating
 `requirements.in`:
 
 ```bash
-pip-compile --generate-hashes requirements.in
+docker run --rm --platform linux/amd64 -v "$PWD:/w" -w /w python:3.11-slim \
+  sh -c 'pip install -q pip-tools && \
+         pip-compile --generate-hashes --output-file=requirements.txt requirements.in'
 ```
+
+**Run it in that container, and against the existing `requirements.txt`.** Two
+reasons, both measured rather than assumed:
+
+- `--generate-hashes` enumerates the wheels the resolver can *see*, which depends
+  on OS, architecture and Python version. CI installs on `ubuntu-latest` x86_64
+  with Python 3.11; regenerating on macOS rewrote ~184 lines for no semantic
+  reason, so the lock would no longer be reproducible from its own documented
+  command.
+- `pip-compile` honours the pins already present in its output file. Pointed at a
+  fresh path it re-resolves everything and silently upgraded an unrelated
+  transitive (`urllib3`) to a release **one day old** — inside the 7-day cooldown
+  floor `.github/dependabot.yml` sets precisely so a malicious or yanked upstream
+  release has time to be caught. Dependency *upgrades* belong to Dependabot,
+  which enforces that cooldown; regeneration should only add what you asked for.
 
 ### Execution Environment (AAP)
 
