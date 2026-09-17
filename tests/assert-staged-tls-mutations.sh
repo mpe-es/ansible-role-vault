@@ -40,6 +40,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 python3 - "$ROOT" <<'PY'
 import os, shutil, subprocess, sys, tempfile
+import yaml
 
 root = sys.argv[1]
 GUARD = 'tests/assert-staged-tls-posture.sh'
@@ -62,7 +63,11 @@ for anchor in (INS, ENF, REP, SEL):
 I_INS, I_ENF, I_REP = (sys_src.index(x) for x in (INS, ENF, REP))
 I_SEL = sys_src.index(SEL, I_REP)
 # The '#####' banner line above the SELinux header belongs to that section.
-I_END = sys_src.rindex('#' * 40, I_REP, I_SEL)
+_BANNER = sys_src.rindex('#' * 40, I_REP, I_SEL)
+# rindex returns the LAST start offset of a 40-char run inside that 79-hash
+# banner -- i.e. 39 characters into the line. Splicing there puts a task name
+# inside a comment and makes its remaining lines keys of the previous task.
+I_END = sys_src.rindex('\n', 0, _BANNER) + 1
 
 SLICES = {'stat': (I_INS, I_ENF), 'enforce': (I_ENF, I_REP), 'report': (I_REP, I_END)}
 
@@ -96,6 +101,56 @@ SECOND_COPY = '''
     group: vault
     mode: '0600'
 '''
+
+
+SECOND_UNBOUNDED = '''
+- name: Converge staged TLS material (simplified)
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: touch
+    follow: true
+    owner: root
+    group: "{{ vault_group }}"
+    mode: "{{ vault_tls_file_mode }}"
+  loop:
+    - "{{ vault_tls_cert_file }}"
+    - "{{ vault_tls_key_file }}"
+    - "{{ vault_tls_ca_file }}"
+'''
+
+SECOND_LITERAL = '''
+- name: Converge staged TLS material by literal path
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: touch
+    owner: root
+    group: "{{ vault_group }}"
+    mode: "{{ vault_tls_file_mode }}"
+  loop:
+    - /opt/vault/tls/tls.crt
+    - /opt/vault/tls/tls.key
+    - /opt/vault/tls/ca.crt
+'''
+
+
+def wrap_in_block(s):
+    """Hoist the thrice-repeated condition into an ancestor block -- the obvious
+    tidy-up -- with the polarity slipped. Every inner term stays intact."""
+    region = s[I_INS:I_END]
+    indented = '\n'.join(('  ' + ln) if ln.strip() else ln
+                          for ln in region.rstrip('\n').split('\n'))
+    block = ('- name: Operator-staged TLS material\n'
+             '  when: vault_manage_tls | bool\n'
+             '  block:\n' + indented + '\n\n')
+    return s[:I_INS] + block + s[I_END:]
+
+
+def reorder(s):
+    """Put the consumers before the producer: the register is undefined, the
+    loop falls back to default([]) and the role silently does nothing."""
+    stat_blk = s[I_INS:I_ENF]
+    rest = s[I_ENF:I_END]
+    return s[:I_INS] + rest + stat_blk + s[I_END:]
 
 
 def edit(where, old, new):
@@ -169,20 +224,20 @@ KILL = [
 
     # --- the stat-shape bounds, each inverted and each dropped.
     ("invert the symlink bound", edit('enforce', ISLNK, '    - item.stat.islnk | default(false)'),
-     None, "islnk"),
-    ("drop the symlink bound", edit('enforce', '\n' + ISLNK, ''), None, "islnk"),
+     None, "not (item.stat.islnk | default(false))"),
+    ("drop the symlink bound", edit('enforce', '\n' + ISLNK, ''), None, "not (item.stat.islnk | default(false))"),
     ("invert the regular-file bound",
-     edit('enforce', ISREG, '    - not (item.stat.isreg | default(false))'), None, "isreg"),
-    ("drop the regular-file bound", edit('enforce', '\n' + ISREG, ''), None, "isreg"),
+     edit('enforce', ISREG, '    - not (item.stat.isreg | default(false))'), None, "item.stat.isreg | default(false)"),
+    ("drop the regular-file bound", edit('enforce', '\n' + ISREG, ''), None, "item.stat.isreg | default(false)"),
     ("invert the hardlink bound",
-     edit('enforce', NLINK, '    - item.stat.nlink | default(1) != 1'), None, "nlink"),
-    ("drop the hardlink bound", edit('enforce', '\n' + NLINK, ''), None, "nlink"),
+     edit('enforce', NLINK, '    - item.stat.nlink | default(1) != 1'), None, "item.stat.nlink | default(1) == 1"),
+    ("drop the hardlink bound", edit('enforce', '\n' + NLINK, ''), None, "item.stat.nlink | default(1) == 1"),
     ("invert the existence bound",
-     edit('enforce', EXISTS, '    - not (item.stat.exists | default(false))'), None, "exists"),
-    ("drop the existence bound", edit('enforce', '\n' + EXISTS, ''), None, "exists"),
+     edit('enforce', EXISTS, '    - not (item.stat.exists | default(false))'), None, "item.stat.exists | default(false)"),
+    ("drop the existence bound", edit('enforce', '\n' + EXISTS, ''), None, "item.stat.exists | default(false)"),
     ("drop the failed-stat cause from the REPORT or-chain",
      edit('report', '    - item.stat is not defined\n      or not', '    - not'), None,
-     "failed stat"),
+     "missing the exact disjunct `item.stat is not defined`"),
 
     # --- module arguments.
     ("path targets the DIRECTORY, not the loop item",
@@ -214,11 +269,34 @@ KILL = [
     ("narrow the stat loop to 2 of 3 paths",
      edit('stat', '    - "{{ vault_tls_ca_file }}"\n', ''), None, "no stat task loops"),
 
-    # --- a second writer undoing the first.
+    # --- structure: conditions and order that no per-task check can see.
+    ("hoist the condition into an ancestor block with inverted polarity",
+     wrap_in_block, None, "not top-level"),
+    ("reorder so the enforcer runs before the stat that feeds it",
+     reorder, None, "out of order"),
+
+    # --- a second writer undoing the first. EXPECT_TASK proves the splice
+    # actually produced the task: an earlier revision spliced into the middle
+    # of a banner comment and scored kills off a mangled report task.
     ("add a second file task loosening the trio to 0666", append_task(SECOND_FILE), None,
      "also writes the staged"),
     ("add a second copy task handing the key to vault:vault", append_task(SECOND_COPY), None,
      "also writes the staged"),
+    ("add a second writer with correct posture but NO bounds",
+     append_task(SECOND_UNBOUNDED), None, "also writes the staged"),
+    ("add a second writer naming the trio by literal path",
+     append_task(SECOND_LITERAL), None, "also writes the staged"),
+
+    # --- the report's or-chain: polarity and the joining operator.
+    ("flip the report's dirname disjunct (out-of-tree becomes silent)",
+     edit('report', 'or item.item | dirname != vault_tls_dir',
+          'or item.item | dirname == vault_tls_dir'), None,
+     "missing the exact disjunct"),
+    ("collapse the report's or-chain to and (unsatisfiable, never fires)",
+     edit('report', '\n      or ', '\n      and '), None, "joins its causes with `and`"),
+    ("drop the symlink disjunct from the report",
+     edit('report', '\n      or (item.stat.islnk | default(false))', ''), None,
+     "missing the exact disjunct"),
 
     # --- the premise in tasks/main.yml, and every way to break it.
     ("ungate tls.yml in tasks/main.yml", None,
@@ -251,6 +329,24 @@ SURVIVE = [
 ]
 
 
+def parses(text, expect_task=None):
+    """The mutated document must load, and must contain the task it claims.
+
+    Without this a splice into a comment scores a 'kill' off an unrelated
+    complaint -- which is exactly what the two second-writer cases did.
+    """
+    try:
+        doc = yaml.safe_load(text)
+    except yaml.YAMLError as e:
+        return f"mutated tasks/system.yml does not parse: {e.__class__.__name__}"
+    if expect_task:
+        names = [t.get('name') for t in (doc or []) if isinstance(t, dict)]
+        if expect_task not in names:
+            return (f"mutation claims to add {expect_task!r} but the loaded task "
+                    f"list is {names!r}")
+    return None
+
+
 def run(new_sys, new_main):
     with tempfile.TemporaryDirectory() as tmp:
         os.makedirs(os.path.join(tmp, 'tasks'))
@@ -262,12 +358,29 @@ def run(new_sys, new_main):
                               capture_output=True, text=True)
 
 
+EXPECT_TASK = {
+    "add a second file task loosening the trio to 0666":
+        "Second file task re-posturing the trio",
+    "add a second copy task handing the key to vault:vault":
+        "Second copy task re-posturing the key",
+    "add a second writer with correct posture but NO bounds":
+        "Converge staged TLS material (simplified)",
+    "add a second writer naming the trio by literal path":
+        "Converge staged TLS material by literal path",
+    "hoist the condition into an ancestor block with inverted polarity":
+        "Operator-staged TLS material",
+}
+
 bad = []
 for label, fs, fm, expect in KILL:
     new_sys = fs(sys_src) if fs else sys_src
     new_main = fm(main_src) if fm else main_src
     if new_sys == sys_src and new_main == main_src:
         bad.append(f"NO-OP (anchor stale): {label}")
+        continue
+    broken = parses(new_sys, EXPECT_TASK.get(label))
+    if broken:
+        bad.append(f"MUTATION IS NOT WHAT IT CLAIMS: {label} -- {broken}")
         continue
     p = run(new_sys, new_main)
     if p.returncode == 0:

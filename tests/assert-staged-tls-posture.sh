@@ -48,6 +48,9 @@ import sys, os, re, yaml
 
 root = sys.argv[1]
 STAGED = ('vault_tls_cert_file', 'vault_tls_key_file', 'vault_tls_ca_file')
+# The defaults, for writers that name a path literally instead of a variable.
+LITERALS = ('/opt/vault/tls/tls.crt', '/opt/vault/tls/tls.key',
+            '/opt/vault/tls/ca.crt')
 fail = []
 
 tasks = yaml.safe_load(open(os.path.join(root, 'tasks/system.yml'))) or []
@@ -80,6 +83,21 @@ def has_term(terms, pattern):
     """True when SOME whole term matches `pattern` end-to-end (parens tolerated)."""
     rx = re.compile(r'^\(?\s*' + pattern + r'\s*\)?$')
     return any(rx.match(t) for t in terms)
+
+
+def top_index(t):
+    """Position of `t` in the TOP-LEVEL task list, or None when it is nested.
+
+    A task inside a block inherits that block's when:, which this guard cannot
+    see -- wrapping the region in `block: {when: vault_manage_tls | bool}` skips
+    all three tasks on the default path with every inner term still intact.
+    Requiring top level makes the ancestor condition impossible instead of
+    trying to evaluate it.
+    """
+    for i, x in enumerate(tasks):
+        if x is t:
+            return i
+    return None
 
 
 # --- 1. The inspector: a stat that sees the LINK, over all three staged paths.
@@ -214,19 +232,46 @@ elif reporters:
     if any(t.strip().lower() in ('false', 'no', 'off') for t in rterms):
         fail.append(f"staged-TLS report when: contains an always-false term "
                     f"({rterms!r}); every exclusion would be silent")
-    chain = ' '.join(rterms)
-    # The failed-stat shape (ENOTDIR and friends) returns NO stat key. Requiring
-    # `item.stat is defined` here made it fall through BOTH tasks and vanish.
-    if 'item.stat is not defined' not in chain:
-        fail.append(f"staged-TLS report when: does not treat a failed stat as a "
-                    f"reportable cause (found {rterms!r}); stat fail_json's on "
-                    "every OSError but ENOENT, returning no stat key, and that "
-                    "shape would be silently skipped by the enforcer too")
-    for cause in ('exists', 'isreg', 'islnk', 'nlink', 'dirname'):
-        if cause not in chain:
-            fail.append(f"staged-TLS report when: never fires for the {cause} "
-                        f"exclusion (found {rterms!r}); it must be the exact "
-                        "complement of the enforcement")
+    # The or-chain is ONE yaml term. Substring-checking its causes cannot see
+    # polarity (`dirname != dir` flipped to `==` silently drops the shared-anchor
+    # case) nor the joining operator (`or` collapsed to `and` makes the chain
+    # unsatisfiable and the report unreachable). Split and match each disjunct.
+    chains = [t for t in rterms if ' or ' in t]
+    if not chains:
+        fail.append(f"staged-TLS report when: has no or-chain of exclusion causes "
+                    f"(found {rterms!r}); it must be the exact complement of the "
+                    "enforcement")
+    else:
+        chain = chains[0]
+        if ' and ' in chain:
+            fail.append(f"staged-TLS report when: joins its causes with `and` "
+                        f"({chain!r}); the chain is then unsatisfiable and the "
+                        "report can never fire")
+        disjuncts = [' '.join(d.split()) for d in chain.split(' or ')]
+        COMPLEMENT = [
+            (r'item\.stat is not defined',
+             'item.stat is not defined',
+             "stat fail_json's on every OSError but ENOENT, returning no stat "
+             "key; without this term that shape falls through BOTH tasks"),
+            (r'not\s*\(\s*item\.stat\.exists\s*\|\s*default\(\s*false\s*\)\s*\)',
+             'not (item.stat.exists | default(false))', "missing paths"),
+            (r'not\s*\(\s*item\.stat\.isreg\s*\|\s*default\(\s*false\s*\)\s*\)',
+             'not (item.stat.isreg | default(false))', "directories and devices"),
+            (r'\(?\s*item\.stat\.islnk\s*\|\s*default\(\s*false\s*\)\s*\)?',
+             '(item.stat.islnk | default(false))', "symlinks"),
+            (r'\(?\s*item\.stat\.nlink\s*\|\s*default\(\s*1\s*\)\s*\)?\s*!=\s*1',
+             '(item.stat.nlink | default(1)) != 1', "hardlinks"),
+            (r'item\.item\s*\|\s*dirname\s*!=\s*vault_tls_dir',
+             'item.item | dirname != vault_tls_dir',
+             "material outside vault_tls_dir -- the shared-anchor case README "
+             "names explicitly"),
+        ]
+        for pattern, literal, why in COMPLEMENT:
+            if not any(re.match(r'^\(?\s*' + pattern + r'\s*\)?$', d) for d in disjuncts):
+                fail.append(f"staged-TLS report when: is missing the exact "
+                            f"disjunct `{literal}` (found {disjuncts!r}) -- "
+                            f"{why} would be silently skipped while README, "
+                            "CHANGELOG and argument_specs all promise a report")
 
 # --- 4. No OTHER task may re-posture the staged trio. Scans every module that
 # can write a file's ownership, not just `file` -- `copy` and `template` set
@@ -238,20 +283,39 @@ for name in ('file', 'ansible.builtin.file', 'copy', 'ansible.builtin.copy',
         if enforcers and t is enforcers[0][0]:
             continue
         blob = str(t.get('loop', '')) + str(m.get('path', '')) + str(m.get('dest', ''))
-        if not any(v in blob for v in STAGED):
+        # Match the literal default paths too: a second writer naming
+        # /opt/vault/tls/tls.key directly -- the form every molecule fixture
+        # uses -- mentions no variable at all.
+        if not any(v in blob for v in STAGED + LITERALS):
             continue
+        # REJECTED OUTRIGHT, not posture-checked. A second writer that keeps
+        # root:vault 0640 but adds `state: touch` and `follow: true` re-admits
+        # every defect the bounds above exist to prevent, through a parallel
+        # surface. There is exactly one writer of this material, or the guard
+        # is meaningless.
         label = t.get('name', '<unnamed>')
-        if m.get('owner') != 'root':
-            fail.append(f"tasks/system.yml: task {label!r} also writes the staged "
-                        f"TLS trio with owner={m.get('owner')!r}; only root may own "
-                        "the material that defines the service's posture (#38)")
-        if 'vault_group' not in str(m.get('group', '')):
-            fail.append(f"tasks/system.yml: task {label!r} also writes the staged "
-                        f"TLS trio with group={m.get('group')!r}, not vault_group")
-        if 'vault_tls_file_mode' not in str(m.get('mode', '')):
-            fail.append(f"tasks/system.yml: task {label!r} also writes the staged "
-                        f"TLS trio with mode={m.get('mode')!r}, not "
-                        "vault_tls_file_mode")
+        fail.append(f"tasks/system.yml: task {label!r} also writes the staged TLS "
+                    "trio; exactly one task may, so its bounds (state, follow, "
+                    "dirname, islnk, nlink) cannot be bypassed by a sibling")
+
+# --- 4b. Placement and order. Every term above is read from a task in
+# isolation; neither an ancestor block's when: nor the execution order is
+# visible to any of them, and both regress #77 in full while leaving every
+# inner term intact.
+if inspectors and enforcers and reporters:
+    idx = {'stat': top_index(inspectors[0][0]),
+           'enforce': top_index(enforcers[0][0]),
+           'report': top_index(reporters[0])}
+    nested = [k for k, v in idx.items() if v is None]
+    if nested:
+        fail.append(f"staged-TLS {', '.join(nested)} task(s) are not top-level in "
+                    "tasks/system.yml; an enclosing block's when: would gate them "
+                    "invisibly to every check above")
+    elif not idx['stat'] < idx['enforce'] < idx['report']:
+        fail.append(f"staged-TLS tasks are out of order ({idx}); the enforcement "
+                    "and the report both consume the stat's register, and an "
+                    "undefined register loops over `default([])` -- doing nothing, "
+                    "silently")
 
 # --- 5. The premise: tasks/tls.yml really is gated off on the default path.
 gated = False

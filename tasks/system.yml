@@ -73,8 +73,10 @@
 # TLS material it was told the operator would supply. A missing path is neither
 # created nor fatal: the when: below excludes it and the report task explains it.
 #
-# TWO BOUNDS, both load-bearing, because vault_tls_cert_file/_key_file/_ca_file
-# are free-form `type: path` variables and this task WRITES to whatever they name:
+# FIVE EXCLUSIONS, every one load-bearing, because vault_tls_cert_file/_key_file/
+# _ca_file are free-form `type: path` variables and this task WRITES to whatever
+# they name. The two scope bounds are (1) and (2); (3)-(5) keep `state: file`
+# from aborting the play or converging something that is not a certificate:
 #
 #   1. Only paths whose direct parent IS vault_tls_dir are converged. An operator
 #      may legitimately point vault_tls_ca_file at a SHARED anchor such as
@@ -89,8 +91,16 @@
 #      tasks/preflight/tls.yml:15-19 explicitly blesses symlinked material, so
 #      this shape is supported and must not be mutated or fatal here.
 #
-# Both excluded cases are REPORTED, not silently dropped, and both are readability
-# problems for the vault account that only #69 can properly evaluate.
+#   3. Hardlinks are excluded: one inode, several names, and the role cannot
+#      prove from here that the others are inside vault_tls_dir.
+#   4. Non-regular files are excluded: `mkdir /opt/vault/tls/tls.crt` makes
+#      state: file abort the play after the package phase.
+#   5. Missing paths are excluded: nothing to converge, and touch would
+#      manufacture a certificate.
+#
+# EVERY excluded path is REPORTED with its cause -- including one that cannot be
+# stat'd at all -- never silently dropped. All of them are readability problems
+# for the vault account that only #69 can properly evaluate.
 # NIST 800-53: AC-6 (Least Privilege), SC-8 (Transmission Confidentiality)
 ###############################################################################
 - name: Inspect operator-staged TLS material
@@ -172,11 +182,12 @@
       is the usual cause. Remove it and stage the real file; preflight rejects
       this host for the same reason when its tag is not skipped.
       {% elif (item.stat.nlink | default(1)) != 1 %}
-      {{ item.item }} is a hardlink ({{ item.stat.nlink }} links to the same
-      inode), so its posture was left untouched: changing it would change the
-      other name for that inode too, which is outside {{ vault_tls_dir }}.
-      Stage a copy instead, or make the shared inode readable by the
-      {{ vault_group }} group yourself. See issue #69.
+      {{ item.item }} is a hardlink ({{ item.stat.nlink }} names for one inode),
+      so its posture was left untouched: changing it changes every other name
+      for that inode, and the role cannot prove from here that they are all
+      inside {{ vault_tls_dir }}. Stage a copy instead, or make the shared inode
+      readable by the {{ vault_group }} group yourself. Resolving the other
+      names is issue #69.
       {% else %}
       {{ item.item }} is outside {{ vault_tls_dir }}, which the role does not
       own, so its posture was left untouched. Ensure it is readable by the
