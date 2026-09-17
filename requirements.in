@@ -1,6 +1,28 @@
 # Python dependencies for ansible-role-vault
 # Source file for pip-compile. DO NOT edit requirements.txt directly.
-# Regenerate with: pip-compile --generate-hashes requirements.in
+#
+# Dependency UPDATES are Dependabot's job -- .github/dependabot.yml sets the
+# cooldown floor and the grouping, and it maintains requirements.txt directly.
+# Do not hand-bump a version here or there.
+#
+# This file is edited only to ADD or REMOVE a dependency, which Dependabot does
+# not do. After editing, regenerate the lock on the platform CI installs it on:
+#
+#   docker run --rm --platform linux/amd64 -v "$PWD:/w" -w /w python:3.11-slim \
+#     sh -c 'pip install -q pip-tools && \
+#            pip-compile --generate-hashes --output-file=requirements.txt requirements.in'
+#
+# Two constraints, both measured rather than assumed:
+#
+#   * Run it in that container. --generate-hashes enumerates the wheels the
+#     resolver can SEE, which depends on OS, architecture and Python version.
+#     CI is ubuntu-latest x86_64 / Python 3.11; regenerating on macOS rewrote
+#     ~184 lines for no semantic reason.
+#
+#   * Run it against the EXISTING requirements.txt, never a fresh path.
+#     pip-compile honours the pins already in its output file, so nothing is
+#     silently upgraded behind Dependabot's back -- a fresh-path run pulled
+#     urllib3 2.8.0, one day old, inside the cooldown floor dependabot.yml sets.
 #
 # Classification: UNCLASSIFIED
 
@@ -8,3 +30,7 @@
 # https://pypi.org/project/hvac/
 # Supports Vault v1.4.7+, Python 3.8+
 hvac>=2.0.0
+
+# Address classification used by ansible.utils.ipaddr in tasks/preflight/dns.yml.
+# The collection declares netaddr>=0.10.1; it is a CONTROLLER-side requirement.
+netaddr>=0.10.1

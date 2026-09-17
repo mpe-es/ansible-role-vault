@@ -17,7 +17,8 @@ import glob, os, re, sys, yaml
 
 root = os.environ["ROOT"]
 bad = []
-for rel in ("molecule/preflight/verify.yml",):
+for rel in ("molecule/preflight/verify.yml",
+         "tests/local-preflight-harness/run.yml"):
     path = os.path.join(root, rel)
     if not os.path.isfile(path):
         continue

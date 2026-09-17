@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# `command` shim, for the same reason this directory shims `getent`: a host
+# difference between the harness's runner and the platforms the role supports.
+#
+# tasks/preflight/{dns,port,chrony}.yml probe with
+# `ansible.builtin.command: command -v <binary>`. That is deliberate and
+# documented in those files: bash ships /usr/bin/command on EL 8/9/10 (and on
+# macOS), so execvp resolves it with no shell, and switching to `shell:` would
+# trip ansible-lint's command-instead-of-shell for no gain.
+#
+# Ubuntu ships no such executable. The role never runs on Ubuntu -- the
+# os_family gate rejects it at Phase 1 -- but this harness does, on
+# ubuntu-latest in CI. Rather than weaken a probe that is correct on every
+# SUPPORTED platform to satisfy a runner the role refuses to touch, the harness
+# supplies the missing executable, exactly as it supplies getent on macOS.
+#
+# CONSEQUENCE, stated rather than buried: with this on PATH the harness does not
+# exercise the real execvp resolution of `command`. That behaviour is proven by
+# molecule/preflight on the actual ubi8/ubi9/ubi10 images, which is where it
+# matters. This harness proves the CLASSIFIER.
+set -euo pipefail
+[ "${1:-}" = "-v" ] || { echo "shim supports 'command -v <name>' only" >&2; exit 2; }
+target="${2:?command -v requires a name}"
+resolved="$(PATH="$PATH" type -P "$target" || true)"
+[ -n "$resolved" ] || exit 1
+printf '%s\n' "$resolved"

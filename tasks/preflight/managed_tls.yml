@@ -1,0 +1,177 @@
+---
+###############################################################################
+# Filename: tasks/preflight/managed_tls.yml
+# Role: ansible-role-vault
+# Summary: Preflight gate - the inputs the ROLE-MANAGED TLS path needs (issue
+#   #80). The exact mirror of tasks/preflight/tls.yml: that gate fires when
+#   vault_manage_tls is FALSE and proves the operator staged the material; this
+#   one fires when it is TRUE and proves the role has what it needs to place it.
+#
+#   Before this gate existed, vault_manage_tls: true had NO preflight coverage
+#   at all. vault_tls_src_cert/_key/_ca and vault_pki_mount/_role all default to
+#   "" and pass argspec validation as `type: path` / `type: str`, so an operator
+#   who enabled managed TLS and forgot the sources got a converged repository,
+#   an installed package, created directories and applied SELinux contexts, and
+#   THEN a copy failure on an empty src. That is the late-failure-after-mutation
+#   class Phase 1 exists to remove, on the one TLS path #36 did not gate.
+#
+#   The sources are paths on the ANSIBLE CONTROLLER, because ansible.builtin.copy
+#   resolves src there. A stat run on the managed host would be measuring the
+#   wrong machine and would pass or fail for unrelated reasons, so the probe is
+#   delegated to localhost with become: false -- the controller user is the one
+#   that must be able to read them.
+#
+#   RELATIVE PATHS ARE ACCEPTED AND NOT VERIFIED. `copy` resolves a relative src
+#   through Ansible's own search path (the role's files/, the playbook's files/,
+#   the playbook directory), and the README's own example playbooks ship
+#   `files/vault-tls.crt`. An earlier draft of this gate rejected those outright
+#   -- a hard failure for configurations that worked before it existed, which is
+#   not what a preflight gate is for. Reimplementing that search order here is
+#   the other wrong answer: it is how a gate grows into a subsystem (#36).
+#
+#   So the gate verifies what it can answer without guessing. An ABSOLUTE path is
+#   statted and must be readable; a RELATIVE one is reported as unverifiable and
+#   left to `copy`. The empty-variable case -- the actual #80 defect -- is a hard
+#   failure either way, because no search order rescues an unset source.
+#
+#   Scope: this gate proves the INPUTS exist and are readable. It does not
+#   contact Vault, so it cannot prove a vault_pki mount is reachable or that the
+#   role name issues -- and vault_pki cannot bootstrap a first node at all,
+#   since generating a listener certificate from Vault's PKI engine requires a
+#   Vault that is already serving on one. That constraint is documented in
+#   meta/argument_specs.yml rather than enforced here.
+# NIST 800-53: SC-8 (Transmission Confidentiality and Integrity), CM-6
+# Classification: UNCLASSIFIED
+###############################################################################
+- name: Verify the inputs role-managed TLS requires
+  when: vault_manage_tls | bool
+  block:
+    # Unconditional marker, as tasks/preflight/rhsm.yml carries. Without it a
+    # did-not-fire oracle cannot tell "the gate was suppressed because
+    # vault_manage_tls is false" from "the gate file was emptied" -- both look
+    # like a skipped register.
+    - name: "Preflight | managed_tls | managed-TLS checks apply"
+      ansible.builtin.assert:
+        that: [true]
+        success_msg: "Managed TLS: applies (source: {{ vault_tls_source }})"
+      register: __vault_managed_tls_marker
+
+    ###########################################################################
+    # vault_tls_source: file -- three controller-side paths
+    ###########################################################################
+    - name: Verify controller-side TLS sources
+      when: vault_tls_source == 'file'
+      block:
+        - name: "Preflight | managed_tls | source path is set"
+          ansible.builtin.assert:
+            that:
+              # default('', true) replaces a NULL override, not merely an
+              # undefined one: `vault_tls_src_cert:` with nothing after it is a
+              # common group_vars shape, and `None | length` raises a filter
+              # error instead of this task's remediation text.
+              - item.path | default('', true) | length > 0
+            fail_msg: >-
+              vault_manage_tls is true with vault_tls_source 'file', so the role
+              copies the {{ item.role }} from the Ansible controller -- but
+              {{ item.var }} is empty. Set it to the path of the
+              {{ item.role }} on the controller, or set vault_manage_tls: false
+              and stage the material on the target host instead.
+            success_msg: "{{ item.var }}: set"
+          loop: &vault_tls_src_trio
+            - {path: "{{ vault_tls_src_cert }}", role: "certificate", var: "vault_tls_src_cert"}
+            - {path: "{{ vault_tls_src_key }}", role: "private key", var: "vault_tls_src_key"}
+            - {path: "{{ vault_tls_src_ca }}", role: "CA certificate", var: "vault_tls_src_ca"}
+          loop_control:
+            label: "{{ item.var }}"
+
+        - name: Report sources this gate cannot verify
+          ansible.builtin.debug:
+            msg: >-
+              {{ item.var }} is '{{ item.path }}', a relative path.
+              ansible.builtin.copy will resolve it through Ansible's search path
+              (the role's files/, the playbook's files/, the playbook directory);
+              this gate does not reimplement that order, so it cannot confirm the
+              file exists before the run mutates the host. Give {{ item.var }} an
+              absolute controller path to have it verified here.
+          when: not (item.path is match('/'))
+          loop: *vault_tls_src_trio
+          loop_control:
+            label: "{{ item.var }}"
+          # Registered so a case can assert the report actually FIRED. README,
+          # argument_specs and CHANGELOG all promise relative sources are
+          # "reported"; without this the whole task was deletable green.
+          register: __vault_managed_tls_unverifiable
+
+        # ON THE CONTROLLER. copy resolves src there, so statting the managed
+        # host would answer a question nobody asked. become: false because the
+        # controller user -- not root on the target -- is the one that reads it.
+        - name: Stat the controller-side TLS sources
+          ansible.builtin.stat:
+            path: "{{ item.path }}"
+            follow: true
+            get_checksum: false
+            get_mime: false
+            get_attributes: false
+          register: __vault_managed_tls_stat
+          delegate_to: localhost
+          become: false
+          check_mode: false
+          failed_when: false
+          # Absolute only; a relative src was reported above and belongs to copy.
+          when: item.path is match('/')
+          loop: *vault_tls_src_trio
+          loop_control:
+            label: "{{ item.var }}"
+
+        - name: "Preflight | managed_tls | source is readable on the controller"
+          ansible.builtin.assert:
+            that:
+              - item.stat is defined
+              - item.stat.exists | default(false)
+              - item.stat.isreg | default(false)
+              - item.stat.readable | default(false)
+            fail_msg: >-
+              {% if item.stat is not defined %}
+              {{ item.item.path }} ({{ item.item.var }}) could not be inspected
+              on the Ansible controller: {{ item.msg | default('unknown error') }}.
+              {% elif not (item.stat.exists | default(false)) %}
+              {{ item.item.path }} ({{ item.item.var }}) does not exist on the
+              Ansible controller. vault_tls_source is 'file', so the
+              {{ item.item.role }} is read from the CONTROLLER, not the target
+              host -- check the path against the machine running ansible-playbook.
+              {% elif not (item.stat.isreg | default(false)) %}
+              {{ item.item.path }} ({{ item.item.var }}) exists on the controller
+              but is not a regular file, so the {{ item.item.role }} cannot be
+              read from it.
+              {% else %}
+              {{ item.item.path }} ({{ item.item.var }}) is not readable by the
+              user running ansible-playbook, so the {{ item.item.role }} cannot
+              be copied to the target.
+              {% endif %}
+            success_msg: "{{ item.item.var }} ({{ item.item.path }}): readable"
+          loop: "{{ __vault_managed_tls_stat.results | default([]) | rejectattr('skipped', 'defined') | list }}"
+          loop_control:
+            label: "{{ item.item.var }}"
+          register: __vault_managed_tls_readable
+
+    ###########################################################################
+    # vault_tls_source: vault_pki -- engine coordinates
+    ###########################################################################
+    - name: "Preflight | managed_tls | Vault PKI coordinates are set"
+      ansible.builtin.assert:
+        that:
+          - item.value | default('', true) | length > 0
+        fail_msg: >-
+          vault_manage_tls is true with vault_tls_source 'vault_pki', so the role
+          issues the certificate from Vault's PKI secrets engine -- but
+          {{ item.var }} is empty. Set it to the {{ item.role }}. Note that
+          vault_pki requires a Vault that is already reachable, authenticated and
+          unsealed, so it cannot issue the listener certificate for the FIRST
+          node of a new cluster; use 'file' for a bootstrap.
+        success_msg: "{{ item.var }}: set"
+      when: vault_tls_source == 'vault_pki'
+      loop:
+        - {value: "{{ vault_pki_mount }}", role: "PKI engine mount path", var: "vault_pki_mount"}
+        - {value: "{{ vault_pki_role }}", role: "PKI issuing role name", var: "vault_pki_role"}
+      loop_control:
+        label: "{{ item.var }}"

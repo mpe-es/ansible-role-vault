@@ -14,7 +14,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export ROOT
 
 python3 - <<'PY'
-import os, sys, yaml
+import os, re, sys, yaml
 
 root = os.environ["ROOT"]
 orch = os.path.join(root, "tasks", "preflight.yml")
@@ -23,9 +23,14 @@ orch = os.path.join(root, "tasks", "preflight.yml")
 # an unsupported OS is reported as such rather than through a downstream gate's
 # symptom, and rhsm precedes repo_source so an unregistered host is told it is
 # not registered.
+# managed_tls sits immediately after tls because the two are exact mirrors:
+# tls fires when vault_manage_tls is FALSE (the operator staged the material),
+# managed_tls when it is TRUE (the role will place it). Adjacency keeps the
+# inverted-polarity pair readable, and an operator reading the output sees the
+# TLS question answered in one place whichever mode they are in (#80).
 EXPECTED = [
     "os_family", "os_version", "fips", "selinux", "chrony", "firewalld",
-    "rhsm", "repo_source", "tls", "port", "dns",
+    "rhsm", "repo_source", "tls", "managed_tls", "port", "dns",
 ]
 # A dynamic include does not propagate its own tags. With only apply: the
 # include is skipped entirely under --tags; with only tags: the file is
@@ -77,10 +82,11 @@ for gate in EXPECTED:
 # included directly by verify.yml, so emptying either while leaving the file
 # present kept every guard and the whole scenario green.
 #
-# dns is deliberately absent from this map: it is ADVISORY by design (warn-only,
-# documented as such in the README), so a predicate requirement is the wrong
-# shape for it. What it must not lose is the warning itself, checked separately
-# below. Every entry here is an exact condition list -- there is no
+# dns WAS advisory-only and is now a conditional hard gate (#79): it fails when
+# the hostname resolves to no routable address AND the advertised addresses are
+# still derived from that hostname. Its predicate is pinned here like any other;
+# the residual warning for the pinned-address case is checked separately below.
+# Every entry here is an exact condition list -- there is no
 # "assert something" fallback, because a gate with no pinned predicate is a gate
 # whose semantics nothing checks.
 WANT_PREDICATES = {
@@ -93,7 +99,25 @@ WANT_PREDICATES = {
     # a platform the container is not.
     "os_family": ["ansible_os_family == 'RedHat'"],
     "os_version": ["ansible_distribution_major_version in ['8', '9', '10']"],
+    # The whole point of #79: "length > 0" over the ROUTABLE set, never over the
+    # raw resolver answer. `__vault_dns_check.rc == 0` would pass on a host whose
+    # name resolves only to 127.0.1.1 -- which is the defect this gate replaced.
+    "dns": ["__vault_dns_routable | length > 0"],
+    # managed_tls was shipped without an entry here, which made it the only gate
+    # in tasks/preflight/ whose semantics nothing pinned -- in the guard whose
+    # own comment above forbids exactly that. `stat.readable` in particular was
+    # deletable with every test and every guard green while README,
+    # argument_specs and CHANGELOG all promised the source "must be readable".
+    "managed_tls": ["item.stat is defined",
+                    "item.stat.exists | default(false)",
+                    "item.stat.isreg | default(false)",
+                    "item.stat.readable | default(false)"],
 }
+
+def _norm(v):
+    """Collapse whitespace so a folded scalar compares like a single line."""
+    return " ".join(str(v).split())
+
 
 def asserts_in(tasks):
     for t in tasks or []:
@@ -115,28 +139,137 @@ for gate, want in WANT_PREDICATES.items():
     missing = [w for w in want if w not in conds]
     if missing:
         fail.append(f"tasks/preflight/{gate}.yml no longer asserts {missing!r}. "
-                    f"Asserted conditions are {conds!r}. This gate has no Molecule "
-                    f"coverage, so nothing else would notice it being emptied.")
+                    f"Asserted conditions are {conds!r}. Molecule coverage for this "
+                    f"gate is partial or absent, so nothing else reliably notices "
+                    f"it being emptied.")
 
-# dns is advisory, so lock the ADVICE: a conditional warning that fires when
-# resolution failed. Losing the `when:` would warn on every host; losing the
-# task would drop the warning entirely, and neither is visible anywhere else.
+# managed_tls: the predicate lock above pins WHAT the readable assert checks;
+# this pins WHAT IT ITERATES. Every conjunct can be intact while the task loops
+# an empty list, which asserts nothing about anything -- codex demonstrated that
+# shape against the sibling dns classifier and it applies here identically.
+mt_path = os.path.join(root, "tasks", "preflight", "managed_tls.yml")
+if os.path.isfile(mt_path):
+    with open(mt_path) as fh:
+        mt_tasks = yaml.safe_load(fh) or []
+    readable = [t for t, a in asserts_in(mt_tasks)
+                if any("item.stat.readable" in _norm(str(c)) for c in (a.get("that") or []))]
+    if not readable:
+        fail.append("tasks/preflight/managed_tls.yml no longer asserts "
+                    "item.stat.readable; the controller-side source could be "
+                    "unreadable and the gate would still pass.")
+    elif "__vault_managed_tls_stat" not in _norm(str(readable[0].get("loop", ""))):
+        fail.append("tasks/preflight/managed_tls.yml readable assert no longer "
+                    "iterates __vault_managed_tls_stat; its loop is "
+                    f"{readable[0].get('loop')!r}. An empty loop asserts nothing "
+                    "while every conjunct above stays intact.")
+
+# dns POLARITY (#79). The predicate above proves the gate asks about routable
+# addresses; these two checks prove it fires on the right hosts. The gate is a
+# hard failure ONLY where the advertised addresses depend on the hostname, and a
+# warning where the operator pinned them -- inverting either condition silently
+# swaps which population is protected, and no behavioural case would notice on a
+# container whose name resolves one particular way.
 dns_path = os.path.join(root, "tasks", "preflight", "dns.yml")
 if os.path.isfile(dns_path):
     with open(dns_path) as fh:
         dns_tasks = yaml.safe_load(fh) or []
-    # The DIRECTION, not merely that 'rc' appears: flipping `rc != 0` to
-    # `rc == 0` warns every healthy host and stays silent on the failures the
-    # advice exists for, and a substring check accepts both.
-    WANT_DNS_WHEN = "__vault_dns_check.rc != 0"
+
+    # The DERIVATION, not just the variable name. Pinning only
+    # "__vault_dns_routable | length > 0" leaves the set that name refers to
+    # entirely free.
+    #
+    # Classification is now delegated to ansible.utils.ipaddr rather than
+    # hand-rolled regexes -- three review rounds each defeated a regex
+    # enumeration (::ffff:127.0.0.1, then ::, then 255.255.255.255), because
+    # reachability is address arithmetic. What this locks is that the delegation
+    # is still in place AND that the two checks the library provably does not
+    # cover on its own are still present: netaddr does not unwrap IPv4-mapped
+    # addresses, and it counts the unspecified and limited-broadcast addresses
+    # as unicast.
+    # EXACT TERMS, not substrings and not occurrence counts. Counting was the
+    # previous approach and codex defeated it by appending ` or true` to one
+    # condition: the substring still appeared the required number of times while
+    # the check it named had been neutered. A whole-term match makes the text of
+    # each condition the contract.
+    #
+    # Every class test appears TWICE -- once against the address as resolved and
+    # once against its canonical (IPv4-unwrapped) form -- because netaddr does
+    # not unwrap IPv4-mapped addresses, and because it converts '::1' to
+    # '0.0.0.1', which is neither loopback nor non-unicast. Checking one form
+    # only is what let ::ffff:224.0.0.1 and ::ffff:0.0.0.0 through.
+    WANT_TERMS = [
+        "(item | ansible.utils.ipaddr('unicast')) is truthy",
+        "(__vault_dns_canon | ansible.utils.ipaddr('unicast')) is truthy",
+        "(item | ansible.utils.ipaddr('loopback')) is falsy",
+        "(__vault_dns_canon | ansible.utils.ipaddr('loopback')) is falsy",
+        "(item | ansible.utils.ipaddr('link-local')) is falsy",
+        "(__vault_dns_canon | ansible.utils.ipaddr('link-local')) is falsy",
+        "(item | ansible.utils.ipaddr('multicast')) is falsy",
+        "(__vault_dns_canon | ansible.utils.ipaddr('multicast')) is falsy",
+        "__vault_dns_canon not in ['0.0.0.0', '255.255.255.255']",
+        "item not in ['::', '0::0', '0:0:0:0:0:0:0:0']",
+    ]
+    classifiers = [t for t in dns_tasks
+                   if "__vault_dns_routable" in str((t.get("ansible.builtin.set_fact") or {}))
+                   and t.get("when")]
+    if not classifiers:
+        fail.append("tasks/preflight/dns.yml no longer derives __vault_dns_routable "
+                    "under a when:; the predicate above pins a name with nothing "
+                    "behind it.")
+    else:
+        got = [_norm(c) for c in (classifiers[0].get("when") or [])]
+        for term in WANT_TERMS:
+            if _norm(term) not in got:
+                fail.append(f"tasks/preflight/dns.yml classification is missing the "
+                            f"exact condition `{term}`. Conditions are: {got!r}")
+        # The LOOP, not just the conditions. Every term above can be intact
+        # while the task iterates an empty list, which passes a text-only lock
+        # and makes the gate accept everything. Caught by the harness, but a
+        # structural guard that ignores its own input is half a guard.
+        loop_src = _norm(str(classifiers[0].get("loop", "")))
+        for frag in ("__vault_dns_check.stdout_lines", "regex_replace"):
+            if _norm(frag) not in loop_src:
+                fail.append(f"tasks/preflight/dns.yml classification no longer loops "
+                            f"over the resolver's own answer ({frag!r} absent). Its "
+                            f"loop is: {loop_src!r}")
+
+        # The canonical form must still be DERIVED, or every __vault_dns_canon
+        # term above is testing an undefined variable.
+        canon = _norm(str((classifiers[0].get("vars") or {}).get("__vault_dns_canon", "")))
+        for frag in ("ansible.utils.ipaddr('ipv4')", "ansible.utils.ipaddr('address')"):
+            if _norm(frag) not in canon:
+                fail.append(f"tasks/preflight/dns.yml no longer builds "
+                            f"__vault_dns_canon with {frag!r}. ipaddr('ipv4') returns "
+                            "a CIDR, so without ipaddr('address') the bare-string "
+                            "exclusions never match and mapped unspecified and "
+                            f"broadcast addresses pass. Derivation is: {canon!r}")
+
+    # The assert must be gated ON the dependency, so a host with explicitly
+    # pinned addresses is never failed for a name it does not use.
+    WANT_ASSERT_WHEN = "__vault_dns_required | bool"
+    gated = [t for t in dns_tasks
+             if ("ansible.builtin.assert" in t or "assert" in t)
+             and _norm(t.get("when", "")) == WANT_ASSERT_WHEN]
+    if not gated:
+        fail.append("tasks/preflight/dns.yml no longer gates its assert on exactly "
+                    f"{WANT_ASSERT_WHEN!r}. Ungated it fails operators who pinned "
+                    "vault_api_addr/vault_cluster_addr and have no dependency on "
+                    "the hostname resolving; inverted, it protects nobody.")
+
+    # The residual warning must remain for the pinned-address population, and
+    # must be conditioned on BOTH the absence of the dependency and the absence
+    # of a routable address -- dropping either warns every host or none.
+    WANT_WARN_WHEN = ["not (__vault_dns_required | bool)",
+                      "__vault_dns_routable | length == 0"]
     warns = [t for t in dns_tasks
              if "ansible.builtin.debug" in t
-             and " ".join(str(t.get("when", "")).split()) == WANT_DNS_WHEN
+             and [_norm(c) for c in (t.get("when") or [])] == WANT_WARN_WHEN
              and "WARNING" in str(t["ansible.builtin.debug"].get("msg", ""))]
     if not warns:
         fail.append("tasks/preflight/dns.yml no longer emits a WARNING conditioned on "
-                    f"exactly {WANT_DNS_WHEN!r}. It is advisory by design, so this warning is "
-                    "the entire contract; nothing else would notice it disappearing.")
+                    f"exactly {WANT_WARN_WHEN!r}. That warning is the entire contract "
+                    "for hosts whose advertised addresses are pinned; nothing else "
+                    "would notice it disappearing.")
 
 # tasks/main.yml must still route to the orchestrator under the same tags.
 with open(os.path.join(root, "tasks", "main.yml")) as fh:

@@ -34,7 +34,7 @@ files = sorted(glob.glob(os.path.join(root, "tasks", "preflight", "*.yml")))
 # in the directory unreferenced by the orchestrator, which is precisely what a
 # split leaves behind.
 CANONICAL = {"os_family", "os_version", "fips", "selinux", "chrony", "firewalld",
-             "rhsm", "repo_source", "tls", "port", "dns"}
+             "rhsm", "repo_source", "tls", "managed_tls", "port", "dns"}
 found = {os.path.basename(f)[:-4] for f in files}
 if found != CANONICAL:
     extra, missing = sorted(found - CANONICAL), sorted(CANONICAL - found)

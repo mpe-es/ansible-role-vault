@@ -27,9 +27,11 @@ in airgap or internet-connected environments.
 
 `tasks/preflight.yml` **hard-fails the play** when any gate below is unmet.
 These are gates, not things the role configures for you — provision them in
-your image or an earlier play. The **Fires when** column matters: four of the
-gates are conditional — firewalld, RHSM, repo source and TLS material — so the
-set that applies depends on how you configure the role.
+your image or an earlier play. The **Fires when** column matters: six of the
+gates are conditional — firewalld, RHSM, repo source, TLS material, managed TLS
+inputs and DNS — so the set that applies depends on how you configure the role.
+The two TLS gates are exact mirrors: whichever way `vault_manage_tls` is set,
+one of them applies and the other does not.
 
 | Gate | Fires when | Requirement |
 |------|-----------|-------------|
@@ -41,11 +43,28 @@ set that applies depends on how you configure the role.
 | RHSM | RHEL **and** `vault_manage_repo` **and** `vault_repo_source: satellite` | host registered. Only meaningful for Satellite-sourced content; the role-managed repository — HashiCorp's or your mirror's — needs no Red Hat subscription |
 | Repo source | `vault_manage_repo` | `mirror` mode must not name `rpm.releases.hashicorp.com` — checked for **both** `vault_repo_url` and `vault_repo_gpg_key`, since the target host fetches the key directly. This proves inequality with the shipped host, **not** that the endpoint is internal or airgap-safe. `satellite` mode requires RHEL |
 | TLS material | `vault_manage_tls: false` **(the default)** | `vault_tls_cert_file`, `vault_tls_key_file` and `vault_tls_ca_file` all exist and are regular files (symlinks followed). Whether the Vault account can READ them is tracked separately |
+| Managed TLS inputs | `vault_manage_tls: true` | under `vault_tls_source: file`, `vault_tls_src_cert`/`_key`/`_ca` are **set**. An *absolute* path is additionally statted **on the Ansible controller** and must be readable — `copy` resolves `src` there, so checking the target would answer a different question. A *relative* path (`files/vault-tls.crt`, as the examples below use) is reported as unverifiable and left to `copy`'s own search path, never rejected. Under `vault_tls_source: vault_pki`, `vault_pki_mount` and `vault_pki_role` are set; reachability of the PKI engine is not proven (#80) |
 | API port | always | `vault_listener_port` is free, or already held by the Vault service itself. Requires `iproute` (`ss`) — a missing query tool is a hard failure, not a skip |
+| DNS | `vault_api_addr` or `vault_cluster_addr` still contain `ansible_fqdn` (the default), **or** `vault_manage_tls: true` **with** `vault_tls_source: vault_pki` (which issues against `ansible_fqdn`) | the FQDN resolves **locally** to at least one address that is not loopback (`127.0.0.0/8`, `::1`) or link-local (`169.254.0.0/16`, `fe80::/10`). Checked with `getent ahosts` rather than `getent hosts`, which returns the first match only and prefers IPv6, so a loopback AAAA masks a routable A. Classification is delegated to `ansible.utils.ipaddr` rather than pattern-matched, so loopback, link-local (the full `fe80::/10`), multicast, unspecified and broadcast are excluded — while RFC1918, CGNAT and reserved ranges stay valid, since "not globally routable" is not the same claim as "no peer can reach it". Note `ahosts` applies `AI_ADDRCONFIG`, so it reports the families the host itself has configured — a host with no IPv6 address will not be told about AAAA records. Pin `vault_api_addr`/`vault_cluster_addr` explicitly and this becomes a warning instead (#79) |
 
-One further check is advisory, not a gate:
+Every gate above is a hard failure. The DNS gate is the one that changes shape:
+pin `vault_api_addr` and `vault_cluster_addr` to explicit reachable addresses and
+it downgrades to a warning — **unless** the role is also managing TLS
+(`vault_manage_tls: true`) with `vault_tls_source: vault_pki`, which issues a
+certificate whose common name is `ansible_fqdn` regardless of what the
+advertised addresses say. Note that the
+availability of `getent` itself is checked unconditionally and is a hard failure
+for everyone, the same posture the port gate takes for a missing `ss`: a host
+without it is broken, not misconfigured.
 
-- **DNS resolution** of `ansible_fqdn` — prints a warning only.
+**What the DNS gate does not prove.** It resolves the name the way the *target
+host* does, so it catches a name mapped to loopback or link-local, or one that
+does not resolve at all. It does **not** prove that a client or a Raft peer can
+resolve the name: `nss-myhostname` answers the local hostname with the machine's
+own configured addresses, so a host with a working NIC and no DNS record at all
+passes this gate. Verifying the record exists in the zone your clients query is
+a different check from a different vantage point, and the role does not attempt
+it.
 
 The port gate covers the API port only. A conflict on the cluster port (8201)
 still surfaces at service start; see [#39](https://github.com/mpe-es/ansible-role-vault/issues/39).
@@ -134,6 +153,7 @@ Install via `ansible-galaxy collection install -r requirements.yml`:
 | Collection | Min Version | Purpose |
 |------------|-------------|---------|
 | `ansible.posix` | 1.6.0 | `firewalld` module for port management |
+| `ansible.utils` | 6.0.0 | `ipaddr` filters — address classification in the DNS preflight gate |
 | `community.hashi_vault` | 7.0.0 | Vault initialization and post-install configuration |
 
 ### Python Libraries
@@ -143,14 +163,18 @@ Install via `pip install --require-hashes -r requirements.txt`:
 | Library | Version | Purpose |
 |---------|---------|---------|
 | `hvac` | 2.4.0 | HashiCorp Vault API client (required by `community.hashi_vault`) |
+| `netaddr` | 1.3.0 | Address classification for `ansible.utils.ipaddr` (required by that collection). **Controller-side only** — the filter runs on the controller, so the managed host needs nothing |
 
-Python dependencies are managed via `pip-compile` with SHA-256 hash pinning
-for supply chain integrity (NIST 800-53 SI-7). To regenerate after updating
-`requirements.in`:
+Python dependencies are hash-pinned with `pip-compile --generate-hashes` for
+supply chain integrity (NIST 800-53 SI-7). **Version updates are Dependabot's
+job** — `.github/dependabot.yml` sets a 7-day release cooldown and maintains
+`requirements.txt` directly; do not hand-bump a pin.
 
-```bash
-pip-compile --generate-hashes requirements.in
-```
+`requirements.in` is edited only to **add or remove** a dependency, which
+Dependabot does not do. The regeneration command and the two constraints that
+make it safe (run it on `linux/amd64` Python 3.11 to match CI; run it against
+the existing `requirements.txt`, never a fresh path) are documented in
+`requirements.in` itself.
 
 ### Execution Environment (AAP)
 
@@ -233,9 +257,9 @@ auto-generation and input validation.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `vault_manage_tls` | `false` | Deploy TLS certs from controller |
-| `vault_tls_src_cert` | `""` | Source cert path on controller |
-| `vault_tls_src_key` | `""` | Source key path on controller |
-| `vault_tls_src_ca` | `""` | Source CA path on controller |
+| `vault_tls_src_cert` | `""` | Source cert path on controller. Absolute → verified by preflight; relative → resolved by `copy`, unverifiable |
+| `vault_tls_src_key` | `""` | Source key path on controller. Absolute → verified by preflight; relative → resolved by `copy`, unverifiable |
+| `vault_tls_src_ca` | `""` | Source CA path on controller. Absolute → verified by preflight; relative → resolved by `copy`, unverifiable |
 
 ### STIG Compliance
 

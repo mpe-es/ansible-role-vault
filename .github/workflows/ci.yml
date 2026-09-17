@@ -82,7 +82,7 @@ jobs:
       # Widened per the #46-era comment now that both script lineages are
       # in tree; full consolidation + version pinning tracked in issue #47
       - name: Run shellcheck on shipped and test scripts
-        run: shellcheck files/*.sh tests/*.sh
+        run: shellcheck files/*.sh tests/*.sh tests/local-preflight-harness/{getent,command}
 
       - name: Run vault-unseal behavioral tests
         run: bash tests/vault-unseal-test.sh
@@ -151,6 +151,23 @@ jobs:
 
       - name: Run syntax check
         run: ansible-playbook test-playbook.yml --syntax-check
+        env:
+          ANSIBLE_ROLES_PATH: "${{ github.workspace }}/.."
+
+      # The preflight gate harness: drives the managed_tls and dns gates against
+      # localhost with a getent shim and a fixture host database. Runs here
+      # because this job already installs requirements.txt (netaddr, which
+      # ansible.utils.ipaddr needs) and the collections. It is NOT in the lint
+      # job's static-guard glob, and until this step existed the dns regression
+      # cases -- IPv4-mapped loopback, mapped multicast, the case-folding fix --
+      # were exercised only on a developer machine and rotted silently in CI.
+      - name: Run the local preflight-gate harness
+        run: |
+          cd tests/local-preflight-harness
+          # $PWD first on PATH supplies BOTH shims: getent (absent on macOS) and
+          # command (absent on Ubuntu, present on every EL the role supports).
+          PATH="$PWD:$PATH" GETENT_FIXTURE_DB="$PWD/hosts.db" \
+            ansible-playbook run.yml
         env:
           ANSIBLE_ROLES_PATH: "${{ github.workspace }}/.."
 

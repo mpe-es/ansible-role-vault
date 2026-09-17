@@ -1,0 +1,459 @@
+---
+# Local execution of the #79/#80 gates -- the cases molecule would run in CI,
+# minus the container. Each case that must FIRE is wrapped in block/rescue and
+# asserts the gate's OWN message; each case that must PASS runs bare.
+- name: Exercise the new preflight gates
+  hosts: localhost
+  connection: local
+  gather_facts: true
+
+  vars:
+    fx: "{{ playbook_dir }}/fixtures"
+
+  tasks:
+    - name: Stage controller-side fixtures
+      block:
+        - name: Fixture directory
+          ansible.builtin.file:
+            path: "{{ fx }}"
+            state: directory
+            mode: '0755'
+        - name: Readable sources
+          ansible.builtin.copy:
+            content: "mock\n"
+            dest: "{{ fx }}/{{ item }}"
+            mode: '0644'
+          loop: [good.crt, good.key, good.ca]
+        - name: A directory where a certificate is expected
+          ansible.builtin.file:
+            path: "{{ fx }}/isdir.crt"
+            state: directory
+            mode: '0755'
+        - name: An unreadable source (mode 0000)
+          # Meaningful only as a non-root user, which is the normal case for a
+          # developer machine and NOT the case in molecule's root container --
+          # os.access() returns True for root regardless of mode. Skipped rather
+          # than silently vacuous when running as root.
+          ansible.builtin.copy:
+            content: "mock\n"
+            dest: "{{ fx }}/unreadable.crt"
+            mode: '0000'
+          when: lookup('env', 'USER') != 'root'
+
+        - name: A symlinked source (certmonger shape)
+          ansible.builtin.file:
+            src: "{{ fx }}/good.crt"
+            dest: "{{ fx }}/link.crt"
+            state: link
+            force: true
+
+    ###########################################################################
+    # managed_tls (#80)
+    ###########################################################################
+    - name: "M1 FIRES - source unset"
+      block:
+        - ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/managed_tls.yml
+          vars: {vault_manage_tls: true, vault_tls_source: file,
+                 vault_tls_src_cert: "", vault_tls_src_key: "{{ fx }}/good.key",
+                 vault_tls_src_ca: "{{ fx }}/good.ca"}
+        - ansible.builtin.fail: {msg: "M1 did not fire"}
+      rescue:
+        - ansible.builtin.assert:
+            that:
+              - ansible_failed_result.results | default([]) | map(attribute='msg', default='')
+                | join(' ') is search('vault_tls_src_cert is empty')
+            success_msg: "M1 fired on the unset source"
+
+    - name: "M2 FIRES - source is NULL (the group_vars shape)"
+      block:
+        - ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/managed_tls.yml
+          vars: {vault_manage_tls: true, vault_tls_source: file,
+                 vault_tls_src_cert: null, vault_tls_src_key: "{{ fx }}/good.key",
+                 vault_tls_src_ca: "{{ fx }}/good.ca"}
+        - ansible.builtin.fail: {msg: "M2 did not fire"}
+      rescue:
+        - ansible.builtin.assert:
+            that:
+              - ansible_failed_result.results | default([]) | map(attribute='msg', default='')
+                | join(' ') is search('is empty')
+            success_msg: "M2 fired with the gate's message, not a Jinja type error"
+
+    - name: "M3 FIRES - absolute source absent on the controller"
+      block:
+        - ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/managed_tls.yml
+          vars: {vault_manage_tls: true, vault_tls_source: file,
+                 vault_tls_src_cert: "{{ fx }}/absent.crt",
+                 vault_tls_src_key: "{{ fx }}/good.key", vault_tls_src_ca: "{{ fx }}/good.ca"}
+        - ansible.builtin.fail: {msg: "M3 did not fire"}
+      rescue:
+        - ansible.builtin.assert:
+            that:
+              - ansible_failed_result.results | default([]) | map(attribute='msg', default='')
+                | join(' ') is search('does not exist on the Ansible controller')
+            success_msg: "M3 fired and pointed at the controller"
+
+    - name: "M4 FIRES - absolute source is a directory"
+      block:
+        - ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/managed_tls.yml
+          vars: {vault_manage_tls: true, vault_tls_source: file,
+                 vault_tls_src_cert: "{{ fx }}/isdir.crt",
+                 vault_tls_src_key: "{{ fx }}/good.key", vault_tls_src_ca: "{{ fx }}/good.ca"}
+        - ansible.builtin.fail: {msg: "M4 did not fire"}
+      rescue:
+        - ansible.builtin.assert:
+            that:
+              - ansible_failed_result.results | default([]) | map(attribute='msg', default='')
+                | join(' ') is search('not a regular file')
+            success_msg: "M4 fired on the file type"
+
+    - name: "M5 FIRES - vault_pki with empty mount"
+      block:
+        - ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/managed_tls.yml
+          vars: {vault_manage_tls: true, vault_tls_source: vault_pki,
+                 vault_pki_mount: "", vault_pki_role: listener}
+        - ansible.builtin.fail: {msg: "M5 did not fire"}
+      rescue:
+        - ansible.builtin.assert:
+            that:
+              - ansible_failed_result.results | default([]) | map(attribute='msg', default='')
+                | join(' ') is search('vault_pki_mount is empty')
+            success_msg: "M5 fired on the PKI mount"
+
+    - name: "M6 PASSES - relative source is reported, not rejected (the README shape)"
+      ansible.builtin.include_role:
+        name: ansible-role-vault
+        tasks_from: preflight/managed_tls.yml
+      vars: {vault_manage_tls: true, vault_tls_source: file,
+             vault_tls_src_cert: "files/vault-tls.crt",
+             vault_tls_src_key: "{{ fx }}/good.key", vault_tls_src_ca: "{{ fx }}/good.ca"}
+
+    - name: "M6 assert - exactly one stat skipped, and the gate did not fail"
+      ansible.builtin.assert:
+        that:
+          - __vault_managed_tls_stat.results | selectattr('skipped', 'defined') | list | length == 1
+          - __vault_managed_tls_readable.results | length == 2
+          # The report must have FIRED for exactly the relative source. Without
+          # this the whole report task is deletable with the suite green, while
+          # three artifacts promise relative sources are reported.
+          - __vault_managed_tls_unverifiable.results | default([])
+            | rejectattr('skipped', 'defined') | list | length == 1
+        success_msg: "M6: relative source skipped by the stat, reported, other two verified"
+
+    - name: "M9 FIRES - absolute source exists but is not readable"
+      when: lookup('env', 'USER') != 'root'
+      block:
+        - ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/managed_tls.yml
+          vars: {vault_manage_tls: true, vault_tls_source: file,
+                 vault_tls_src_cert: "{{ fx }}/unreadable.crt",
+                 vault_tls_src_key: "{{ fx }}/good.key", vault_tls_src_ca: "{{ fx }}/good.ca"}
+        - ansible.builtin.fail: {msg: "M9 did not fire"}
+      rescue:
+        - ansible.builtin.assert:
+            that:
+              - ansible_failed_result.results | default([]) | map(attribute='msg', default='')
+                | join(' ') is search('is not readable by the')
+            success_msg: "M9 fired on an unreadable source"
+
+    - name: "M7 PASSES - symlinked source accepted (follow: true)"
+      ansible.builtin.include_role:
+        name: ansible-role-vault
+        tasks_from: preflight/managed_tls.yml
+      vars: {vault_manage_tls: true, vault_tls_source: file,
+             vault_tls_src_cert: "{{ fx }}/link.crt",
+             vault_tls_src_key: "{{ fx }}/good.key", vault_tls_src_ca: "{{ fx }}/good.ca"}
+
+    - name: "M8 DID NOT FIRE - operator stages TLS"
+      ansible.builtin.include_role:
+        name: ansible-role-vault
+        tasks_from: preflight/managed_tls.yml
+      vars: {vault_manage_tls: false, vault_tls_source: file,
+             vault_tls_src_cert: "", vault_tls_src_key: "", vault_tls_src_ca: ""}
+
+    - name: "M8 assert - marker skipped"
+      ansible.builtin.assert:
+        that:
+          - __vault_managed_tls_marker.skipped | default(false)
+        success_msg: "M8: gate suppressed, not merely non-failing"
+
+    ###########################################################################
+    # dns (#79)
+    ###########################################################################
+    - name: "D1 FIRES - loopback only, addresses derive from the name"
+      block:
+        - ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/dns.yml
+          vars: {ansible_fqdn: dns-loopback-fixture.test,
+                 vault_api_addr: "https://dns-loopback-fixture.test:8200",
+                 vault_cluster_addr: "https://dns-loopback-fixture.test:8201"}
+        - ansible.builtin.fail: {msg: "D1 did not fire"}
+      rescue:
+        - ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg | default('') is search('resolves to no reachable address')
+              - ansible_failed_result.msg | default('') is search('127.0.1.1')
+            success_msg: "D1 fired and named the loopback answer"
+
+    - name: "D2 FIRES - link-local only"
+      block:
+        - ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/dns.yml
+          vars: {ansible_fqdn: dns-linklocal-fixture.test,
+                 vault_api_addr: "https://dns-linklocal-fixture.test:8200",
+                 vault_cluster_addr: "https://dns-linklocal-fixture.test:8201"}
+        - ansible.builtin.fail: {msg: "D2 did not fire"}
+      rescue:
+        - ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg | default('') is search('169.254.7.7')
+            success_msg: "D2 fired on link-local"
+
+    - name: "D3 FIRES - name does not resolve at all"
+      block:
+        - ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/dns.yml
+          vars: {ansible_fqdn: dns-absent-fixture.test,
+                 vault_api_addr: "https://dns-absent-fixture.test:8200",
+                 vault_cluster_addr: "https://dns-absent-fixture.test:8201"}
+        - ansible.builtin.fail: {msg: "D3 did not fire"}
+      rescue:
+        - ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg | default('') is search('does not resolve at all')
+            success_msg: "D3 fired with the no-resolution branch"
+
+    - name: "D4 FIRES - vault_pki arms the gate even with pinned addresses (C5)"
+      block:
+        - ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/dns.yml
+          vars: {ansible_fqdn: dns-loopback-fixture.test,
+                 vault_api_addr: "https://10.99.0.1:8200",
+                 vault_cluster_addr: "https://10.99.0.1:8201",
+                 vault_manage_tls: true, vault_tls_source: vault_pki}
+        - ansible.builtin.fail: {msg: "D4 did not fire -- the PKI arm is not wired"}
+      rescue:
+        - ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg | default('') is search('vault_pki')
+            success_msg: "D4 fired for the PKI common-name reason"
+
+    - name: "D8 FIRES - IPv4-mapped loopback (::ffff:127.0.0.1) is not reachable"
+      block:
+        - ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/dns.yml
+          vars: {ansible_fqdn: dns-mapped-loopback-fixture.test,
+                 vault_api_addr: "https://dns-mapped-loopback-fixture.test:8200",
+                 vault_cluster_addr: "https://dns-mapped-loopback-fixture.test:8201"}
+        - ansible.builtin.fail: {msg: "D8 did not fire -- mapped loopback counted as reachable"}
+      rescue:
+        - ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg | default('') is search('resolves to no reachable address')
+            success_msg: "D8 fired: loopback in IPv6 clothing is still loopback"
+
+    - name: "D9 FIRES - fe90:: is link-local (fe80::/10 is ten bits, not sixteen)"
+      block:
+        - ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/dns.yml
+          vars: {ansible_fqdn: dns-highlinklocal-fixture.test,
+                 vault_api_addr: "https://dns-highlinklocal-fixture.test:8200",
+                 vault_cluster_addr: "https://dns-highlinklocal-fixture.test:8201"}
+        - ansible.builtin.fail: {msg: "D9 did not fire -- fe90:: counted as reachable"}
+      rescue:
+        - ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg | default('') is search('resolves to no reachable address')
+            success_msg: "D9 fired: the whole fe80::/10 range is excluded"
+
+    - name: "D10 FIRES - the unspecified address (::) is prohibited as a destination (RFC 4291 2.5.2)"
+      block:
+        - ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/dns.yml
+          vars: {ansible_fqdn: dns-unspecified-fixture.test,
+                 vault_api_addr: "https://dns-unspecified-fixture.test:8200",
+                 vault_cluster_addr: "https://dns-unspecified-fixture.test:8201"}
+        - ansible.builtin.fail: {msg: "D10 did not fire"}
+      rescue:
+        - ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg | default('') is search('resolves to no reachable address')
+            success_msg: "D10 fired: the unspecified address (::) is prohibited as a destination (RFC 4291 2.5.2)"
+
+    - name: "D11 FIRES - IPv4 multicast (224.0.0.0/4) is not a unicast endpoint a peer can dial"
+      block:
+        - ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/dns.yml
+          vars: {ansible_fqdn: dns-multicast-fixture.test,
+                 vault_api_addr: "https://dns-multicast-fixture.test:8200",
+                 vault_cluster_addr: "https://dns-multicast-fixture.test:8201"}
+        - ansible.builtin.fail: {msg: "D11 did not fire"}
+      rescue:
+        - ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg | default('') is search('resolves to no reachable address')
+            success_msg: "D11 fired: IPv4 multicast (224.0.0.0/4) is not a unicast endpoint a peer can dial"
+
+    - name: "D12 FIRES - IPv6 multicast (ff00::/8) likewise"
+      block:
+        - ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/dns.yml
+          vars: {ansible_fqdn: dns-mcast6-fixture.test,
+                 vault_api_addr: "https://dns-mcast6-fixture.test:8200",
+                 vault_cluster_addr: "https://dns-mcast6-fixture.test:8201"}
+        - ansible.builtin.fail: {msg: "D12 did not fire"}
+      rescue:
+        - ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg | default('') is search('resolves to no reachable address')
+            success_msg: "D12 fired: IPv6 multicast (ff00::/8) likewise"
+
+    - name: "D13 FIRES - advertised address spells the name in CAPS (case-folding)"
+      block:
+        - ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/dns.yml
+          vars: {ansible_fqdn: dns-loopback-fixture.test,
+                 vault_api_addr: "https://DNS-LOOPBACK-FIXTURE.TEST:8200",
+                 vault_cluster_addr: "https://DNS-LOOPBACK-FIXTURE.TEST:8201"}
+        - ansible.builtin.fail: {msg: "D13 did not fire -- case-sensitive comparison fails OPEN"}
+      rescue:
+        - ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg | default('') is search('resolves to no reachable address')
+            success_msg: "D13 fired: DNS names are case-insensitive and so is the dependency test"
+
+    - name: "D14 FIRES - ::ffff:0.0.0.0 -- ipaddr('ipv4') yields a CIDR, so a bare-string exclusion missed it"
+      block:
+        - ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/dns.yml
+          vars: {ansible_fqdn: dns-mapped-unspec.test,
+                 vault_api_addr: "https://dns-mapped-unspec.test:8200",
+                 vault_cluster_addr: "https://dns-mapped-unspec.test:8201"}
+        - ansible.builtin.fail: {msg: "D14 did not fire"}
+      rescue:
+        - ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg | default('') is search('resolves to no reachable address')
+            success_msg: "D14 fired: ::ffff:0.0.0.0 -- ipaddr('ipv4') yields a CIDR, so a bare-string exclusion missed it"
+
+    - name: "D15 FIRES - ::ffff:255.255.255.255 -- same CIDR trap as D14"
+      block:
+        - ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/dns.yml
+          vars: {ansible_fqdn: dns-mapped-bcast.test,
+                 vault_api_addr: "https://dns-mapped-bcast.test:8200",
+                 vault_cluster_addr: "https://dns-mapped-bcast.test:8201"}
+        - ansible.builtin.fail: {msg: "D15 did not fire"}
+      rescue:
+        - ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg | default('') is search('resolves to no reachable address')
+            success_msg: "D15 fired: ::ffff:255.255.255.255 -- same CIDR trap as D14"
+
+    - name: "D16 FIRES - ::ffff:224.0.0.1 -- IPv6 unicast as written, multicast once unwrapped"
+      block:
+        - ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/dns.yml
+          vars: {ansible_fqdn: dns-mapped-mcast.test,
+                 vault_api_addr: "https://dns-mapped-mcast.test:8200",
+                 vault_cluster_addr: "https://dns-mapped-mcast.test:8201"}
+        - ansible.builtin.fail: {msg: "D16 did not fire"}
+      rescue:
+        - ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg | default('') is search('resolves to no reachable address')
+            success_msg: "D16 fired: ::ffff:224.0.0.1 -- IPv6 unicast as written, multicast once unwrapped"
+
+    - name: "D17 FIRES - ::224.0.0.1 -- the IPv4-COMPATIBLE form, distinct from mapped"
+      block:
+        - ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/dns.yml
+          vars: {ansible_fqdn: dns-compat-mcast.test,
+                 vault_api_addr: "https://dns-compat-mcast.test:8200",
+                 vault_cluster_addr: "https://dns-compat-mcast.test:8201"}
+        - ansible.builtin.fail: {msg: "D17 did not fire"}
+      rescue:
+        - ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg | default('') is search('resolves to no reachable address')
+            success_msg: "D17 fired: ::224.0.0.1 -- the IPv4-COMPATIBLE form, distinct from mapped"
+
+    - name: "D18 FIRES - ::127.0.0.1 -- IPv4-compatible loopback"
+      block:
+        - ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/dns.yml
+          vars: {ansible_fqdn: dns-compat-loop.test,
+                 vault_api_addr: "https://dns-compat-loop.test:8200",
+                 vault_cluster_addr: "https://dns-compat-loop.test:8201"}
+        - ansible.builtin.fail: {msg: "D18 did not fire"}
+      rescue:
+        - ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg | default('') is search('resolves to no reachable address')
+            success_msg: "D18 fired: ::127.0.0.1 -- IPv4-compatible loopback"
+
+    - name: "D5 PASSES - routable"
+      ansible.builtin.include_role:
+        name: ansible-role-vault
+        tasks_from: preflight/dns.yml
+      vars: {ansible_fqdn: dns-routable-fixture.test,
+             vault_api_addr: "https://dns-routable-fixture.test:8200",
+             vault_cluster_addr: "https://dns-routable-fixture.test:8201"}
+
+    - name: "D5 assert - exactly the routable address"
+      ansible.builtin.assert:
+        that: ["__vault_dns_routable == ['10.99.0.1']"]
+        success_msg: "D5: routable set is exactly the reachable address"
+
+    - name: "D6 PASSES - mixed loopback+routable counts as reachable"
+      ansible.builtin.include_role:
+        name: ansible-role-vault
+        tasks_from: preflight/dns.yml
+      vars: {ansible_fqdn: dns-mixed-fixture.test,
+             vault_api_addr: "https://dns-mixed-fixture.test:8200",
+             vault_cluster_addr: "https://dns-mixed-fixture.test:8201"}
+
+    - name: "D6 assert - loopback dropped, routable kept"
+      ansible.builtin.assert:
+        that: ["__vault_dns_routable == ['10.99.0.2']"]
+        success_msg: "D6: loopback excluded without masking the routable answer"
+
+    - name: "D7 DID NOT FIRE - loopback only but addresses pinned and no PKI"
+      ansible.builtin.include_role:
+        name: ansible-role-vault
+        tasks_from: preflight/dns.yml
+      vars: {ansible_fqdn: dns-loopback-fixture.test,
+             vault_api_addr: "https://10.99.0.1:8200",
+             vault_cluster_addr: "https://10.99.0.1:8201"}
+
+    - name: "D7 assert - not required, and the warning path is the live one"
+      ansible.builtin.assert:
+        that:
+          - not (__vault_dns_required | bool)
+          - __vault_dns_routable | length == 0
+        success_msg: "D7: pinned addresses remove the dependency"

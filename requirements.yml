@@ -9,6 +9,16 @@
 # Classification: UNCLASSIFIED
 ###############################################################################
 collections:
+  # Address classification for the DNS preflight gate (ansible.utils.ipaddr).
+  # Hand-rolled regex classification was defeated by three successive review
+  # rounds -- IPv4-mapped loopback, the unspecified address, limited broadcast --
+  # because reachability is address arithmetic, not string matching. Requires
+  # netaddr>=0.10.1 on the CONTROLLER (see requirements.in); the filter runs
+  # controller-side, so the managed host needs nothing.
+  # Required for: tasks/preflight/dns.yml
+  - name: ansible.utils
+    version: ">=6.0.0"
+
   # Firewalld module (ansible.posix.firewalld)
   # Required for: tasks/firewall.yml
   # Min ansible-core: 2.16.0
