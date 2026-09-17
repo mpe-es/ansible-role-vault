@@ -282,6 +282,66 @@
               - ansible_failed_result.msg | default('') is search('resolves to no reachable address')
             success_msg: "D9 fired: the whole fe80::/10 range is excluded"
 
+    - name: "D10 FIRES - the unspecified address (::) is prohibited as a destination (RFC 4291 2.5.2)"
+      block:
+        - ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/dns.yml
+          vars: {ansible_fqdn: dns-unspecified-fixture.test,
+                 vault_api_addr: "https://dns-unspecified-fixture.test:8200",
+                 vault_cluster_addr: "https://dns-unspecified-fixture.test:8201"}
+        - ansible.builtin.fail: {msg: "D10 did not fire"}
+      rescue:
+        - ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg | default('') is search('resolves to no reachable address')
+            success_msg: "D10 fired: the unspecified address (::) is prohibited as a destination (RFC 4291 2.5.2)"
+
+    - name: "D11 FIRES - IPv4 multicast (224.0.0.0/4) is not a unicast endpoint a peer can dial"
+      block:
+        - ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/dns.yml
+          vars: {ansible_fqdn: dns-multicast-fixture.test,
+                 vault_api_addr: "https://dns-multicast-fixture.test:8200",
+                 vault_cluster_addr: "https://dns-multicast-fixture.test:8201"}
+        - ansible.builtin.fail: {msg: "D11 did not fire"}
+      rescue:
+        - ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg | default('') is search('resolves to no reachable address')
+            success_msg: "D11 fired: IPv4 multicast (224.0.0.0/4) is not a unicast endpoint a peer can dial"
+
+    - name: "D12 FIRES - IPv6 multicast (ff00::/8) likewise"
+      block:
+        - ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/dns.yml
+          vars: {ansible_fqdn: dns-mcast6-fixture.test,
+                 vault_api_addr: "https://dns-mcast6-fixture.test:8200",
+                 vault_cluster_addr: "https://dns-mcast6-fixture.test:8201"}
+        - ansible.builtin.fail: {msg: "D12 did not fire"}
+      rescue:
+        - ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg | default('') is search('resolves to no reachable address')
+            success_msg: "D12 fired: IPv6 multicast (ff00::/8) likewise"
+
+    - name: "D13 FIRES - advertised address spells the name in CAPS (case-folding)"
+      block:
+        - ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/dns.yml
+          vars: {ansible_fqdn: dns-loopback-fixture.test,
+                 vault_api_addr: "https://DNS-LOOPBACK-FIXTURE.TEST:8200",
+                 vault_cluster_addr: "https://DNS-LOOPBACK-FIXTURE.TEST:8201"}
+        - ansible.builtin.fail: {msg: "D13 did not fire -- case-sensitive comparison fails OPEN"}
+      rescue:
+        - ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg | default('') is search('resolves to no reachable address')
+            success_msg: "D13 fired: DNS names are case-insensitive and so is the dependency test"
+
     - name: "D5 PASSES - routable"
       ansible.builtin.include_role:
         name: ansible-role-vault

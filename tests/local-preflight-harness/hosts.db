@@ -6,3 +6,6 @@
 10.99.0.2 dns-mixed-fixture.test
 ::ffff:127.0.0.1 dns-mapped-loopback-fixture.test
 fe90::1 dns-highlinklocal-fixture.test
+:: dns-unspecified-fixture.test
+224.0.0.1 dns-multicast-fixture.test
+ff02::1 dns-mcast6-fixture.test

@@ -176,12 +176,19 @@ if os.path.isfile(dns_path):
     # the first ten bits -- so fe90:: and febf:: were admitted as reachable, and
     # `::ffff:127.0.0.1` matched no IPv4 pattern at all. A lock that pins the
     # wrong predicate is worse than none: it certifies the defect.
+    # The complete non-unicast/non-global set. Two review rounds each found one
+    # more class admitted as reachable, so this enumerates all of them rather
+    # than the ones that happened to come up: loopback (both families, every
+    # spelling), IPv4 and IPv6 link-local, unspecified, and multicast.
     WANT_REJECTS = ["map('regex_replace', '^::[Ff]{4}:', '')",
                     "reject('match', '^127\\.')",
-                    "reject('equalto', '::1')",
-                    "reject('equalto', '0.0.0.0')",
                     "reject('match', '^169\\.254\\.')",
-                    "reject('match', '^[Ff][Ee][89AaBb]')"]
+                    "reject('match', '^0\\.0\\.0\\.0$')",
+                    "reject('match', '^(22[4-9]|23[0-9])\\.')",
+                    "reject('match', '^[0:]+$')",
+                    "reject('match', '^[0:]+1$')",
+                    "reject('match', '^[Ff][Ee][89AaBb]')",
+                    "reject('match', '^[Ff][Ff]')"]
     derivations = [_norm(v) for t in dns_tasks
                    for k, v in (t.get("ansible.builtin.set_fact") or {}).items()
                    if k == "__vault_dns_routable"]
@@ -196,6 +203,20 @@ if os.path.isfile(dns_path):
                         f"{missing_rejects!r}. Without every exclusion the 'routable' set "
                         "admits an address nothing can reach, and the gate passes exactly "
                         f"the hosts it exists to fail. Derivation is: {derivation!r}")
+        else:
+            # ORDER, not just membership. An IPv4 prefix inside `::ffff:...` is
+            # invisible to the IPv4 tests until the prefix is stripped, so moving
+            # the normalisation after the exclusions silently restores mapped
+            # loopback and mapped link-local as "reachable" -- and passed this
+            # lock when it checked membership alone.
+            norm_at = derivation.index(_norm(WANT_REJECTS[0]))
+            first_reject_at = min(derivation.index(_norm(r)) for r in WANT_REJECTS[1:])
+            if norm_at > first_reject_at:
+                fail.append("tasks/preflight/dns.yml normalises IPv4-mapped addresses "
+                            "AFTER the exclusions run. ::ffff:127.0.0.1 and "
+                            "::ffff:169.254.1.1 are then reachable, because their IPv4 "
+                            "prefixes only become visible once the ::ffff: is stripped. "
+                            "The normalisation must precede every reject.")
 
     # The assert must be gated ON the dependency, so a host with explicitly
     # pinned addresses is never failed for a name it does not use.

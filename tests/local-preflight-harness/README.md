@@ -73,3 +73,9 @@ rhsm). Run this while iterating; trust molecule before merging.
 | D5 | a routable answer passes, with the routable set exactly right |
 | D6 | loopback alongside a routable address does **not** mask it |
 | D7 | pinned addresses with no PKI remove the dependency entirely |
+| D8 | `::ffff:127.0.0.1` — loopback in IPv6 clothing — is not reachable |
+| D9 | `fe90::1` is link-local: `fe80::/10` is ten bits (fe80–febf), not sixteen |
+| D10 | the unspecified address (`::`) is excluded; RFC 4291 §2.5.2 prohibits it as a destination |
+| D11 | IPv4 multicast (224.0.0.0/4) is not a unicast endpoint a peer can dial |
+| D12 | IPv6 multicast (ff00::/8) likewise |
+| D13 | an advertised address spelling the name in CAPS still arms the gate — DNS names are case-insensitive, and a case-sensitive test failed OPEN |

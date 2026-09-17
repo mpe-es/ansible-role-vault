@@ -90,11 +90,27 @@
 # an IPv6 costume: it matches none of the IPv4 patterns and is not `::1`, so
 # without stripping the prefix it counted as reachable. Measured, not assumed.
 #
-# Excluded after that: loopback (127.0.0.0/8, ::1), the unspecified address
-# (0.0.0.0), and link-local (169.254.0.0/16 and fe80::/10). Note the IPv6
-# link-local range is fe80 through febf -- the first TEN bits, not the first
-# sixteen -- so the test is [Ff][Ee][89AaBb], not fe80. An earlier draft matched
-# `fe80:` only and admitted fe90:: and febf:: as reachable.
+# ORDER IS LOAD-BEARING. The mapped-form normalisation must run BEFORE every
+# exclusion: an IPv4 prefix inside `::ffff:...` is invisible to the IPv4 tests
+# until the prefix is stripped. Move it after and mapped loopback is reachable
+# again -- which is why the structural guard pins the order, not just the set.
+#
+# What is excluded, and why each is not a usable destination for an ADVERTISED
+# Vault endpoint. Two review rounds each found one more class I had not
+# enumerated, so this is the complete non-unicast/non-global set rather than the
+# classes that happened to come up:
+#
+#   127.0.0.0/8, ::1        loopback -- reachable only by the host itself
+#   169.254.0.0/16          IPv4 link-local, what a failed DHCP lease leaves
+#   fe80::/10               IPv6 link-local. TEN bits: fe80 THROUGH febf, hence
+#                           [Ff][Ee][89AaBb]. An earlier draft matched `fe80:`
+#                           only and admitted fe90:: and febf:: as reachable.
+#   0.0.0.0, :: (any form)  the unspecified address. RFC 4291 2.5.2 prohibits it
+#                           as a destination outright.
+#   224.0.0.0/4, ff00::/8   multicast. A Raft peer dials a unicast address.
+#
+# `^[0:]+$` catches every spelling of the IPv6 unspecified address -- `::`,
+# `0::0`, `0:0:0:0:0:0:0:0` -- without trying to parse it.
 #
 # Link-local is what a failed DHCP lease leaves behind, and nss-myhostname
 # returns it ordered by scope -- an advertised address on any of these is
@@ -106,26 +122,39 @@
          | map('regex_replace', '^(\S+).*$', '\1')
          | map('regex_replace', '^::[Ff]{4}:', '')
          | reject('match', '^127\.')
-         | reject('equalto', '::1')
-         | reject('equalto', '0.0.0.0')
          | reject('match', '^169\.254\.')
+         | reject('match', '^0\.0\.0\.0$')
+         | reject('match', '^(22[4-9]|23[0-9])\.')
+         | reject('match', '^[0:]+$')
+         | reject('match', '^[0:]+1$')
          | reject('match', '^[Ff][Ee][89AaBb]')
+         | reject('match', '^[Ff][Ff]')
          | select | unique | list }}
 
 # Substring, deliberately: true for the default templates, false for an
 # operator-pinned literal address, without needing to know which produced the
-# value. It errs toward ARMING: a short hostname (socket.getfqdn() returns one
-# when the host has no domain) is a substring of a pinned FQDN address, so such
-# an operator is gated on a name they meant to stop depending on. Arming a host
-# that did not need it is the safe direction to be wrong in; the reverse would
-# ship the defect this gate exists to catch. default('', true) because an explicitly-null override is a real shape
-# and `in` against None raises rather than reporting the gate's own message.
+# value.
+#
+# CASE-FOLDED on both sides. DNS names are case-insensitive, so
+# `https://VAULT.EXAMPLE.TEST:8200` depends on exactly the same name as
+# `vault.example.test` -- but a case-sensitive substring test read that as "no
+# dependency" and downgraded the gate to a warning. That is failing OPEN, and an
+# earlier version of this comment claimed the approximation could only err the
+# other way. It could not, and did not.
+#
+# It DOES err toward arming in one direction: a short hostname
+# (socket.getfqdn() returns one when the host has no domain) is a substring of a
+# pinned FQDN address, so such an operator is gated on a name they meant to stop
+# depending on. Arming a host that did not need it is the safe direction.
+#
+# default('', true) because an explicitly-null override is a real shape and `in`
+# against None raises rather than reporting the gate's own message.
 - name: Determine whether the advertised addresses depend on this hostname
   ansible.builtin.set_fact:
     __vault_dns_advertised: >-
       {{ (ansible_fqdn | default('', true) | length > 0)
-         and ((ansible_fqdn in (vault_api_addr | default('', true)))
-              or (ansible_fqdn in (vault_cluster_addr | default('', true)))) }}
+         and (((ansible_fqdn | lower) in (vault_api_addr | default('', true) | lower))
+              or ((ansible_fqdn | lower) in (vault_cluster_addr | default('', true) | lower))) }}
 
 # The addresses are not the only consumer of this name. tasks/tls.yml issues a
 # Vault-PKI certificate with `common_name: "{{ ansible_fqdn }}"`, so an operator

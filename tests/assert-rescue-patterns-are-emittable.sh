@@ -95,14 +95,24 @@ def messages(gate_path):
                 continue
             for v in t.values():
                 if isinstance(v, dict):
-                    for key in ("fail_msg", "success_msg", "msg"):
+                    # FAILURE text only. A rescue reads ansible_failed_result,
+                    # which carries fail_msg (assert) or msg (fail/debug) --
+                    # never success_msg. Counting success_msg let a fragment be
+                    # moved there while the failure message was reworded, and
+                    # the exemption still passed while the case went red.
+                    for key in ("fail_msg", "msg"):
                         if key in v:
                             yield str(v[key])
             for k in ("block", "rescue", "always"):
                 if k in t:
                     yield from walk(t[k])
     with open(gate_path) as fh:
-        return [" ".join(str(m).split()) for m in walk(yaml.safe_load(fh) or [])]
+        raw = list(walk(yaml.safe_load(fh) or []))
+    # Jinja comments render to nothing, so text inside one is not emitted --
+    # an anchor hiding in `{# ... #}` satisfied the exemption while the message
+    # itself no longer contained it.
+    return [" ".join(re.sub(r"\{#.*?#\}", " ", str(m), flags=re.DOTALL).split())
+            for m in raw]
 
 
 # Files whose rescues assert on rendered artefacts rather than on a gate's
@@ -131,6 +141,14 @@ for path in sources:
         checked += 1
         if literal in RUNTIME_RENDERED:
             gate_rel, anchor, _why = RUNTIME_RENDERED[literal]
+            # The exemption must describe the gate THIS case actually runs.
+            # Without this an entry keyed on a pattern string covered every case
+            # using that string, whatever gate it drove.
+            case_gate = [g for pos, g in includes if pos < m.start()]
+            if case_gate and case_gate[-1] != gate_rel and rel not in UNSCOPED_OK:
+                fail.append(f"{rel}: search({literal!r}) runs {case_gate[-1]}, but "
+                            f"RUNTIME_RENDERED declares it rendered by {gate_rel}. "
+                            "An exemption must describe the gate the case drives.")
             gate_path = os.path.join(root, "tasks", gate_rel)
             if not os.path.isfile(gate_path):
                 fail.append(f"RUNTIME_RENDERED[{literal!r}] names tasks/{gate_rel}, "
