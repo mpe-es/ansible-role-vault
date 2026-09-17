@@ -104,9 +104,10 @@
   register: __vault_staged_tls
   # An unreadable TLS directory (a become-less run) must route to the report
   # below, not crash the play -- the same reason tasks/preflight/tls.yml:49
-  # carries it. Every consumer below is keyed on `item.stat is defined`, which
-  # only a successful stat produces; `.failed` would be a tautology here
-  # because failed_when: false DEFINES it as False (#36).
+  # carries it. The ENFORCEMENT is keyed on `item.stat is defined`, which only a
+  # successful stat produces; the REPORT treats its absence as a reportable
+  # cause. Neither keys on `.failed`, which failed_when: false DEFINES as False
+  # for every result -- the #36 port-gate tautology.
   failed_when: false
   loop:
     - "{{ vault_tls_cert_file }}"
@@ -138,6 +139,12 @@
     # supposed to prevent, so the case is excluded and reported instead.
     - item.stat.isreg | default(false)
     - not (item.stat.islnk | default(false))
+    # A HARDLINK defeats the parent bound below: `ln /etc/ipa/ca.crt
+    # /opt/vault/tls/ca.crt` is a regular file, is not a symlink, and its
+    # dirname IS vault_tls_dir -- but the inode is shared, so chgrp/chmod lands
+    # on the out-of-tree material anyway. nlink > 1 is the only signal stat
+    # gives for it.
+    - item.stat.nlink | default(1) == 1
     - item.item | dirname == vault_tls_dir
 
 - name: Report staged TLS material the role will not converge
@@ -145,7 +152,12 @@
     # Branch order matters: a symlink is also not isreg, so islnk must be
     # tested first or every link reports as "not a regular file".
     msg: >-
-      {% if not (item.stat.exists | default(false)) %}
+      {% if item.stat is not defined %}
+      {{ item.item }} could not be inspected ({{ item.msg | default('unknown error') }}),
+      so its posture was not set. A path component that is not a directory, or a
+      directory this play cannot traverse, is the usual cause -- the latter
+      usually means the play needs become: true.
+      {% elif not (item.stat.exists | default(false)) %}
       {{ item.item }} does not exist, so its posture was not set. Preflight
       rejects this host for exactly that reason; you are seeing this instead
       because the preflight tag was skipped.
@@ -159,6 +171,12 @@
       set and Vault cannot read a certificate from it. A directory at this path
       is the usual cause. Remove it and stage the real file; preflight rejects
       this host for the same reason when its tag is not skipped.
+      {% elif (item.stat.nlink | default(1)) != 1 %}
+      {{ item.item }} is a hardlink ({{ item.stat.nlink }} links to the same
+      inode), so its posture was left untouched: changing it would change the
+      other name for that inode too, which is outside {{ vault_tls_dir }}.
+      Stage a copy instead, or make the shared inode readable by the
+      {{ vault_group }} group yourself. See issue #69.
       {% else %}
       {{ item.item }} is outside {{ vault_tls_dir }}, which the role does not
       own, so its posture was left untouched. Ensure it is readable by the
@@ -169,12 +187,24 @@
     label: "{{ item.item }}"
   # The exact complement of the enforcement's when:, so every staged path is
   # either converged or explained -- never silently skipped.
+  #
+  # `item.stat is not defined` is the FIRST or-term, not a precondition. stat
+  # fail_json's on every OSError except ENOENT (e.g. ENOTDIR, when a path
+  # component is a regular file), returning a result with a msg and NO stat key.
+  # Requiring `item.stat is defined` here -- as this task did -- made that shape
+  # fall through both tasks and vanish, while three artifacts claimed it was
+  # reported. `item.skipped` discriminates the genuinely-skipped items (the
+  # managed path) from the failed ones, because failed_when: false on the stat
+  # defines `.failed` as False for every result and keying on it would be the
+  # same tautology as the #36 port gate.
   when:
     - not (vault_manage_tls | bool)
-    - item.stat is defined
-    - not (item.stat.exists | default(false))
+    - not (item.skipped | default(false))
+    - item.stat is not defined
+      or not (item.stat.exists | default(false))
       or not (item.stat.isreg | default(false))
       or (item.stat.islnk | default(false))
+      or (item.stat.nlink | default(1)) != 1
       or item.item | dirname != vault_tls_dir
 
 ###############################################################################

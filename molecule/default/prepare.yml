@@ -114,6 +114,14 @@
         # reverted by the next renewal. The role must leave BOTH the link and
         # its target alone and say so (issue #77 scope bound; readability of
         # such material is #69). verify.yml asserts the target is untouched.
+        - name: Ensure the out-of-tree anchor directory exists
+          ansible.builtin.file:
+            path: /etc/pki
+            state: directory
+            owner: root
+            group: root
+            mode: '0755'
+
         - name: Create out-of-tree CA target (shared-anchor shape)
           ansible.builtin.copy:
             content: "mock ca certificate"

@@ -359,9 +359,11 @@ material outside them is reported and left alone rather than silently changed:
 only paths whose direct parent is `vault_tls_dir` are touched, and symlinks are
 never followed. So pointing `vault_tls_ca_file` at a shared anchor such as
 `/etc/ipa/ca.crt`, or at certmonger/certbot-managed links, is safe — but you
-must make that material readable by the `vault` group yourself. A path that
-exists but is not a regular file (a directory left where a certificate was
-expected) is reported and skipped rather than converged.
+must make that material readable by the `vault` group yourself. A hardlink is
+treated the same way, because its inode is shared with the other name for it. A
+path that exists but is not a regular file (a directory left where a certificate
+was expected), or one that cannot be inspected at all, is likewise reported and
+skipped rather than converged.
 
 Two caveats. The parent check is **lexical**: if `vault_tls_dir` is itself a
 symlink, a staged path under it still matches and the write lands on the

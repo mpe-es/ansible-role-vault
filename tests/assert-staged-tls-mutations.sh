@@ -3,36 +3,43 @@
 # Filename: tests/assert-staged-tls-mutations.sh
 # Role: ansible-role-vault
 # Summary: Meta-gate for issue #77 — proves tests/assert-staged-tls-posture.sh
-#   can actually FAIL, and fails for the right reason.
+#   can actually FAIL, and fails for the RIGHT REASON.
 #
-#   A guard nobody has mutated is a guard nobody knows works. #36 shipped a
-#   port gate that could not fail (failed_when: false made its assert a
-#   tautology) and the first two revisions of the staged-TLS guard were
-#   defeated the same way: revision 1 passed a `path: "{{ vault_tls_dir }}"` +
-#   `state: touch` implementation, revision 2 passed four different relaxations
-#   of the vault_tls_dir bound including the always-true expression
-#   `vault_tls_dir | dirname is defined`. Both were caught by adversarial
-#   review, not by CI. This file is the answer to that.
+#   A guard nobody has mutated is a guard nobody knows works. #36 shipped a port
+#   gate that could not fail. Three successive revisions of the staged-TLS guard
+#   were each defeated by adversarial review rather than by CI:
+#     r1  passed `path: "{{ vault_tls_dir }}"` + `state: touch`,
+#     r2  passed four relaxations of the vault_tls_dir bound, including the
+#         always-true `vault_tls_dir | dirname is defined`,
+#     r3  passed a one-term polarity flip on the STAT task -- a SIBLING of the
+#         term r2 had hardened -- which makes every downstream task skip.
+#   That last one is the lesson this file encodes: bounds come in families, and
+#   a mutation suite that covers one member of a family proves nothing about the
+#   others. Every `when:` in the region is mutated at every site it appears.
 #
-#   Two suites, and BOTH matter:
-#     KILL     — each mutation breaks the enforcement in exactly one way and
-#                the guard must reject it. A survivor is a blind spot.
-#     SURVIVE  — behaviour-preserving refactors the guard must NOT reject.
+#   Two suites, both load-bearing:
+#     KILL     — the guard must reject the mutation AND say why. Each case
+#                carries the text its failure must contain, so a YAML parse
+#                error or an unrelated complaint cannot be miscounted as a kill.
+#     SURVIVE  — behaviour-preserving refactors the guard must ACCEPT.
 #                Over-fitting is its own failure: a guard that rejects valid
 #                code teaches maintainers to delete it.
 #
+#   Mutations are applied to a SLICE of tasks/system.yml (the stat, enforce or
+#   report task specifically), never file-globally: an earlier revision replaced
+#   `    owner: root` across the whole file and silently flipped three unrelated
+#   directory entries, so "each mutation breaks exactly one thing" was false.
+#
 #   Operates entirely on copies in a temporary directory; the repository is
-#   never modified. If an anchor no longer matches, the mutation reports
-#   NO-OP and this gate fails — a deliberate tripwire, like the `checked != 8`
-#   count in tests/assert-root-owned-posture.sh. Re-anchor only after
-#   confirming the refactor is intentional.
+#   never modified. A stale anchor reports NO-OP and fails — the same tripwire
+#   idiom as the `checked != 8` count in tests/assert-root-owned-posture.sh.
 # Usage: bash tests/assert-staged-tls-mutations.sh
 # Classification: UNCLASSIFIED
 ###############################################################################
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 python3 - "$ROOT" <<'PY'
-import os, re, shutil, subprocess, sys, tempfile
+import os, shutil, subprocess, sys, tempfile
 
 root = sys.argv[1]
 GUARD = 'tests/assert-staged-tls-posture.sh'
@@ -42,114 +49,205 @@ MAIN = 'tasks/main.yml'
 sys_src = open(os.path.join(root, SYSTEM)).read()
 main_src = open(os.path.join(root, MAIN)).read()
 
+INS = '- name: Inspect operator-staged TLS material'
 ENF = '- name: Enforce ownership on operator-staged TLS material'
 REP = '- name: Report staged TLS material the role will not converge'
-SEL = '\n###############################################################################\n# SELinux File Contexts'
-INS = '- name: Inspect operator-staged TLS material'
+SEL = '# SELinux File Contexts'
 
+for anchor in (INS, ENF, REP, SEL):
+    if anchor not in sys_src:
+        print(f"FAIL - anchor not found in {SYSTEM}: {anchor!r}; harness is stale")
+        sys.exit(1)
+
+I_INS, I_ENF, I_REP = (sys_src.index(x) for x in (INS, ENF, REP))
+I_SEL = sys_src.index(SEL, I_REP)
+# The '#####' banner line above the SELinux header belongs to that section.
+I_END = sys_src.rindex('#' * 40, I_REP, I_SEL)
+
+SLICES = {'stat': (I_INS, I_ENF), 'enforce': (I_ENF, I_REP), 'report': (I_REP, I_END)}
+
+MANAGE = '    - not (vault_manage_tls | bool)'
 DIRNAME = '    - item.item | dirname == vault_tls_dir'
 ISLNK = '    - not (item.stat.islnk | default(false))'
 ISREG = '    - item.stat.isreg | default(false)'
-EXISTS = '    - item.stat.exists | default(false)\n'
-MANAGE = '    - not (vault_manage_tls | bool)'
+NLINK = '    - item.stat.nlink | default(1) == 1'
+EXISTS = '    - item.stat.exists | default(false)'
 
-SECOND_TASK = '''
-- name: Second enforcement sneaking the trio to the vault account
+SECOND_FILE = '''
+- name: Second file task re-posturing the trio
   ansible.builtin.file:
     path: "{{ item }}"
     state: file
-    owner: vault
+    owner: root
     group: vault
-    mode: '0600'
+    mode: '0666'
   loop:
     - "{{ vault_tls_cert_file }}"
     - "{{ vault_tls_key_file }}"
     - "{{ vault_tls_ca_file }}"
 '''
 
+SECOND_COPY = '''
+- name: Second copy task re-posturing the key
+  ansible.builtin.copy:
+    content: "x"
+    dest: "{{ vault_tls_key_file }}"
+    owner: vault
+    group: vault
+    mode: '0600'
+'''
+
+
+def edit(where, old, new):
+    """Replace `old` with `new` ONLY inside the named task slice."""
+    def f(s):
+        a, b = SLICES[where]
+        seg = s[a:b]
+        if old not in seg:
+            return s
+        return s[:a] + seg.replace(old, new, 1) + s[b:]
+    return f
+
+
+def append_task(text):
+    return lambda s: s[:I_END] + text.lstrip('\n') + '\n' + s[I_END:]
+
+
+def drop_slice(where):
+    def f(s):
+        a, b = SLICES[where]
+        return s[:a] + s[b:]
+    return f
+
 
 def drop_region(s):
-    head, rest = s.split(INS, 1)
-    _, tail = rest.split(SEL, 1)
-    return head + SEL.lstrip('\n') + tail
+    return s[:I_INS] + s[I_END:]
 
 
-def drop_task(s, start, end):
-    i, j = s.index(start), s.index(end)
-    return s[:i] + s[j:]
-
-
-# (label, system.yml transform, main.yml transform)
+# (label, system-transform, main-transform, text the guard's failure must contain)
 KILL = [
-    ("delete the whole enforcement region", drop_region, None),
-    ("delete only the file-module enforcer", lambda s: drop_task(s, ENF, REP), None),
-    ("delete the report task (exclusions become silent)",
-     lambda s: drop_task(s, REP, SEL.lstrip('\n')), None),
-    ("path targets the DIRECTORY, not the loop item",
-     lambda s: s.replace('    path: "{{ item.item }}"', '    path: "{{ vault_tls_dir }}"'), None),
-    ("state: file -> state: touch (manufactures material)",
-     lambda s: s.replace('    state: file\n', '    state: touch\n'), None),
-    ("drop follow: false from the file module (default is true)",
-     lambda s: s.replace('    state: file\n    follow: false\n', '    state: file\n'), None),
-    ("flip the file module to follow: true",
-     lambda s: s.replace('    state: file\n    follow: false\n', '    state: file\n    follow: true\n'), None),
-    ("drop follow: false from the stat (islnk becomes meaningless)",
-     lambda s: s.replace('    follow: false\n    get_checksum: false', '    get_checksum: false'), None),
+    ("delete the whole enforcement region", drop_region, None, "no stat task loops"),
+    ("delete the file-module enforcer", drop_slice('enforce'), None, "enforcement is missing"),
+    ("delete the report task", drop_slice('report'), None, "no debug task loops"),
+
+    # --- the polarity family: the SAME term at THREE sibling sites.
+    ("invert the STAT when: polarity (everything downstream skips)",
+     edit('stat', '  when: not (vault_manage_tls | bool)', '  when: vault_manage_tls | bool'),
+     None, "stat when: is missing the exact term"),
+    ("drop the STAT when: entirely",
+     edit('stat', '\n  when: not (vault_manage_tls | bool)', ''), None,
+     "stat when: is missing the exact term"),
+    ("invert the ENFORCE when: polarity",
+     edit('enforce', MANAGE, '    - vault_manage_tls | bool'), None,
+     "enforcement when: is missing the exact term"),
+    ("drop the ENFORCE when: polarity term",
+     edit('enforce', '\n' + MANAGE, ''), None, "enforcement when: is missing the exact term"),
+    ("invert the REPORT when: polarity",
+     edit('report', MANAGE, '    - vault_manage_tls | bool'), None,
+     "report when: is missing the exact term"),
+    ("disable the REPORT with an always-false term",
+     edit('report', MANAGE, MANAGE + '\n    - false'), None, "always-false term"),
+
+    # --- the vault_tls_dir bound and every way to weaken it.
     ("invert the vault_tls_dir bound (== -> !=)",
-     lambda s: s.replace(DIRNAME, '    - item.item | dirname != vault_tls_dir'), None),
-    ("weaken vault_tls_dir to a prefix search (path traversal reopens)",
-     lambda s: s.replace(DIRNAME, '    - item.item | dirname is search(vault_tls_dir)'), None),
+     edit('enforce', DIRNAME, '    - item.item | dirname != vault_tls_dir'), None,
+     "dirname == vault_tls_dir"),
+    ("weaken vault_tls_dir to a prefix search",
+     edit('enforce', DIRNAME, '    - item.item | dirname is search(vault_tls_dir)'), None,
+     "dirname == vault_tls_dir"),
     ("weaken vault_tls_dir to substring containment",
-     lambda s: s.replace(DIRNAME, '    - vault_tls_dir in (item.item | dirname)'), None),
+     edit('enforce', DIRNAME, '    - vault_tls_dir in (item.item | dirname)'), None,
+     "dirname == vault_tls_dir"),
     ("weaken vault_tls_dir to a match() prefix test",
-     lambda s: s.replace(DIRNAME, '    - item.item | dirname is match(vault_tls_dir)'), None),
-    ("replace the vault_tls_dir bound with an always-true expression",
-     lambda s: s.replace(DIRNAME, '    - vault_tls_dir | dirname is defined'), None),
-    ("drop the vault_tls_dir bound entirely",
-     lambda s: s.replace('\n' + DIRNAME, ''), None),
-    ("invert the symlink bound (converge ONLY symlinks)",
-     lambda s: s.replace(ISLNK, '    - item.stat.islnk | default(false)'), None),
-    ("drop the symlink bound entirely",
-     lambda s: s.replace('\n' + ISLNK, ''), None),
-    ("drop the regular-file bound (a directory aborts the play at Phase 4)",
-     lambda s: s.replace('\n' + ISREG, ''), None),
+     edit('enforce', DIRNAME, '    - item.item | dirname is match(vault_tls_dir)'), None,
+     "dirname == vault_tls_dir"),
+    ("replace vault_tls_dir bound with an always-true expression",
+     edit('enforce', DIRNAME, '    - vault_tls_dir | dirname is defined'), None,
+     "dirname == vault_tls_dir"),
+    ("drop the vault_tls_dir bound", edit('enforce', '\n' + DIRNAME, ''), None,
+     "dirname == vault_tls_dir"),
+
+    # --- the stat-shape bounds, each inverted and each dropped.
+    ("invert the symlink bound", edit('enforce', ISLNK, '    - item.stat.islnk | default(false)'),
+     None, "islnk"),
+    ("drop the symlink bound", edit('enforce', '\n' + ISLNK, ''), None, "islnk"),
     ("invert the regular-file bound",
-     lambda s: s.replace(ISREG, '    - not (item.stat.isreg | default(false))'), None),
+     edit('enforce', ISREG, '    - not (item.stat.isreg | default(false))'), None, "isreg"),
+    ("drop the regular-file bound", edit('enforce', '\n' + ISREG, ''), None, "isreg"),
+    ("invert the hardlink bound",
+     edit('enforce', NLINK, '    - item.stat.nlink | default(1) != 1'), None, "nlink"),
+    ("drop the hardlink bound", edit('enforce', '\n' + NLINK, ''), None, "nlink"),
     ("invert the existence bound",
-     lambda s: s.replace(EXISTS, '    - not (item.stat.exists | default(false))\n'), None),
-    ("drop the existence bound", lambda s: s.replace(EXISTS, '', 1), None),
-    ("drop the vault_manage_tls guard from the enforcer",
-     lambda s: s.replace('\n' + MANAGE + '\n    - item.stat is defined', '\n    - item.stat is defined', 1), None),
-    ("invert the vault_manage_tls polarity",
-     lambda s: s.replace(MANAGE + '\n    - item.stat is defined',
-                         '    - vault_manage_tls | bool\n    - item.stat is defined', 1), None),
+     edit('enforce', EXISTS, '    - not (item.stat.exists | default(false))'), None, "exists"),
+    ("drop the existence bound", edit('enforce', '\n' + EXISTS, ''), None, "exists"),
+    ("drop the failed-stat cause from the REPORT or-chain",
+     edit('report', '    - item.stat is not defined\n      or not', '    - not'), None,
+     "failed stat"),
+
+    # --- module arguments.
+    ("path targets the DIRECTORY, not the loop item",
+     edit('enforce', '    path: "{{ item.item }}"', '    path: "{{ vault_tls_dir }}"'), None,
+     "not derived from item.item"),
+    ("path laundered through stat output (writes through the link)",
+     edit('enforce', '    path: "{{ item.item }}"',
+          '    path: "{{ item.stat.lnk_target | default(item.item) }}"'), None,
+     "derived from stat output"),
+    ("state: file -> state: touch", edit('enforce', '    state: file', '    state: touch'),
+     None, "state='touch'"),
+    ("drop follow: false from the file module",
+     edit('enforce', '\n    follow: false', ''), None, "enforcement follow=None"),
+    ("flip the file module to follow: true",
+     edit('enforce', '    follow: false', '    follow: true'), None, "enforcement follow=True"),
+    ("drop follow: false from the stat", edit('stat', '\n    follow: false', ''), None,
+     "stat follow=None"),
+    ("give the vault account ownership", edit('enforce', '    owner: root', '    owner: vault'),
+     None, "owner='vault'"),
+    ("hardcode the group", edit('enforce', '    group: "{{ vault_group }}"', '    group: vault'),
+     None, "not exactly {{ vault_group }}"),
+    ("hardcode the mode",
+     edit('enforce', '    mode: "{{ vault_tls_file_mode }}"', "    mode: '0640'"), None,
+     "not exactly {{ vault_tls_file_mode }}"),
+    ("launder the mode through a filter",
+     edit('enforce', '    mode: "{{ vault_tls_file_mode }}"',
+          '    mode: "{{ vault_tls_file_mode | regex_replace(\'0640\', \'0644\') }}"'), None,
+     "not exactly {{ vault_tls_file_mode }}"),
     ("narrow the stat loop to 2 of 3 paths",
-     lambda s: s.replace('    - "{{ vault_tls_ca_file }}"\n', '', 1), None),
-    ("give the vault account ownership (owner: vault)",
-     lambda s: s.replace('    owner: root\n', '    owner: vault\n'), None),
-    ("hardcode the group instead of vault_group",
-     lambda s: s.replace('    group: "{{ vault_group }}"\n', '    group: vault\n'), None),
-    ("hardcode the mode instead of vault_tls_file_mode",
-     lambda s: s.replace('    mode: "{{ vault_tls_file_mode }}"\n', "    mode: '0640'\n"), None),
-    ("add a SECOND file task handing the trio to vault:vault",
-     lambda s: s.replace(SEL, SECOND_TASK + SEL, 1), None),
-    ("ungate tls.yml in tasks/main.yml (the premise disappears)", None,
+     edit('stat', '    - "{{ vault_tls_ca_file }}"\n', ''), None, "no stat task loops"),
+
+    # --- a second writer undoing the first.
+    ("add a second file task loosening the trio to 0666", append_task(SECOND_FILE), None,
+     "also writes the staged"),
+    ("add a second copy task handing the key to vault:vault", append_task(SECOND_COPY), None,
+     "also writes the staged"),
+
+    # --- the premise in tasks/main.yml, and every way to break it.
+    ("ungate tls.yml in tasks/main.yml", None,
      lambda m: m.replace('  ansible.builtin.include_tasks: tls.yml\n'
                          '  when: vault_manage_tls | bool\n',
-                         '  ansible.builtin.include_tasks: tls.yml\n', 1)),
+                         '  ansible.builtin.include_tasks: tls.yml\n', 1),
+     "no longer gates tls.yml"),
+    ("weaken the tls.yml gate to `is defined`", None,
+     lambda m: m.replace('  when: vault_manage_tls | bool\n',
+                         '  when: vault_manage_tls is defined\n', 1),
+     "no longer gates tls.yml"),
+    ("invert the tls.yml gate polarity", None,
+     lambda m: m.replace('  when: vault_manage_tls | bool\n',
+                         '  when: not (vault_manage_tls | bool)\n', 1),
+     "no longer gates tls.yml"),
 ]
 
 # Behaviour-preserving. The guard must accept all of these.
 SURVIVE = [
-    ("drop the optional parens: `not vault_manage_tls | bool`",
-     lambda s: s.replace(MANAGE, '    - not vault_manage_tls | bool'), None),
-    ("derive path as vault_tls_dir ~ basename (same target, given the bound)",
-     lambda s: s.replace('    path: "{{ item.item }}"',
-                         '    path: "{{ vault_tls_dir }}/{{ item.item | basename }}"'), None),
+    ("drop the optional parens on the ENFORCE polarity term",
+     edit('enforce', MANAGE, '    - not vault_manage_tls | bool'), None),
+    ("derive path as vault_tls_dir ~ basename of the item",
+     edit('enforce', '    path: "{{ item.item }}"',
+          '    path: "{{ vault_tls_dir }}/{{ item.item | basename }}"'), None),
     ("extra whitespace around the vault_tls_dir comparison",
-     lambda s: s.replace(DIRNAME, '    - item.item   |   dirname   ==   vault_tls_dir'), None),
-    ("reorder the when: terms",
-     lambda s: s.replace(ISREG + '\n' + ISLNK, ISLNK + '\n' + ISREG), None),
+     edit('enforce', DIRNAME, '    - item.item   |   dirname   ==   vault_tls_dir'), None),
+    ("reorder the when: terms", edit('enforce', ISREG + '\n' + ISLNK, ISLNK + '\n' + ISREG), None),
+    ("whitespace inside the group template",
+     edit('enforce', '    group: "{{ vault_group }}"', '    group: "{{  vault_group  }}"'), None),
 ]
 
 
@@ -165,16 +263,19 @@ def run(new_sys, new_main):
 
 
 bad = []
-for label, fs, fm in KILL:
+for label, fs, fm, expect in KILL:
     new_sys = fs(sys_src) if fs else sys_src
     new_main = fm(main_src) if fm else main_src
     if new_sys == sys_src and new_main == main_src:
         bad.append(f"NO-OP (anchor stale): {label}")
         continue
-    if run(new_sys, new_main).returncode == 0:
+    p = run(new_sys, new_main)
+    if p.returncode == 0:
         bad.append(f"SURVIVED (guard is blind): {label}")
+    elif expect not in p.stdout:
+        bad.append(f"WRONG REASON: {label} -- failure did not mention {expect!r}; "
+                   f"got: {p.stdout.strip().splitlines()[:1]}")
 
-overfit = []
 for label, fs, fm in SURVIVE:
     new_sys = fs(sys_src) if fs else sys_src
     new_main = fm(main_src) if fm else main_src
@@ -184,18 +285,16 @@ for label, fs, fm in SURVIVE:
     p = run(new_sys, new_main)
     if p.returncode != 0:
         first = p.stdout.strip().splitlines()
-        overfit.append(f"{label} -> {first[0] if first else '(no output)'}")
+        bad.append(f"OVER-FITTED (rejects a valid refactor): {label} -- "
+                   f"{first[0] if first else '(no output)'}")
 
-# The unmutated tree must pass, or every result above is meaningless.
 if run(sys_src, main_src).returncode != 0:
-    bad.append("the UNMUTATED tree does not pass the guard; suite is meaningless")
+    bad.append("the UNMUTATED tree does not pass the guard; every result above is meaningless")
 
-if bad or overfit:
+if bad:
     for x in bad:
         print("FAIL -", x)
-    for x in overfit:
-        print("FAIL - guard is OVER-FITTED, rejects a valid refactor:", x)
     sys.exit(1)
-print(f"ok - guard killed all {len(KILL)} mutations and accepted all "
-      f"{len(SURVIVE)} behaviour-preserving refactors")
+print(f"ok - guard killed all {len(KILL)} mutations with the right message, and "
+      f"accepted all {len(SURVIVE)} behaviour-preserving refactors")
 PY

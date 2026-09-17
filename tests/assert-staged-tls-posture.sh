@@ -19,14 +19,20 @@
 #     - stat inspects with follow: false (see the link, not its target),
 #     - the file module sets state: file and follow: false,
 #     - path is derived from the loop item,
-#     - the when: carries exactly `not (vault_manage_tls | bool)`,
-#       `item.stat.exists | default(false)`, `item.stat.isreg | default(false)`,
-#       `not (item.stat.islnk | default(false))` and
+#     - ALL THREE tasks carry the exact term `not (vault_manage_tls | bool)`.
+#       They are siblings: inverting the STAT's copy alone makes every
+#       downstream task skip and regresses #77 in full, silently.
+#     - the enforcement when: also carries `item.stat.exists | default(false)`,
+#       `item.stat.isreg | default(false)`,
+#       `not (item.stat.islnk | default(false))`,
+#       `item.stat.nlink | default(1) == 1` and
 #       `item.item | dirname == vault_tls_dir`,
-#     - every excluded path is REPORTED by a debug task over the same results,
-#     - no OTHER task in system.yml hands the staged trio to a non-root owner,
-#     - the PREMISE holds: tasks/main.yml still gates tls.yml on
-#       vault_manage_tls (without it this task is redundant and the two fight).
+#     - the report when: names every one of those exclusion causes plus the
+#       failed-stat shape, and contains no always-false term,
+#     - no OTHER file/copy/template task in system.yml re-postures the trio,
+#     - the PREMISE holds: tasks/main.yml still gates tls.yml on the exact term
+#       `vault_manage_tls | bool` (without it this task is redundant and the
+#       two fight over the same files).
 #
 #   Structural and container-free by design. Behavioural proof lives in
 #   molecule/default (staged root:root 0600 -> root:vault 0640, a symlinked CA
@@ -67,6 +73,9 @@ def when_terms(task):
     return [' '.join(str(t).split()) for t in terms]
 
 
+MANAGE_RX = r'not\s*\(?\s*vault_manage_tls\s*\|\s*bool\s*\)?'
+
+
 def has_term(terms, pattern):
     """True when SOME whole term matches `pattern` end-to-end (parens tolerated)."""
     rx = re.compile(r'^\(?\s*' + pattern + r'\s*\)?$')
@@ -96,6 +105,13 @@ else:
     if not register:
         fail.append("staged-TLS stat has no register:; the enforcement has nothing "
                     "to consume")
+    # SIBLING SITE. Flipping THIS when: skips the stat per item, so every result
+    # carries skipped: true and no stat key, and the enforcement and the report
+    # both fall through -- #77 regresses in full, silently. Same term, same lock.
+    if not has_term(when_terms(task), MANAGE_RX):
+        fail.append(f"staged-TLS stat when: is missing the exact term "
+                    f"`not (vault_manage_tls | bool)` (found {when_terms(task)!r}); "
+                    "inverting or dropping it makes every downstream task skip")
 
 # --- 2. The enforcer: the file module that consumes it.
 enforcers = [(t, m) for t, m in mods(tasks, ('file', 'ansible.builtin.file'))
@@ -116,17 +132,26 @@ elif enforcers:
     if mod.get('owner') != 'root':
         fail.append(f"staged-TLS enforcement owner={mod.get('owner')!r} != root "
                     "(#38: vault must not own what defines its posture)")
-    if 'vault_group' not in str(mod.get('group', '')):
-        fail.append(f"staged-TLS enforcement group={mod.get('group')!r} does not "
-                    "resolve from vault_group")
-    if 'vault_tls_file_mode' not in str(mod.get('mode', '')):
-        fail.append(f"staged-TLS enforcement mode={mod.get('mode')!r} does not "
-                    "resolve from vault_tls_file_mode (hardcoding drifts from vars)")
+    # Substring would accept laundering through a filter, e.g.
+    # `{{ vault_tls_file_mode | regex_replace('0640','0644') }}` -- it contains
+    # the variable name and resolves to something else entirely. Whole value.
+    if not re.match(r'^\{\{\s*vault_group\s*\}\}$', str(mod.get('group', ''))):
+        fail.append(f"staged-TLS enforcement group={mod.get('group')!r} is not "
+                    "exactly {{ vault_group }}")
+    if not re.match(r'^\{\{\s*vault_tls_file_mode\s*\}\}$', str(mod.get('mode', ''))):
+        fail.append(f"staged-TLS enforcement mode={mod.get('mode')!r} is not "
+                    "exactly {{ vault_tls_file_mode }} (a filter could launder it "
+                    "to any value while still naming the var)")
 
     # --- target derived per item, so one fixed path cannot stand in for the trio.
-    if 'item' not in path:
-        fail.append(f"staged-TLS enforcement path={path!r} is not derived from the "
-                    "loop item; it would converge one fixed path, not the trio")
+    # item.stat is specifically excluded: `item.stat.lnk_target` names `item` and
+    # would write straight through a symlink, defeating the islnk bound.
+    if 'item.item' not in path:
+        fail.append(f"staged-TLS enforcement path={path!r} is not derived from "
+                    "item.item; it would converge one fixed path, not the trio")
+    if 'item.stat' in path:
+        fail.append(f"staged-TLS enforcement path={path!r} is derived from stat "
+                    "output; lnk_target and friends resolve OUTSIDE vault_tls_dir")
 
     # --- state: touch would CREATE material the operator was told to supply.
     if mod.get('state') != 'file':
@@ -142,7 +167,7 @@ elif enforcers:
     # --- bounds, matched as WHOLE TERMS. Substring tests cannot see polarity,
     # and cannot tell `== vault_tls_dir` from `is search(vault_tls_dir)`.
     REQUIRED = [
-        (r'not\s*\(?\s*vault_manage_tls\s*\|\s*bool\s*\)?',
+        (MANAGE_RX,
          "not (vault_manage_tls | bool)",
          "without it the task double-applies with tasks/tls.yml on the managed path"),
         (r'item\.stat\.exists\s*\|\s*default\(\s*false\s*\)',
@@ -155,6 +180,10 @@ elif enforcers:
         (r'not\s*\(\s*item\.stat\.islnk\s*\|\s*default\(\s*false\s*\)\s*\)',
          "not (item.stat.islnk | default(false))",
          "a symlink would be converged as if it were a regular file"),
+        (r'item\.stat\.nlink\s*\|\s*default\(\s*1\s*\)\s*==\s*1',
+         "item.stat.nlink | default(1) == 1",
+         "a HARDLINK into vault_tls_dir shares an inode with out-of-tree "
+         "material, so chgrp/chmod lands on that material anyway"),
         (r'item\.item\s*\|\s*dirname\s*==\s*vault_tls_dir',
          "item.item | dirname == vault_tls_dir",
          "anything weaker than EXACT parent equality lets an operator pointing "
@@ -165,24 +194,64 @@ elif enforcers:
             fail.append(f"staged-TLS enforcement when: is missing the exact term "
                         f"`{literal}` (found {terms!r}) -- {why}")
 
-# --- 3. Every excluded path must be explained, not silently skipped.
+# --- 3. Every excluded path must be explained, not silently skipped. The report
+# is a SIBLING of the enforcer and gets the same treatment: its own polarity
+# term locked, and its or-chain required to name every exclusion cause. A report
+# that exists but can never fire is worse than none -- README and CHANGELOG both
+# promise the operator an explanation.
 reporters = [t for t, _ in mods(tasks, ('debug', 'ansible.builtin.debug'))
              if register and register in str(t.get('loop', ''))]
 if register and not reporters:
     fail.append(f"tasks/system.yml: no debug task loops over {register}; paths the "
-                "enforcement excludes (missing, symlinked, non-regular, out of "
-                "vault_tls_dir) would be skipped with no explanation, and README "
-                "and CHANGELOG both claim they are reported")
+                "enforcement excludes (missing, symlinked, non-regular, hardlinked, "
+                "out of vault_tls_dir, un-stat-able) would be skipped with no "
+                "explanation, and README and CHANGELOG both claim they are reported")
+elif reporters:
+    rterms = when_terms(reporters[0])
+    if not has_term(rterms, MANAGE_RX):
+        fail.append(f"staged-TLS report when: is missing the exact term "
+                    f"`not (vault_manage_tls | bool)` (found {rterms!r})")
+    if any(t.strip().lower() in ('false', 'no', 'off') for t in rterms):
+        fail.append(f"staged-TLS report when: contains an always-false term "
+                    f"({rterms!r}); every exclusion would be silent")
+    chain = ' '.join(rterms)
+    # The failed-stat shape (ENOTDIR and friends) returns NO stat key. Requiring
+    # `item.stat is defined` here made it fall through BOTH tasks and vanish.
+    if 'item.stat is not defined' not in chain:
+        fail.append(f"staged-TLS report when: does not treat a failed stat as a "
+                    f"reportable cause (found {rterms!r}); stat fail_json's on "
+                    "every OSError but ENOENT, returning no stat key, and that "
+                    "shape would be silently skipped by the enforcer too")
+    for cause in ('exists', 'isreg', 'islnk', 'nlink', 'dirname'):
+        if cause not in chain:
+            fail.append(f"staged-TLS report when: never fires for the {cause} "
+                        f"exclusion (found {rterms!r}); it must be the exact "
+                        "complement of the enforcement")
 
-# --- 4. No second task may hand the staged trio to a non-root owner.
-for t, m in mods(tasks, ('file', 'ansible.builtin.file')):
-    if enforcers and t is enforcers[0][0]:
-        continue
-    blob = str(t.get('loop', '')) + str(m.get('path', ''))
-    if any(v in blob for v in STAGED) and m.get('owner') != 'root':
-        fail.append(f"tasks/system.yml: a second file task touches the staged TLS "
-                    f"trio with owner={m.get('owner')!r}; only root may own the "
-                    "material that defines the service's posture (#38)")
+# --- 4. No OTHER task may re-posture the staged trio. Scans every module that
+# can write a file's ownership, not just `file` -- `copy` and `template` set
+# owner/group/mode too, and a second task undoing this one is the obvious way
+# for the fix to be lost in a later refactor.
+for name in ('file', 'ansible.builtin.file', 'copy', 'ansible.builtin.copy',
+             'template', 'ansible.builtin.template'):
+    for t, m in mods(tasks, (name,)):
+        if enforcers and t is enforcers[0][0]:
+            continue
+        blob = str(t.get('loop', '')) + str(m.get('path', '')) + str(m.get('dest', ''))
+        if not any(v in blob for v in STAGED):
+            continue
+        label = t.get('name', '<unnamed>')
+        if m.get('owner') != 'root':
+            fail.append(f"tasks/system.yml: task {label!r} also writes the staged "
+                        f"TLS trio with owner={m.get('owner')!r}; only root may own "
+                        "the material that defines the service's posture (#38)")
+        if 'vault_group' not in str(m.get('group', '')):
+            fail.append(f"tasks/system.yml: task {label!r} also writes the staged "
+                        f"TLS trio with group={m.get('group')!r}, not vault_group")
+        if 'vault_tls_file_mode' not in str(m.get('mode', '')):
+            fail.append(f"tasks/system.yml: task {label!r} also writes the staged "
+                        f"TLS trio with mode={m.get('mode')!r}, not "
+                        "vault_tls_file_mode")
 
 # --- 5. The premise: tasks/tls.yml really is gated off on the default path.
 gated = False
@@ -191,7 +260,11 @@ for t in yaml.safe_load(open(os.path.join(root, 'tasks/main.yml'))) or []:
         continue
     inc = t.get('include_tasks') or t.get('ansible.builtin.include_tasks') or ''
     target = inc.get('file', '') if isinstance(inc, dict) else str(inc)
-    if 'tls.yml' in target and any('vault_manage_tls' in x for x in when_terms(t)):
+    # Exact term, for the same reason every other bound is: `vault_manage_tls is
+    # defined` and `not (vault_manage_tls | bool)` both contain the variable name
+    # and both make tls.yml run on the default path, fighting this enforcement.
+    if 'tls.yml' in target and has_term(when_terms(t),
+                                        r'vault_manage_tls\s*\|\s*bool'):
         gated = True
 if not gated:
     fail.append("tasks/main.yml no longer gates tls.yml on vault_manage_tls; the "

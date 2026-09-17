@@ -151,7 +151,7 @@
     # when util-linux is absent, and the assert below would then report that as
     # "vault cannot read its own private key" -- a false #77 regression. The
     # same guard precedes the #38 probe block later in this file.
-    - name: Confirm runuser is available before probing as vault
+    - name: Confirm runuser is available before the staged-TLS probe
       ansible.builtin.command: runuser --version
       changed_when: false
 

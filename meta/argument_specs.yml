@@ -156,18 +156,33 @@ argument_specs:
       vault_tls_cert_file:
         description:
           - Path to the TLS certificate file on the target host.
+          - "With vault_manage_tls false (the default) the operator stages this file."
+          - "The role then rewrites its owner, group and mode to root:vault 0640, so the service account can read it (issue #77)."
+          - "Only a direct child of vault_tls_dir is changed."
+          - "A symlink, a hardlink, a non-regular file, or a path elsewhere is reported and left untouched."
+          - "Pointing this at shared material is therefore safe, but making it readable by the vault group is then yours to do."
         type: path
         default: "/opt/vault/tls/tls.crt"
 
       vault_tls_key_file:
         description:
           - Path to the TLS private key file on the target host.
+          - "With vault_manage_tls false (the default) the operator stages this file."
+          - "The role then rewrites its owner, group and mode to root:vault 0640, so the service account can read it (issue #77)."
+          - "Only a direct child of vault_tls_dir is changed."
+          - "A symlink, a hardlink, a non-regular file, or a path elsewhere is reported and left untouched."
+          - "Pointing this at shared material is therefore safe, but making it readable by the vault group is then yours to do."
         type: path
         default: "/opt/vault/tls/tls.key"
 
       vault_tls_ca_file:
         description:
           - Path to the CA certificate file on the target host.
+          - "With vault_manage_tls false (the default) the operator stages this file."
+          - "The role then rewrites its owner, group and mode to root:vault 0640, so the service account can read it (issue #77)."
+          - "Only a direct child of vault_tls_dir is changed."
+          - "A symlink, a hardlink, a non-regular file, or a path elsewhere is reported and left untouched."
+          - "Pointing this at shared material is therefore safe, but making it readable by the vault group is then yours to do."
         type: path
         default: "/opt/vault/tls/ca.crt"
 
