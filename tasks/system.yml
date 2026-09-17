@@ -49,6 +49,43 @@
     label: "{{ item.path }} ({{ item.mode }})"
 
 ###############################################################################
+# Operator-staged TLS material (issue #77)
+#
+# tasks/main.yml gates tasks/tls.yml on vault_manage_tls, so on the DEFAULT
+# path (false) nothing there ever runs and nothing sets ownership on the trio
+# the operator staged -- yet tasks/preflight/tls.yml explicitly instructs them
+# to stage it. The role therefore converges that posture here, exactly as it
+# already does unconditionally for vault_tls_dir above.
+#
+# root:{{ vault_group }} {{ vault_tls_file_mode }} is the same pairing
+# tasks/tls.yml applies on the managed path: vault READS the key via the group
+# but must not OWN its trust anchors, or a compromised process could swap them
+# (#38). The when: keeps the two off each other -- exactly one of this task and
+# tasks/tls.yml enforces posture on any given run, never both.
+#
+# No handler notify: ownership is read at service start, and on a first run
+# this executes in Phase 4, long before service.yml starts Vault in Phase 9.
+# Notifying would restart a HEALTHY Vault to correct drift that does not affect
+# the running process -- sealing a cluster to fix a permission bit.
+#
+# state: file (not touch) so a missing path is an error rather than a
+# zero-byte certificate silently created where one was expected.
+# NIST 800-53: AC-6 (Least Privilege), SC-8 (Transmission Confidentiality)
+###############################################################################
+- name: Enforce ownership on operator-staged TLS material
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: file
+    owner: root
+    group: "{{ vault_group }}"
+    mode: "{{ vault_tls_file_mode }}"
+  loop:
+    - "{{ vault_tls_cert_file }}"
+    - "{{ vault_tls_key_file }}"
+    - "{{ vault_tls_ca_file }}"
+  when: not (vault_manage_tls | bool)
+
+###############################################################################
 # SELinux File Contexts
 ###############################################################################
 - name: Set SELinux file contexts for Vault paths
