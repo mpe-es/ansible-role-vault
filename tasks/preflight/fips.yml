@@ -2,22 +2,83 @@
 ###############################################################################
 # Filename: tasks/preflight/fips.yml
 # Role: ansible-role-vault
-# Summary: Preflight gate - FIPS mode enabled (SC-13)
+# Summary: Preflight gate - FIPS mode enabled (SC-13, issue #66).
+#
+#   Previously a bare slurp with no failed_when, so a host where
+#   /proc/sys/crypto/fips_enabled is absent or unreadable died with
+#   "File not found: /proc/sys/crypto/fips_enabled" -- a module error, at the
+#   PROBE. The assert below and its remediation text were never reached, and the
+#   operator got a traceback instead of an instruction. Same defect class the #36
+#   branch repaired for chrony (a missing chronyc crashed the task rather than
+#   failing the assert); chrony.yml's branch structure is the pattern here.
+#
+#   "FIPS is off" and "FIPS state could not be observed" are materially
+#   different findings for an SC-13 control, so they get distinct remediations
+#   rather than one shared message.
+#
+#   DISCRIMINATION. `failed_when: false` DEFINES `.failed` as False, so any test
+#   keyed on it is a tautology (#36, gotcha 1) -- measured again here: a slurp of
+#   an absent path under failed_when: false reports `failed: False` with no
+#   `content` key at all. Existence is therefore asked of stat, and the read is
+#   discriminated on `content is defined`, which only appears on success.
+#
+#   NOT keyed on size: procfs reports st_size 0 for this file even when it reads
+#   as "1", so a size check would reject every healthy host.
+# NIST 800-53: SC-13 (Cryptographic Protection)
 # Classification: UNCLASSIFIED
 ###############################################################################
+# stat, not slurp, for the existence question: stat answers "absent" without
+# failing, so the two causes stay distinguishable. It also reports readability
+# for the effective user, which is what the slurp below will actually attempt.
+- name: Stat the FIPS sysctl
+  ansible.builtin.stat:
+    path: "{{ __vault_fips_path }}"
+    get_checksum: false
+    get_attributes: false
+    get_mime: false
+  register: __vault_fips_stat
+
 - name: Check FIPS mode status
   ansible.builtin.slurp:
-    src: /proc/sys/crypto/fips_enabled
+    src: "{{ __vault_fips_path }}"
   register: __vault_fips_status
+  failed_when: false
+  when:
+    - __vault_fips_stat.stat.exists | default(false)
+    - __vault_fips_stat.stat.readable | default(false)
 
 - name: "Preflight | fips | FIPS mode is enabled"
   ansible.builtin.assert:
     that:
-      - (__vault_fips_status.content | b64decode | trim) == '1'
+      # `content is defined` first, and every downstream filter defaulted, so
+      # the expression cannot raise on a host where the read never happened.
+      - __vault_fips_status.content is defined
+      - (__vault_fips_status.content | default('') | b64decode | trim) == '1'
     fail_msg: >-
-      /proc/sys/crypto/fips_enabled is not 1, so the kernel is not running in
-      FIPS mode. Enable it with: fips-mode-setup --enable && reboot.
+      {% if not (__vault_fips_stat.stat.exists | default(false)) %}
+      {{ __vault_fips_path }} does not exist, so this kernel exposes no FIPS
+      sysctl and FIPS mode cannot be observed -- which is NOT the same as FIPS
+      being off. A kernel built without CONFIG_CRYPTO_FIPS, or a container whose
+      /proc is masked, both look like this. Run the role against a FIPS-capable
+      kernel, or establish the control by other means and record that decision.
+      {% elif not (__vault_fips_stat.stat.readable | default(false)) %}
+      {{ __vault_fips_path }} exists but is not readable by the account this
+      play is running as, so FIPS state is unverified. This is a privilege
+      problem, not a FIPS problem -- run the role with become: true.
+      {% elif __vault_fips_status.content is not defined %}
+      {{ __vault_fips_path }} was reported readable but the read returned no
+      content, so FIPS state is unverified. Message from the read:
+      {{ __vault_fips_status.msg | default('(none reported)') }}
+      {% elif (__vault_fips_status.content | default('') | b64decode | trim) == '0' %}
+      {{ __vault_fips_path }} is 0, so the kernel is not running in FIPS mode.
+      Enable it with: fips-mode-setup --enable && reboot.
       This gate proves only that kernel flag. It does not establish that a
       FIPS-validated module version is installed, nor that a FIPS Vault edition
       was selected (see vault_edition) -- those are separate obligations.
+      {% else %}
+      {{ __vault_fips_path }} read as
+      '{{ __vault_fips_status.content | default('') | b64decode | trim }}',
+      which is neither '1' nor '0'. FIPS state is unverified; do not assume it
+      is off. Inspect the host before proceeding.
+      {% endif %}
     success_msg: "FIPS mode: enabled"

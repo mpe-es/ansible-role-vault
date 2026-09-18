@@ -36,7 +36,7 @@ one of them applies and the other does not.
 | Gate | Fires when | Requirement |
 |------|-----------|-------------|
 | OS family / version | always | RedHat-family, EL 8/9/10 |
-| FIPS | always | `/proc/sys/crypto/fips_enabled` is `1`. This is the kernel flag only — it does not establish a validated module version, nor that a FIPS Vault edition was selected via `vault_edition` |
+| FIPS | always | `/proc/sys/crypto/fips_enabled` is `1`. This is the kernel flag only — it does not establish a validated module version, nor that a FIPS Vault edition was selected via `vault_edition`. **"FIPS is off" and "FIPS state could not be observed" are reported separately**, because they are different findings for SC-13: an absent sysctl (a kernel without `CONFIG_CRYPTO_FIPS`, or a container with a masked `/proc`) is *unobservable*, not disabled, and an unreadable one is a privilege problem telling you to use `become: true`. A value that is neither `1` nor `0` is reported as unverified rather than assumed off (#66) |
 | SELinux | always | `enabled` **and** `enforcing` |
 | Time sync | always | `chronyc tracking` reports `Leap status : Normal`. A missing `chronyc` or a stopped `chronyd` now fails the **assert** with remediation text, not the task |
 | firewalld | `vault_manage_firewall` | service `ActiveState == active`. Honours the toggle — disable firewall management and this gate does not apply |

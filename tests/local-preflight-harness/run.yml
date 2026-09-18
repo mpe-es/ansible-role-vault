@@ -51,12 +51,104 @@
             mode: '0000'
           when: lookup('env', 'USER') != 'root'
 
+        - name: FIPS sysctl fixtures (#66)
+          # The gate reads __vault_fips_path, so every FAILURE branch is
+          # reachable without a FIPS-capable kernel. Only the happy path needs
+          # one, and the live lab host covers that.
+          ansible.builtin.copy:
+            content: "{{ item.c }}\n"
+            dest: "{{ fx }}/{{ item.n }}"
+            mode: '0644'
+          loop:
+            - {n: fips_on, c: '1'}
+            - {n: fips_off, c: '0'}
+            - {n: fips_garbage, c: 'banana'}
+          loop_control: {label: "{{ item.n }}"}
+
+        - name: An unreadable FIPS sysctl (mode 0000)
+          # Same root caveat as unreadable.crt above: os.access() returns True
+          # for root regardless of mode, so as root this fixture proves nothing.
+          ansible.builtin.copy:
+            content: "1\n"
+            dest: "{{ fx }}/fips_noread"
+            mode: '0000'
+          when: lookup('env', 'USER') != 'root'
+
         - name: A symlinked source (certmonger shape)
           ansible.builtin.file:
             src: "{{ fx }}/good.crt"
             dest: "{{ fx }}/link.crt"
             state: link
             force: true
+
+    ###########################################################################
+    # fips (#66) - the probe must ASSERT, never crash, and must distinguish
+    # "FIPS is off" from "FIPS state could not be observed". Those are
+    # materially different findings for SC-13. Before #66 an absent sysctl
+    # killed the play at the probe with "File not found", so the gate's
+    # remediation text was unreachable on exactly the hosts that needed it.
+    ###########################################################################
+    - name: "F1 PASSES - sysctl reads 1"
+      ansible.builtin.include_role:
+        name: ansible-role-vault
+        tasks_from: preflight/fips.yml
+      vars: {__vault_fips_path: "{{ fx }}/fips_on"}
+
+    - name: "F2 FIRES - sysctl reads 0"
+      block:
+        - ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/fips.yml
+          vars: {__vault_fips_path: "{{ fx }}/fips_off"}
+        - ansible.builtin.fail: {msg: "F2 did not fire"}
+      rescue:
+        - ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg | default('') is search('not running in FIPS mode')
+            success_msg: "F2: disabled -> enable-and-reboot remediation"
+
+    - name: "F3 FIRES - sysctl absent, and is NOT reported as 'off'"
+      block:
+        - ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/fips.yml
+          vars: {__vault_fips_path: "{{ fx }}/fips_absent"}
+        - ansible.builtin.fail: {msg: "F3 did not fire"}
+      rescue:
+        - ansible.builtin.assert:
+            that:
+              # The discriminating half: it must NOT claim FIPS is off, because
+              # an absent sysctl does not establish that.
+              - ansible_failed_result.msg | default('') is search('exposes no FIPS sysctl')
+              - ansible_failed_result.msg | default('') is not search('not running in FIPS mode')
+            success_msg: "F3: absent -> unobservable, distinguished from off"
+
+    - name: "F4 FIRES - sysctl reads something that is neither 1 nor 0"
+      block:
+        - ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/fips.yml
+          vars: {__vault_fips_path: "{{ fx }}/fips_garbage"}
+        - ansible.builtin.fail: {msg: "F4 did not fire"}
+      rescue:
+        - ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg | default('') is search("neither '1' nor '0'")
+            success_msg: "F4: unexpected value -> unverified, not assumed off"
+
+    - name: "F5 FIRES - sysctl unreadable is a PRIVILEGE finding, not a FIPS one"
+      block:
+        - ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/fips.yml
+          vars: {__vault_fips_path: "{{ fx }}/fips_noread"}
+        - ansible.builtin.fail: {msg: "F5 did not fire"}
+      rescue:
+        - ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg | default('') is search('privilege problem')
+            success_msg: "F5: unreadable -> become: true, not a FIPS failure"
+      when: lookup('env', 'USER') != 'root'
 
     ###########################################################################
     # managed_tls (#80)
