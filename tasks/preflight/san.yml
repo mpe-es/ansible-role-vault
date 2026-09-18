@@ -170,12 +170,19 @@
     # `a ~ (b is search(x))` and yields a STRING, which ansible-core rejects as
     # a conditional. -help goes to stderr on some builds and stdout on others,
     # so both are searched.
+    # Set UNCONDITIONALLY. A set_fact whose when: is false does not overwrite --
+    # it leaves the previous value in place -- so a conditional fact here would
+    # carry one include's answer into the next, and this gate is driven
+    # per-include by molecule and by the local harness. Proven: two set_facts,
+    # the second with `when: false`, and the third task still reads the first's
+    # value. Registers do not share the flaw (a skipped task still writes a
+    # skipped result), but every fact this gate asserts on is computed fresh
+    # regardless, so no case can inherit another's certificate.
     __vault_san_can_check: >-
-      {{ (((__vault_san_help.stdout | default('')) ~ (__vault_san_help.stderr | default('')))
-          is search('-checkhost')) | bool }}
-  when:
-    - __vault_san_inspectable | bool
-    - __vault_san_ossl.rc | default(1) == 0
+      {{ ((__vault_san_inspectable | bool)
+          and (__vault_san_ossl.rc | default(1) == 0)
+          and ((((__vault_san_help.stdout | default('')) ~ (__vault_san_help.stderr | default('')))
+                is search('-checkhost')))) | bool }}
 
 - name: "Preflight | san | this openssl cannot check hostnames"
   ansible.builtin.debug:
