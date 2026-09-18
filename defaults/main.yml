@@ -137,10 +137,10 @@ vault_raft_node_id: "{{ inventory_hostname_short }}"
 ###############################################################################
 # API address advertised to clients
 # Format: https://<fqdn_or_ip>:8200
-vault_api_addr: "https://{{ ansible_fqdn }}:{{ vault_listener_port }}"
+vault_api_addr: "https://{{ ansible_facts['fqdn'] }}:{{ vault_listener_port }}"
 
 # Cluster address for Raft replication between nodes
-vault_cluster_addr: "https://{{ ansible_fqdn }}:8201"
+vault_cluster_addr: "https://{{ ansible_facts['fqdn'] }}:8201"
 
 # Load balancer or leader address for HA retry_join
 # Set this for HA clusters; leave empty/null for single-node

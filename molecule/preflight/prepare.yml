@@ -180,7 +180,7 @@
         - good.key
         - good.ca
 
-    # DNS fixtures (#79). ansible_fqdn is overridable per-include (vars
+    # DNS fixtures (#79). the fqdn fact is overridable per-include (via __real_facts | combine) (vars
     # precedence 21 beats host facts 15), and /etc/hosts is writable here, so
     # the scenario controls BOTH inputs the dns gate reads -- it does not have
     # to settle for the container's own name, which it cannot control.

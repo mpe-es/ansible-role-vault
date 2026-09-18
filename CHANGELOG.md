@@ -181,6 +181,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Facts are now read through `ansible_facts[...]`, so the role survives the
+  removal of `INJECT_FACTS_AS_VARS`.** That setting is what makes `ansible_fqdn`
+  exist alongside `ansible_facts['fqdn']`; its default-`True` behaviour is
+  deprecated and slated for removal. Measured with injection disabled, the role
+  did not merely fail a gate — it died on its **first task**, because
+  `meta/argument_specs.yml` embedded `{{ ansible_fqdn }}` in a default and
+  argument-spec validation could not resolve it. Blast radius was total, and CI
+  installed `ansible-core` unpinned, so the break would have landed on a
+  scheduled run with no commit to blame. Converted across `defaults/`, `vars/`,
+  `meta/`, `tasks/` and the molecule scenarios; `main` emitted 16 deprecation
+  warnings on a preflight run and now emits none. Verified on live hardware with
+  `ANSIBLE_INJECT_FACT_VARS=False`: full converge `ok=87 changed=0 failed=0`,
+  byte-identical to the run with injection on. (#78)
+
+- **The molecule preflight fixtures overrode facts in a way that silently stopped
+  working.** They set `ansible_fqdn:`/`ansible_distribution:` as task vars
+  (precedence 21 beats host facts 15) to drive per-case behaviour. Once the gates
+  read `ansible_facts[...]`, those overrides no longer reach them and each case
+  would have exercised the container's real values while still claiming to test a
+  fixture. Three candidate replacements were measured rather than assumed:
+  overriding `ansible_facts` in `vars:` self-references and dies with "Recursive
+  loop detected"; replacing the whole dict loses every other fact
+  (`os_family` came back empty); and `set_fact` is host-global, so cases leak into
+  each other. The working form snapshots the real facts once into a plain var and
+  rebuilds per include — `ansible_facts: "{{ __real_facts | combine({...}) }}"` —
+  which is scoped, leak-free and preserves untouched facts. Proven with a
+  three-case probe where the third case, which overrides nothing, still sees the
+  real value. (#78)
+
 - **The common parent `/opt/vault` was never asserted on, so a STIG-hardened host
   could not start Vault.** The role created and enforced `vault_data_dir`,
   `vault_tls_dir`, `vault_log_dir`, `vault_config_dir` and `vault_backup_dir` — but
