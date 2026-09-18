@@ -7,6 +7,25 @@
 #   refresh the daemon in-phase (before Phase 9 executes the binary).
 # NIST 800-53: CM-7(5), SI-7
 # RHEL 9 STIG: supports RHEL-09-433016 (433010/433015 = prerequisites)
+#
+#   CONNECTION REQUIREMENT. Where fapolicyd is ENFORCING -- the posture this
+#   phase exists to support -- Ansible cannot reach the host at all without
+#   pipelining, and the failure precedes this file by a wide margin. The shipped
+#   policy denies opening untrusted files typed as %languages:
+#
+#       deny_audit perm=any all : ftype=%languages
+#
+#   Ansible writes AnsiballZ_<module>.py with a #!/usr/bin/python3 shebang, so
+#   libmagic types it text/x-script.python. It is generated at runtime and is not
+#   in the rpmdb-backed trust database, so the open is denied with EPERM -- during
+#   gather_facts, before any role task runs, and possibly with no audit record.
+#
+#   No preflight gate can cover this: detecting it requires running a module, and
+#   the condition is that no module can run. It is a control-node setting
+#   (ansible_pipelining / [ssh_connection] pipelining) documented in README under
+#   "Connection: pipelining is required on fapolicyd-enforcing hosts". Do NOT
+#   resolve it by trusting ~/.ansible/tmp -- that disables the control this phase
+#   supports.
 # Classification: UNCLASSIFIED
 ###############################################################################
 
