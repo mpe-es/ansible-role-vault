@@ -13,7 +13,12 @@
 # Verify target system meets requirements before making changes.
 ###############################################################################
 - name: Include pre-flight validation tasks
-  ansible.builtin.include_tasks: preflight.yml
+  ansible.builtin.include_tasks:
+    file: preflight.yml
+    apply:
+      tags:
+        - vault
+        - preflight
   tags:
     - vault
     - preflight
@@ -25,7 +30,12 @@
 # NIST 800-53: SI-7 (Software, Firmware, and Information Integrity)
 ###############################################################################
 - name: Include repository configuration tasks
-  ansible.builtin.include_tasks: repo.yml
+  ansible.builtin.include_tasks:
+    file: repo.yml
+    apply:
+      tags:
+        - vault
+        - repo
   when: vault_manage_repo | bool
   tags:
     - vault
@@ -36,7 +46,12 @@
 # Install HashiCorp Vault RPM package.
 ###############################################################################
 - name: Include package installation tasks
-  ansible.builtin.include_tasks: install.yml
+  ansible.builtin.include_tasks:
+    file: install.yml
+    apply:
+      tags:
+        - vault
+        - install
   tags:
     - vault
     - install
@@ -47,7 +62,12 @@
 # NIST 800-53: AC-6 (Least Privilege)
 ###############################################################################
 - name: Include system preparation tasks
-  ansible.builtin.include_tasks: system.yml
+  ansible.builtin.include_tasks:
+    file: system.yml
+    apply:
+      tags:
+        - vault
+        - system
   tags:
     - vault
     - system
@@ -58,7 +78,12 @@
 # NIST 800-53: SC-8 (Transmission Confidentiality and Integrity)
 ###############################################################################
 - name: Include TLS certificate tasks
-  ansible.builtin.include_tasks: tls.yml
+  ansible.builtin.include_tasks:
+    file: tls.yml
+    apply:
+      tags:
+        - vault
+        - tls
   when: vault_manage_tls | bool
   tags:
     - vault
@@ -69,7 +94,12 @@
 # Deploy vault.hcl with listener, storage, and cluster settings.
 ###############################################################################
 - name: Include Vault configuration tasks
-  ansible.builtin.include_tasks: configure.yml
+  ansible.builtin.include_tasks:
+    file: configure.yml
+    apply:
+      tags:
+        - vault
+        - configure
   tags:
     - vault
     - configure
@@ -80,7 +110,12 @@
 # NIST 800-53: SC-7 (Boundary Protection)
 ###############################################################################
 - name: Include firewall configuration tasks
-  ansible.builtin.include_tasks: firewall.yml
+  ansible.builtin.include_tasks:
+    file: firewall.yml
+    apply:
+      tags:
+        - vault
+        - firewall
   when: vault_manage_firewall | bool
   tags:
     - vault
@@ -92,7 +127,12 @@
 # file permissions, rsyslog forwarding.
 ###############################################################################
 - name: Include STIG hardening tasks
-  ansible.builtin.include_tasks: stig.yml
+  ansible.builtin.include_tasks:
+    file: stig.yml
+    apply:
+      tags:
+        - vault
+        - stig
   tags:
     - vault
     - stig
@@ -125,7 +165,12 @@
 # Enable and start the Vault service.
 ###############################################################################
 - name: Include service management tasks
-  ansible.builtin.include_tasks: service.yml
+  ansible.builtin.include_tasks:
+    file: service.yml
+    apply:
+      tags:
+        - vault
+        - service
   tags:
     - vault
     - service
