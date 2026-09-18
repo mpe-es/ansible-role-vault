@@ -266,6 +266,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   wired. (#46, closes #32)
 
 ### Documentation
+
+- **Documented that pipelining is a hard requirement on fapolicyd-enforcing
+  hosts.** This role targets STIG-hardened RHEL-family systems, where fapolicyd
+  enforcing is itself a STIG requirement (RHEL-09-433010/433015) and where the
+  role's own trust phase supports RHEL-09-433016 — yet on exactly those hosts
+  Ansible could not reach the target at all. The shipped fapolicyd policy denies
+  opening untrusted files typed `%languages`; Ansible's `AnsiballZ_<module>.py`
+  carries a `#!/usr/bin/python3` shebang, is generated at runtime and so is
+  absent from the rpmdb-backed trust database, and the open is denied with
+  `[Errno 1] Operation not permitted` — during `gather_facts`, before the role's
+  first task, and potentially with **no audit record at all** (`ausearch -m AVC`
+  and `-m FANOTIFY` both empty). It presents as a file-permission bug and is not
+  one. README now documents the symptom verbatim so it is searchable, both
+  control-node levers (`ansible_pipelining: true` in inventory, or
+  `[ssh_connection] pipelining = True`), and why trusting `~/.ansible/tmp`
+  instead is the wrong repair — that disables the very control the fapolicyd
+  phase exists to support. Also records why **no preflight gate can cover this**:
+  detecting the condition requires running a module, and the condition is that no
+  module can run; the failure additionally precedes role entry, so no gate could
+  fire in any ordering. No `ansible.cfg` is shipped with the role — a role
+  directory is never on Ansible's config search path (`ANSIBLE_CONFIG` →
+  `./ansible.cfg` → `~/.ansible.cfg` → `/etc/ansible/ansible.cfg`), so one would
+  be inert once installed from Galaxy and would merely look like coverage. Found
+  on live hardware; containers cannot reproduce it because they do not run
+  fapolicyd. Documentation only — no behaviour change.
 - Added a **Known Limitations** section covering developmental multi-node HA
   (#44), the silent no-op on tag-scoped runs (#28 — `--tags preflight` is now
   an exception), the preflight gaps (#36 — since repaired and removed),

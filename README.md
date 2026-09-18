@@ -145,6 +145,73 @@ no manual step is required.
 
 - ansible-core >= **2.17.0** (required by `community.hashi_vault` collection)
 - Python >= **3.10** (required by ansible-core 2.17+)
+- **Pipelining must be enabled** on any target where fapolicyd is enforcing —
+  see immediately below. This is a hard requirement on this role's primary
+  target platform, not a performance tuning knob.
+
+#### Connection: pipelining is required on fapolicyd-enforcing hosts
+
+This role targets STIG-hardened RHEL-family hosts, where fapolicyd is itself a
+STIG requirement (RHEL-09-433010 / 433015; the role's own
+[fapolicyd Trust](#fapolicyd-trust) phase supports RHEL-09-433016). **On such a
+host, Ansible cannot run this role — or any role — without pipelining.**
+
+The failure arrives during fact-gathering, before the role's first task:
+
+```
+/usr/bin/python3: can't open file
+'/home/<user>/.ansible/tmp/ansible-tmp-.../AnsiballZ_setup.py':
+[Errno 1] Operation not permitted
+```
+
+It reads like a file-permission bug and is not one. fapolicyd's shipped policy
+denies opening untrusted files whose libmagic type falls in `%languages`:
+
+```
+%languages=...,text/x-script.python,text/x-python,...
+allow      perm=open all : ftype=%languages trust=1
+deny_audit perm=any  all : ftype=%languages
+```
+
+Ansible writes `AnsiballZ_<module>.py` with a `#!/usr/bin/python3` shebang, so
+libmagic types it `text/x-script.python`. It is generated at runtime and is
+therefore **not in fapolicyd's trust database** (which is populated from the RPM
+database), the `trust=1` allow does not match, and the next rule denies it with
+`EPERM`. Note that the denial may leave **no audit record at all** — `ausearch -m
+AVC` and `ausearch -m FANOTIFY` can both come back empty — so there is nothing to
+correlate the error against.
+
+Enable pipelining by whichever route suits your setup. Both are **control-node**
+settings; a role cannot set them for you (see below):
+
+```yaml
+# Inventory — per host or group, travels with the inventory that already
+# describes these hosts. group_vars/vault_servers.yml:
+ansible_pipelining: true
+```
+
+```ini
+# Or a project-level ansible.cfg, in the directory you run from:
+[ssh_connection]
+pipelining = True
+```
+
+`ANSIBLE_PIPELINING=True` works for a one-off invocation. Pipelining streams
+module source into the remote interpreter's stdin, so the untrusted file is never
+written and there is nothing for fapolicyd to deny. It requires `requiretty` to
+be disabled in sudoers, which is the default on EL8/9/10.
+
+> **Do not** add `~/.ansible/tmp` to the fapolicyd trust database instead. That
+> trades a STIG control for convenience, and grants blanket open/execute on a
+> path the connecting user can write at will. If a fix requires disabling an
+> existing control, re-examine the finding rather than the control.
+
+**Why no preflight gate covers this.** Detecting the condition requires running a
+module, and the condition *is* that no module can run. The failure also precedes
+the role entirely — it happens during `gather_facts`, before any role task
+exists — so there is no ordering in which a gate could fire. The one saving
+grace is that it fails immediately and loudly, with nothing on the target
+mutated.
 
 ### Collections
 
@@ -298,6 +365,11 @@ auto-generation and input validation.
 |----------|---------|-------------|
 | `vault_manage_fapolicyd` | `true` | Manage fapolicyd file-trust entries (skips without failure, logging the reason, when fapolicyd/trust.d absent) |
 | `vault_fapolicyd_trusted_files` | see defaults | Files registered in fapolicyd file trust (existing regular files only) |
+
+> On a host where fapolicyd is **enforcing**, Ansible itself cannot run without
+> pipelining — the connection fails at fact-gathering, before this or any other
+> phase. See
+> [Connection: pipelining is required on fapolicyd-enforcing hosts](#connection-pipelining-is-required-on-fapolicyd-enforcing-hosts).
 
 ## Dependencies
 
