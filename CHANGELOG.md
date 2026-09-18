@@ -310,6 +310,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
+- **The README's controller-Python claim now matches what CI tests.** It advertised
+  `>= 3.10` — a correct derivation from the ansible-core 2.17 floor, but one
+  nothing verified, since CI installs 3.11 only. Pinning the Python version (#78)
+  turned that from incidental into explicit and made the untested claim visible.
+  The entry now states 3.11, notes that core 2.20+ requires Python 3.12+ so the
+  controller's Python and core version move together, and separates the managed
+  host's Python (EL platform Python, 3.9 on RHEL/Rocky 9) which is a different
+  axis entirely. Same "reconcile the README with what is actually enforced" class
+  as #36, on a new axis. (#78)
+
 - **Documented that pipelining is a hard requirement on fapolicyd-enforcing
   hosts.** This role targets STIG-hardened RHEL-family systems, where fapolicyd
   enforcing is itself a STIG requirement (RHEL-09-433010/433015) and where the

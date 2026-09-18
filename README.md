@@ -144,7 +144,12 @@ no manual step is required.
 ### Ansible
 
 - ansible-core >= **2.17.0** (required by `community.hashi_vault` collection)
-- Python >= **3.10** (required by ansible-core 2.17+)
+- Python >= **3.11** on the CONTROLLER — the version CI installs and tests.
+  ansible-core 2.17 itself permits 3.10, but nothing verifies that floor, so
+  3.11 is what this role claims. Note that ansible-core **2.20+ requires Python
+  3.12+**; the role works on either, but the controller's Python and core
+  version move together. The MANAGED HOST's Python is a separate matter — the
+  role runs against EL8/9/10 platform Python (3.9 on RHEL/Rocky 9).
 - **Pipelining must be enabled** on any target where fapolicyd is enforcing —
   see immediately below. This is a hard requirement on this role's primary
   target platform, not a performance tuning knob.
