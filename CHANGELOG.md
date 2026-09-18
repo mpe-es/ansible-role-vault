@@ -209,8 +209,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ANSIBLE_INJECT_FACT_VARS=False`: full converge `ok=87 changed=0 failed=0`,
   byte-identical to the run with injection on. (#78)
 
-- **The molecule preflight fixtures overrode facts in a way that silently stopped
-  working.** They set `ansible_fqdn:`/`ansible_distribution:` as task vars
+- **The molecule fixtures and the container-free preflight harness overrode facts
+  in a way that silently stopped working.** They set `ansible_fqdn:`/`ansible_distribution:` as task vars
   (precedence 21 beats host facts 15) to drive per-case behaviour. Once the gates
   read `ansible_facts[...]`, those overrides no longer reach them and each case
   would have exercised the container's real values while still claiming to test a
@@ -222,7 +222,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rebuilds per include — `ansible_facts: "{{ __real_facts | combine({...}) }}"` —
   which is scoped, leak-free and preserves untouched facts. Proven with a
   three-case probe where the third case, which overrides nothing, still sees the
-  real value. (#78)
+  real value. `tests/local-preflight-harness/run.yml` drives eighteen DNS cases
+  the same way and needed the same treatment; CI caught it because the guard's
+  first version did not scan `tests/`, which it now does. (#78)
 
 - **The common parent `/opt/vault` was never asserted on, so a STIG-hardened host
   could not start Vault.** The role created and enforced `vault_data_dir`,

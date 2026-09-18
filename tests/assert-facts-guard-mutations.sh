@@ -23,7 +23,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 python3 - "$ROOT" <<'PY'
-import os, shutil, subprocess, sys, tempfile
+import os, re, shutil, subprocess, sys, tempfile
 
 root = sys.argv[1]
 GUARD = 'tests/assert-facts-via-ansible-facts.sh'
@@ -77,8 +77,11 @@ KILL = [
 
     ("guard scans nothing at all (vacuous pass)",
      None,
-     lambda g: g.replace("SCAN_YAML = ['tasks', 'defaults', 'vars', 'meta', 'handlers', 'molecule']",
-                         "SCAN_YAML = []").replace("SCAN_RAW = ['templates']", "SCAN_RAW = []"),
+     # Matched by prefix, not by the full literal: the scan list grows (tests/
+     # was added after CI caught what its absence missed), and a stale anchor
+     # here turns this case into a silent NO-OP.
+     lambda g: re.sub(r'SCAN_YAML = \[[^\]]*\]', 'SCAN_YAML = []',
+                      re.sub(r'SCAN_RAW = \[[^\]]*\]', 'SCAN_RAW = []', g)),
      "scanned no files at all"),
 ]
 

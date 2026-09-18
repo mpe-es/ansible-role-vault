@@ -11,6 +11,17 @@
     fx: "{{ playbook_dir }}/fixtures"
 
   tasks:
+    # The DNS cases below override the fqdn FACT per include. With
+    # INJECT_FACTS_AS_VARS gone (#78) the gate reads ansible_facts['fqdn'], so
+    # `ansible_fqdn:` in vars no longer reaches it and every case would silently
+    # exercise this machine's real name instead. Overriding ansible_facts in
+    # vars self-references ("Recursive loop detected"); replacing the whole dict
+    # loses every other fact. Snapshotting once into a plain var breaks the
+    # self-reference and keeps the per-include scoping these cases depend on.
+    - name: Snapshot the real facts so cases can override one at a time
+      ansible.builtin.set_fact:
+        __real_facts: "{{ ansible_facts }}"
+
     - name: Stage controller-side fixtures
       block:
         - name: Fixture directory
@@ -195,7 +206,7 @@
         - ansible.builtin.include_role:
             name: ansible-role-vault
             tasks_from: preflight/dns.yml
-          vars: {ansible_fqdn: dns-loopback-fixture.test,
+          vars: {ansible_facts: "{{ __real_facts | combine({'fqdn': 'dns-loopback-fixture.test'}) }}",
                  vault_api_addr: "https://dns-loopback-fixture.test:8200",
                  vault_cluster_addr: "https://dns-loopback-fixture.test:8201"}
         - ansible.builtin.fail: {msg: "D1 did not fire"}
@@ -211,7 +222,7 @@
         - ansible.builtin.include_role:
             name: ansible-role-vault
             tasks_from: preflight/dns.yml
-          vars: {ansible_fqdn: dns-linklocal-fixture.test,
+          vars: {ansible_facts: "{{ __real_facts | combine({'fqdn': 'dns-linklocal-fixture.test'}) }}",
                  vault_api_addr: "https://dns-linklocal-fixture.test:8200",
                  vault_cluster_addr: "https://dns-linklocal-fixture.test:8201"}
         - ansible.builtin.fail: {msg: "D2 did not fire"}
@@ -226,7 +237,7 @@
         - ansible.builtin.include_role:
             name: ansible-role-vault
             tasks_from: preflight/dns.yml
-          vars: {ansible_fqdn: dns-absent-fixture.test,
+          vars: {ansible_facts: "{{ __real_facts | combine({'fqdn': 'dns-absent-fixture.test'}) }}",
                  vault_api_addr: "https://dns-absent-fixture.test:8200",
                  vault_cluster_addr: "https://dns-absent-fixture.test:8201"}
         - ansible.builtin.fail: {msg: "D3 did not fire"}
@@ -241,7 +252,7 @@
         - ansible.builtin.include_role:
             name: ansible-role-vault
             tasks_from: preflight/dns.yml
-          vars: {ansible_fqdn: dns-loopback-fixture.test,
+          vars: {ansible_facts: "{{ __real_facts | combine({'fqdn': 'dns-loopback-fixture.test'}) }}",
                  vault_api_addr: "https://10.99.0.1:8200",
                  vault_cluster_addr: "https://10.99.0.1:8201",
                  vault_manage_tls: true, vault_tls_source: vault_pki}
@@ -257,7 +268,7 @@
         - ansible.builtin.include_role:
             name: ansible-role-vault
             tasks_from: preflight/dns.yml
-          vars: {ansible_fqdn: dns-mapped-loopback-fixture.test,
+          vars: {ansible_facts: "{{ __real_facts | combine({'fqdn': 'dns-mapped-loopback-fixture.test'}) }}",
                  vault_api_addr: "https://dns-mapped-loopback-fixture.test:8200",
                  vault_cluster_addr: "https://dns-mapped-loopback-fixture.test:8201"}
         - ansible.builtin.fail: {msg: "D8 did not fire -- mapped loopback counted as reachable"}
@@ -272,7 +283,7 @@
         - ansible.builtin.include_role:
             name: ansible-role-vault
             tasks_from: preflight/dns.yml
-          vars: {ansible_fqdn: dns-highlinklocal-fixture.test,
+          vars: {ansible_facts: "{{ __real_facts | combine({'fqdn': 'dns-highlinklocal-fixture.test'}) }}",
                  vault_api_addr: "https://dns-highlinklocal-fixture.test:8200",
                  vault_cluster_addr: "https://dns-highlinklocal-fixture.test:8201"}
         - ansible.builtin.fail: {msg: "D9 did not fire -- fe90:: counted as reachable"}
@@ -287,7 +298,7 @@
         - ansible.builtin.include_role:
             name: ansible-role-vault
             tasks_from: preflight/dns.yml
-          vars: {ansible_fqdn: dns-unspecified-fixture.test,
+          vars: {ansible_facts: "{{ __real_facts | combine({'fqdn': 'dns-unspecified-fixture.test'}) }}",
                  vault_api_addr: "https://dns-unspecified-fixture.test:8200",
                  vault_cluster_addr: "https://dns-unspecified-fixture.test:8201"}
         - ansible.builtin.fail: {msg: "D10 did not fire"}
@@ -302,7 +313,7 @@
         - ansible.builtin.include_role:
             name: ansible-role-vault
             tasks_from: preflight/dns.yml
-          vars: {ansible_fqdn: dns-multicast-fixture.test,
+          vars: {ansible_facts: "{{ __real_facts | combine({'fqdn': 'dns-multicast-fixture.test'}) }}",
                  vault_api_addr: "https://dns-multicast-fixture.test:8200",
                  vault_cluster_addr: "https://dns-multicast-fixture.test:8201"}
         - ansible.builtin.fail: {msg: "D11 did not fire"}
@@ -317,7 +328,7 @@
         - ansible.builtin.include_role:
             name: ansible-role-vault
             tasks_from: preflight/dns.yml
-          vars: {ansible_fqdn: dns-mcast6-fixture.test,
+          vars: {ansible_facts: "{{ __real_facts | combine({'fqdn': 'dns-mcast6-fixture.test'}) }}",
                  vault_api_addr: "https://dns-mcast6-fixture.test:8200",
                  vault_cluster_addr: "https://dns-mcast6-fixture.test:8201"}
         - ansible.builtin.fail: {msg: "D12 did not fire"}
@@ -332,7 +343,7 @@
         - ansible.builtin.include_role:
             name: ansible-role-vault
             tasks_from: preflight/dns.yml
-          vars: {ansible_fqdn: dns-loopback-fixture.test,
+          vars: {ansible_facts: "{{ __real_facts | combine({'fqdn': 'dns-loopback-fixture.test'}) }}",
                  vault_api_addr: "https://DNS-LOOPBACK-FIXTURE.TEST:8200",
                  vault_cluster_addr: "https://DNS-LOOPBACK-FIXTURE.TEST:8201"}
         - ansible.builtin.fail: {msg: "D13 did not fire -- case-sensitive comparison fails OPEN"}
@@ -347,7 +358,7 @@
         - ansible.builtin.include_role:
             name: ansible-role-vault
             tasks_from: preflight/dns.yml
-          vars: {ansible_fqdn: dns-mapped-unspec.test,
+          vars: {ansible_facts: "{{ __real_facts | combine({'fqdn': 'dns-mapped-unspec.test'}) }}",
                  vault_api_addr: "https://dns-mapped-unspec.test:8200",
                  vault_cluster_addr: "https://dns-mapped-unspec.test:8201"}
         - ansible.builtin.fail: {msg: "D14 did not fire"}
@@ -362,7 +373,7 @@
         - ansible.builtin.include_role:
             name: ansible-role-vault
             tasks_from: preflight/dns.yml
-          vars: {ansible_fqdn: dns-mapped-bcast.test,
+          vars: {ansible_facts: "{{ __real_facts | combine({'fqdn': 'dns-mapped-bcast.test'}) }}",
                  vault_api_addr: "https://dns-mapped-bcast.test:8200",
                  vault_cluster_addr: "https://dns-mapped-bcast.test:8201"}
         - ansible.builtin.fail: {msg: "D15 did not fire"}
@@ -377,7 +388,7 @@
         - ansible.builtin.include_role:
             name: ansible-role-vault
             tasks_from: preflight/dns.yml
-          vars: {ansible_fqdn: dns-mapped-mcast.test,
+          vars: {ansible_facts: "{{ __real_facts | combine({'fqdn': 'dns-mapped-mcast.test'}) }}",
                  vault_api_addr: "https://dns-mapped-mcast.test:8200",
                  vault_cluster_addr: "https://dns-mapped-mcast.test:8201"}
         - ansible.builtin.fail: {msg: "D16 did not fire"}
@@ -392,7 +403,7 @@
         - ansible.builtin.include_role:
             name: ansible-role-vault
             tasks_from: preflight/dns.yml
-          vars: {ansible_fqdn: dns-compat-mcast.test,
+          vars: {ansible_facts: "{{ __real_facts | combine({'fqdn': 'dns-compat-mcast.test'}) }}",
                  vault_api_addr: "https://dns-compat-mcast.test:8200",
                  vault_cluster_addr: "https://dns-compat-mcast.test:8201"}
         - ansible.builtin.fail: {msg: "D17 did not fire"}
@@ -407,7 +418,7 @@
         - ansible.builtin.include_role:
             name: ansible-role-vault
             tasks_from: preflight/dns.yml
-          vars: {ansible_fqdn: dns-compat-loop.test,
+          vars: {ansible_facts: "{{ __real_facts | combine({'fqdn': 'dns-compat-loop.test'}) }}",
                  vault_api_addr: "https://dns-compat-loop.test:8200",
                  vault_cluster_addr: "https://dns-compat-loop.test:8201"}
         - ansible.builtin.fail: {msg: "D18 did not fire"}
@@ -421,7 +432,7 @@
       ansible.builtin.include_role:
         name: ansible-role-vault
         tasks_from: preflight/dns.yml
-      vars: {ansible_fqdn: dns-routable-fixture.test,
+      vars: {ansible_facts: "{{ __real_facts | combine({'fqdn': 'dns-routable-fixture.test'}) }}",
              vault_api_addr: "https://dns-routable-fixture.test:8200",
              vault_cluster_addr: "https://dns-routable-fixture.test:8201"}
 
@@ -434,7 +445,7 @@
       ansible.builtin.include_role:
         name: ansible-role-vault
         tasks_from: preflight/dns.yml
-      vars: {ansible_fqdn: dns-mixed-fixture.test,
+      vars: {ansible_facts: "{{ __real_facts | combine({'fqdn': 'dns-mixed-fixture.test'}) }}",
              vault_api_addr: "https://dns-mixed-fixture.test:8200",
              vault_cluster_addr: "https://dns-mixed-fixture.test:8201"}
 
@@ -447,7 +458,7 @@
       ansible.builtin.include_role:
         name: ansible-role-vault
         tasks_from: preflight/dns.yml
-      vars: {ansible_fqdn: dns-loopback-fixture.test,
+      vars: {ansible_facts: "{{ __real_facts | combine({'fqdn': 'dns-loopback-fixture.test'}) }}",
              vault_api_addr: "https://10.99.0.1:8200",
              vault_cluster_addr: "https://10.99.0.1:8201"}
 

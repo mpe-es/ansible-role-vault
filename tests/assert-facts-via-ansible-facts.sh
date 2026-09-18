@@ -29,6 +29,15 @@
 #   and is fixed by adding the name to ALLOW with a reason, which is a
 #   deliberate act; a false negative is invisible.
 #
+#   tests/ IS IN SCOPE. It was omitted from the first version of this guard, and
+#   CI caught what the guard missed: tests/local-preflight-harness/run.yml drives
+#   eighteen DNS cases by overriding the fqdn fact per include, and those
+#   overrides stopped reaching the gate for exactly the reason this issue exists.
+#   Any playbook that runs the role is subject to the same failure, wherever it
+#   lives. The .sh guards in tests/ are not YAML and are skipped naturally, which
+#   is correct -- assert-preflight-gate-order.sh legitimately holds the literal
+#   strings it pins.
+#
 #   COMMENTS ARE NOT SCANNED, deliberately. YAML files are PARSED and only
 #   string VALUES are walked, so prose that discusses `ansible_fqdn` — including
 #   this file's own explanation and the migration notes in
@@ -43,7 +52,7 @@ python3 - "$ROOT" <<'PY'
 import sys, os, re, yaml
 
 root = sys.argv[1]
-SCAN_YAML = ['tasks', 'defaults', 'vars', 'meta', 'handlers', 'molecule']
+SCAN_YAML = ['tasks', 'defaults', 'vars', 'meta', 'handlers', 'molecule', 'tests']
 SCAN_RAW = ['templates']
 
 # Non-fact ansible_* variables. Each is a connection setting, a magic variable
