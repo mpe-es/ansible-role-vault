@@ -21,6 +21,11 @@ vault_service_name: vault
 vault_config_dir: /etc/vault.d
 vault_config_file: /etc/vault.d/vault.hcl
 vault_env_file: /etc/vault.d/vault.env
+# Common parent of data/tls/plugins. Managed in its own right: under STIG's
+# mandated `umask 077`, an operator following tasks/preflight/tls.yml's
+# instruction to stage TLS material creates this 0700 root:root, and vault
+# then cannot TRAVERSE to its own Raft db however correct the children are.
+vault_root_dir: /opt/vault
 vault_data_dir: /opt/vault/data
 vault_tls_dir: /opt/vault/tls
 vault_log_dir: /var/log/vault
@@ -49,6 +54,10 @@ vault_group: vault
 vault_config_dir_mode: '0750'
 vault_config_file_mode: '0640'
 vault_env_file_mode: '0600'
+# root:vault 0750 — same pairing as vault_tls_dir and for the same reason:
+# root owns it so the vault process cannot replace what it holds, group r-x
+# keeps it TRAVERSABLE so vault can reach data/ and tls/ beneath it.
+vault_root_dir_mode: '0750'
 vault_data_dir_mode: '0750'
 vault_tls_dir_mode: '0750'
 vault_tls_file_mode: '0640'

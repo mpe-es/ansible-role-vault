@@ -19,6 +19,9 @@
       register: __verify_dirs
       loop:
         - { path: /etc/vault.d, mode: '0750', owner: root, group: vault }
+        # The PARENT. prepare.yml stages it 0700 root:root (what STIG's umask
+        # 077 really produces); all three fields must change for this to pass.
+        - { path: /opt/vault, mode: '0750', owner: root, group: vault }
         - { path: /opt/vault/data, mode: '0750', owner: vault, group: vault }
         - { path: /opt/vault/tls, mode: '0750', owner: root, group: vault }
         - { path: /var/log/vault, mode: '0750', owner: vault, group: vault }
@@ -73,6 +76,28 @@
     # regular files and then starts a REAL vault server on them.
     # NIST 800-53: AC-6 (Least Privilege), SC-8
     ###########################################################################
+    # Mode bits are a projection; traversal is the property that actually
+    # failed on live hardware. Ask the kernel as the service account itself:
+    # a parent that is root:root 0750, or root:vault 0640, satisfies a
+    # mode-string check for group-readability and still denies this probe.
+    - name: Probe that the vault service account can traverse the root directory
+      ansible.builtin.command:
+        argv: [runuser, -u, vault, --, test, -x, /opt/vault]
+      register: __verify_root_traverse
+      changed_when: false
+      failed_when: false
+
+    - name: Assert the vault service account can traverse the root directory
+      ansible.builtin.assert:
+        that:
+          - __verify_root_traverse.rc == 0
+        fail_msg: >-
+          The vault service account cannot traverse /opt/vault (rc={{
+          __verify_root_traverse.rc }}). Every path beneath it is unreachable
+          regardless of its own ownership, which is the live failure this
+          asserts against: "stat /opt/vault/data/vault.db: permission denied".
+        success_msg: "vault can traverse /opt/vault"
+
     - name: Verify operator-staged TLS material
       ansible.builtin.stat:
         path: "{{ item }}"
