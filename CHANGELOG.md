@@ -25,8 +25,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **controller** for the managed path and the **target** for the staged path,
   since that is where each certificate lives; a relative `vault_tls_src_cert` and
   `vault_tls_source: vault_pki` are **reported as uninspectable, never rejected**,
-  following the precedent set by #80. DNS comparison is case-insensitive and
-  trailing-dot tolerant per RFC 4343. Scope is deliberately narrow — expiry, key
+  following the precedent set by #80. **Hostname verification is delegated to
+  `openssl x509 -checkhost`/`-checkip`, not reimplemented** — an earlier revision
+  compared strings and rejected `DNS:*.example.com` for `vault.example.com`, a
+  certificate every TLS client accepts. A certificate matching only through its
+  **Common Name is rejected**, because openssl falls back to CN when no `dNSName`
+  SAN exists while Vault's Go client has ignored CN since 1.15 — accepting it
+  would pass preflight and fail at service start, the exact failure this gate
+  prevents. `vault_api_addr` is parsed with `urlsplit` rather than a regex, so
+  the documented bracketed IPv6 form works. Scope is deliberately narrow — expiry, key
   size, chain trust and EKU are out of scope, so a pass is never mistaken for
   "this certificate is good". Five behavioural cases in the container-free
   harness. (#85)

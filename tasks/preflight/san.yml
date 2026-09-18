@@ -31,6 +31,22 @@
 #   IP SANs; where that is so, this gate reports the conflict at Phase 1 instead
 #   of letting it surface as an opaque service-start failure.
 #
+#   HOSTNAME VERIFICATION IS DELEGATED, NOT REIMPLEMENTED. An earlier revision
+#   compared the advertised name against the DNS SAN list with string equality.
+#   That rejected `DNS:*.example.com` for `vault.example.com` -- a certificate
+#   every TLS client accepts -- turning a usable listener cert into a Phase 1
+#   failure. `openssl x509 -checkhost/-checkip` implements RFC 6125, wildcards
+#   and label boundaries included, and returns rc 0/1. Measured against a
+#   wildcard fixture: vault.example.com matches, a.b.example.com does not
+#   (crosses a label), example.com does not (bare domain uncovered).
+#   Same defect class as #79, where hand-rolled address classification was
+#   defeated three review rounds running before being handed to a library.
+#
+#   THE URL IS PARSED, NOT STRIPPED. `urlsplit('hostname')` is used instead of
+#   a regex. Stripping from the first `:` produced `[2001` for the documented
+#   form `https://[2001:db8::10]:8200`, which was then classified as a name and
+#   looked up as `DNS:[2001`. urlsplit returns the bracket-free address.
+#
 #   This gate checks ONLY what the role itself depends on. It is not a general
 #   certificate validator: expiry, key size, chain trust and EKU are out of
 #   scope and deliberately unmentioned, so a pass here is never mistaken for
@@ -121,52 +137,117 @@
     - __vault_san_ossl.rc | default(1) == 0
 
 ###############################################################################
-# Parse. openssl prints one line of comma-separated entries:
-#     DNS:vault.home.lab.local, IP Address:127.0.0.1, IP Address:10.0.0.5
-# Verified byte-identical on OpenSSL 3.5.8 (EL9) and 3.6.4 (macOS controller);
-# the -ext flag exists from 1.1.1, which is EL8's version.
-# Note the label is "IP Address:" WITH A SPACE, not "IP:" -- the form accepted
-# in a -extfile is not the form printed back.
+# Verify. Two questions, each asked of openssl rather than of a parsed string:
+# does the certificate serve the loopback address the role's own callers use,
+# and does it serve the identity the role advertises. argv form throughout, so
+# a path containing spaces cannot be resplit by the module.
+#
+# check_mode: false on every probe -- command/shell are SKIPPED under --check
+# and register rc 0 with empty stdout, which every assert below would read as a
+# healthy host (locked as a class by assert-preflight-check-mode.sh).
 ###############################################################################
-- name: "Preflight | san | extract the SAN entries"
+- name: "Preflight | san | resolve the advertised host identity"
   ansible.builtin.set_fact:
-    # DNS names are case-insensitive (RFC 4343) and a trailing dot denotes the
-    # same name, so both are normalised before comparison.
-    __vault_san_dns: >-
-      {{ __vault_san_raw.stdout | default('')
-         | regex_findall('DNS:([^,\s]+)')
-         | map('lower') | map('regex_replace', '\.$', '') | list }}
-    __vault_san_ip: >-
-      {{ __vault_san_raw.stdout | default('')
-         | regex_findall('IP Address:([^,\s]+)') | list }}
-    # The host identity the role advertises, and whether it is a name or an
-    # address. Classification is delegated to ansible.utils.ipaddr rather than
-    # pattern-matched, the same decision #79 reached for the DNS gate.
-    __vault_san_host: >-
-      {{ vault_api_addr | regex_replace('^[a-z]+://', '')
-                        | regex_replace('[:/].*$', '') }}
+    # urlsplit, not a regex: it returns the hostname with IPv6 brackets already
+    # removed, which is the whole reason the regex form was wrong.
+    __vault_san_host: "{{ vault_api_addr | urlsplit('hostname') }}"
 
-- name: "Preflight | san | the certificate carries the SANs this role's callers need"
+- name: Verify the certificate serves the loopback address
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - x509
+      - -in
+      - "{{ __vault_san_path }}"
+      - -noout
+      - -checkip
+      - 127.0.0.1
+  register: __vault_san_loopback
+  check_mode: false
+  changed_when: false
+  failed_when: false
+  environment:
+    LC_ALL: C
+  delegate_to: "{{ 'localhost' if (__vault_san_on_controller | bool) else inventory_hostname }}"
+  when:
+    - __vault_san_inspectable | bool
+    - __vault_san_ossl.rc | default(1) == 0
+
+- name: Verify the certificate serves the advertised identity
+  ansible.builtin.command:
+    # -checkip for an address, -checkhost for a name. Classification is
+    # delegated to ansible.utils.ipaddr, the same decision #79 reached -- and
+    # it is what makes DNS:10.0.0.5 fail to satisfy https://10.0.0.5, which is
+    # correct: that certificate does not validate for that URL.
+    argv:
+      - openssl
+      - x509
+      - -in
+      - "{{ __vault_san_path }}"
+      - -noout
+      - "{{ '-checkip' if (__vault_san_host | ansible.utils.ipaddr) else '-checkhost' }}"
+      - "{{ __vault_san_host }}"
+  register: __vault_san_advertised
+  check_mode: false
+  changed_when: false
+  failed_when: false
+  environment:
+    LC_ALL: C
+  delegate_to: "{{ 'localhost' if (__vault_san_on_controller | bool) else inventory_hostname }}"
+  when:
+    - __vault_san_inspectable | bool
+    - __vault_san_ossl.rc | default(1) == 0
+
+# Read purely to make the failure message actionable -- it names what the
+# certificate actually carries. Never used for the decision itself.
+- name: Read the certificate's subjectAltName extension for reporting
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - x509
+      - -in
+      - "{{ __vault_san_path }}"
+      - -noout
+      - -ext
+      - subjectAltName
+  register: __vault_san_raw
+  check_mode: false
+  changed_when: false
+  failed_when: false
+  environment:
+    LC_ALL: C
+  delegate_to: "{{ 'localhost' if (__vault_san_on_controller | bool) else inventory_hostname }}"
+  when:
+    - __vault_san_inspectable | bool
+    - __vault_san_ossl.rc | default(1) == 0
+
+- name: "Preflight | san | the certificate serves this role's own callers"
   ansible.builtin.assert:
     that:
-      - __vault_san_raw.stdout is defined
-      - "'127.0.0.1' in __vault_san_ip"
+      - __vault_san_loopback.rc is defined
+      - __vault_san_loopback.rc | default(1) == 0
+      - __vault_san_advertised.rc | default(1) == 0
+      # openssl falls back to the Common Name when a certificate carries no
+      # dNSName SAN, so -checkhost alone would accept a CN-only certificate.
+      # Vault's client is Go, and Go has ignored CN since 1.15 -- such a
+      # certificate passes here and then fails at service start, which is the
+      # exact failure this gate exists to prevent. Measured: a cert with
+      # CN=vault.fixture.test and only an IP SAN satisfies -checkhost.
       - >-
-        (__vault_san_host in __vault_san_ip)
-        if (__vault_san_host | ansible.utils.ipaddr)
-        else ((__vault_san_host | lower | regex_replace('\.$', '')) in __vault_san_dns)
+        true if (__vault_san_host | ansible.utils.ipaddr)
+        else (__vault_san_raw.stdout | default('') is search('DNS:'))
     fail_msg: >-
       {% if __vault_san_ossl.rc | default(1) != 0 %}
       openssl is not available
       {{ 'on the Ansible controller' if (__vault_san_on_controller | bool) else 'on this host' }},
-      so the certificate's SANs cannot be inspected. Install it, or accept that
-      the SAN contract is unverified and may fail at service start.
-      {% elif __vault_san_raw.stdout is not defined or (__vault_san_raw.rc | default(1) != 0) %}
-      {{ __vault_san_path }} could not be read as a certificate
-      {{ 'on the Ansible controller' if (__vault_san_on_controller | bool) else 'on this host' }}.
-      openssl said: {{ (__vault_san_raw.stderr_lines | default([]) + ['(no output)']) | first }}
-      {% elif '127.0.0.1' not in __vault_san_ip %}
-      {{ __vault_san_path }} has no 127.0.0.1 IP SAN. The role's own callers use
+      so the certificate cannot be checked. Install it, or accept that the SAN
+      contract is unverified and may fail at service start.
+      {% elif __vault_san_loopback.rc is not defined %}
+      {{ __vault_san_path }} was never inspected
+      {{ 'on the Ansible controller' if (__vault_san_on_controller | bool) else 'on this host' }};
+      the check did not run, so the SAN contract is unverified.
+      {% elif __vault_san_loopback.rc | default(1) != 0 %}
+      {{ __vault_san_path }} does not serve 127.0.0.1. The role's own callers use
       the loopback address -- tasks/service.yml verifies against
       https://127.0.0.1:{{ vault_listener_port }}, and the unseal unit sets
       VAULT_ADDR to it because it runs before DNS is dependable -- so init and
@@ -174,20 +255,25 @@
       "x509: certificate is valid for ..., not 127.0.0.1", however valid the
       certificate is otherwise. Reissue with IP:127.0.0.1 in subjectAltName.
       If your issuing CA refuses IP SANs, that conflict has to be resolved
-      before this role can initialise Vault. Found SANs -- DNS:
-      {{ __vault_san_dns | join(', ') | default('(none)', true) }} / IP:
-      {{ __vault_san_ip | join(', ') | default('(none)', true) }}
-      {% elif __vault_san_host | ansible.utils.ipaddr %}
-      vault_api_addr advertises the ADDRESS {{ __vault_san_host }}, so the
-      certificate needs it as an IP SAN. A DNS SAN of the same text does not
-      validate https://{{ __vault_san_host }}. Found IP SANs:
-      {{ __vault_san_ip | join(', ') | default('(none)', true) }}
+      before this role can initialise Vault.
+      Certificate carries: {{ (__vault_san_raw.stdout_lines | default([]) | last) | default('(unreadable)', true) | trim }}
+      {% elif not (__vault_san_host | ansible.utils.ipaddr)
+              and not (__vault_san_raw.stdout | default('') is search('DNS:')) %}
+      {{ __vault_san_path }} carries no DNS SAN at all. It may match
+      {{ __vault_san_host }} through its Common Name, but Vault's client is Go,
+      which has ignored the Common Name since Go 1.15 -- so this certificate
+      would be rejected at service start even though openssl accepts it.
+      Reissue with the name in subjectAltName rather than only in the subject.
+      Certificate carries: {{ (__vault_san_raw.stdout_lines | default([]) | last) | default('(unreadable)', true) | trim }}
       {% else %}
-      vault_api_addr advertises the NAME {{ __vault_san_host }}, which is absent
-      from the certificate's DNS SANs. Clients dialling that address will fail
-      hostname verification. Found DNS SANs:
-      {{ __vault_san_dns | join(', ') | default('(none)', true) }}
+      {{ __vault_san_path }} does not serve {{ __vault_san_host }}, the identity
+      vault_api_addr advertises
+      ({{ 'an ADDRESS, so it needs an IP SAN -- a DNS SAN of the same text does not validate it'
+          if (__vault_san_host | ansible.utils.ipaddr)
+          else 'a NAME, so it needs a matching DNS SAN (wildcards count, one label only)' }}).
+      Clients dialling that address will fail hostname verification.
+      Certificate carries: {{ (__vault_san_raw.stdout_lines | default([]) | last) | default('(unreadable)', true) | trim }}
       {% endif %}
     success_msg: >-
-      Certificate SANs: {{ __vault_san_host }} present, 127.0.0.1 present
+      Certificate SANs: serves {{ __vault_san_host }} and 127.0.0.1
   when: __vault_san_inspectable | bool

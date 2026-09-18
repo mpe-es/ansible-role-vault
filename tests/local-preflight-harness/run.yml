@@ -97,6 +97,8 @@
               mk san-nodns     "IP:127.0.0.1"
               mk san-wrongtype "DNS:10.0.0.5,IP:127.0.0.1"
               mk san-upper     "DNS:VAULT.FIXTURE.TEST,IP:127.0.0.1"
+              mk san-wild      "DNS:*.fixture.test,IP:127.0.0.1"
+              mk san-v6        "IP:127.0.0.1,IP:2001:db8::10"
             creates: "{{ fx }}/san-good.crt"
           changed_when: true
 
@@ -157,8 +159,11 @@
               # from a variable, so searching for it could match incidental
               # output and pass for the wrong reason (caught by
               # assert-rescue-patterns-are-emittable.sh).
-              - ansible_failed_result.msg | default('') is search('absent from the certificate')
-            success_msg: "S3: advertised name absent from the cert"
+              # The CN arm's own literal text. Asserting 'does not serve' here
+              # would search for a different arm's wording and could only fail.
+              - ansible_failed_result.msg | default('') is search('carries no DNS SAN')
+              - ansible_failed_result.msg | default('') is search('Go 1.15')
+            success_msg: "S3: CN-only cert rejected (Go ignores CN; openssl would accept)"
 
     - name: "S4 FIRES - address advertised but encoded as a DNS SAN, not an IP SAN"
       block:
@@ -184,6 +189,48 @@
         vault_manage_tls: false
         vault_tls_cert_file: "{{ fx }}/san-upper.crt"
         vault_api_addr: "https://vault.fixture.test:8200"
+
+    - name: "S6 PASSES - a wildcard DNS SAN covers one label (RFC 6125)"
+      # The case the first revision got wrong: DNS:*.fixture.test is valid for
+      # vault.fixture.test under every TLS client, and string equality rejected
+      # it. Verification is delegated to `openssl -checkhost`, not reimplemented.
+      ansible.builtin.include_role:
+        name: ansible-role-vault
+        tasks_from: preflight/san.yml
+      vars:
+        vault_manage_tls: false
+        vault_tls_cert_file: "{{ fx }}/san-wild.crt"
+        vault_api_addr: "https://vault.fixture.test:8200"
+
+    - name: "S7 FIRES - a wildcard does NOT cross a label boundary"
+      # The negative half of S6. Without it, a gate that accepted any name
+      # ending in the wildcard's suffix would still pass S6.
+      block:
+        - ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/san.yml
+          vars:
+            vault_manage_tls: false
+            vault_tls_cert_file: "{{ fx }}/san-wild.crt"
+            vault_api_addr: "https://a.b.fixture.test:8200"
+        - ansible.builtin.fail: {msg: "S7 did not fire"}
+      rescue:
+        - ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg | default('') is search('does not serve')
+            success_msg: "S7: *.fixture.test does not cover a.b.fixture.test"
+
+    - name: "S8 PASSES - a bracketed IPv6 vault_api_addr"
+      # https://[2001:db8::10]:8200 is the documented URL form. A regex that
+      # stripped from the first colon produced '[2001' and then looked for a
+      # DNS SAN of that text; urlsplit returns the bracket-free address.
+      ansible.builtin.include_role:
+        name: ansible-role-vault
+        tasks_from: preflight/san.yml
+      vars:
+        vault_manage_tls: false
+        vault_tls_cert_file: "{{ fx }}/san-v6.crt"
+        vault_api_addr: "https://[2001:db8::10]:8200"
 
     ###########################################################################
     # fips (#66) - the probe must ASSERT, never crash, and must distinguish

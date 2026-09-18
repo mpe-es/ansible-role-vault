@@ -119,8 +119,15 @@ WANT_PREDICATES = {
     # the loopback SAN is what tasks/service.yml and the unseal unit depend on,
     # and `stdout is defined` is what keeps the assert from raising on a host
     # where the read never happened.
-    "san": ["__vault_san_raw.stdout is defined",
-            "'127.0.0.1' in __vault_san_ip"],
+    # All three pinned. The loopback rc is what tasks/service.yml and the unseal
+    # unit depend on; the advertised rc is delegated to openssl -checkhost /
+    # -checkip so wildcard and label-boundary semantics are RFC 6125's, not a
+    # reimplementation; and the DNS-SAN term is what stops openssl's Common Name
+    # fallback accepting a certificate that Vault's Go client would reject.
+    # Dropping any one of them restores a real defect with a green guard.
+    "san": ["__vault_san_loopback.rc | default(1) == 0",
+            "__vault_san_advertised.rc | default(1) == 0",
+            "true if (__vault_san_host | ansible.utils.ipaddr) else (__vault_san_raw.stdout | default('') is search('DNS:'))"],
     "managed_tls": ["item.stat is defined",
                     "item.stat.exists | default(false)",
                     "item.stat.isreg | default(false)",
