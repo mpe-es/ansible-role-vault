@@ -327,10 +327,13 @@ KILL = [
      edit('stat', '\n  failed_when: false', ''), None, "stat failed_when=None"),
 
     # --- the premise in tasks/main.yml, and every way to break it.
+    # Anchored on the `when:` alone, not on the include's surrounding form: #28
+    # rewrote every include from the bare-string shape to the mapping shape with
+    # apply:, which turned the old full-literal anchor into a silent NO-OP. The
+    # gate line is unique in main.yml (vault_manage_tls appears in no other
+    # when:), so deleting it is exactly "ungate tls.yml".
     ("ungate tls.yml in tasks/main.yml", None,
-     lambda m: m.replace('  ansible.builtin.include_tasks: tls.yml\n'
-                         '  when: vault_manage_tls | bool\n',
-                         '  ansible.builtin.include_tasks: tls.yml\n', 1),
+     lambda m: m.replace('  when: vault_manage_tls | bool\n', '', 1),
      "no longer gates tls.yml"),
     ("weaken the tls.yml gate to `is defined`", None,
      lambda m: m.replace('  when: vault_manage_tls | bool\n',

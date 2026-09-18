@@ -195,6 +195,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Tag-scoped runs executed almost nothing and reported success.**
+  `include_tasks` does not propagate its own tags to the tasks in the included
+  file — only `import_tasks` does — and nine of the ten includes in
+  `tasks/main.yml` carried `tags:` with no `apply:` block. A tag therefore
+  selected the **include**, which ran and made the output look right, and then
+  executed **none of its tasks**. Measured on a live host before the fix:
+  `--tags configure` ran exactly three tasks — `Gathering Facts`, argument-spec
+  validation, and `Include Vault configuration tasks` — and reported
+  `ok=3 changed=0 failed=0`. A green run that configured nothing. `--tags stig`
+  included `stig.yml` and then ran only the fapolicyd phase, which was the sole
+  include already carrying `apply:`; an operator hardening a DoD host that way
+  got a successful play and zero hardening. Every include now applies its own
+  tags. After the fix, on the same host: `--tags configure` `ok=5`,
+  `--tags stig` `ok=16`, `--tags install` `ok=18`, `--tags preflight` `ok=47`,
+  `--tags vault` `ok=88`, all `changed=0 failed=0`, and `--tags tls` correctly
+  runs nothing while `vault_manage_tls` is false because the `when:` gates the
+  include itself. (#28)
+
+  Mirroring is what the older warning in `tasks/preflight.yml` cautioned
+  against — it said mirroring both tags would make `--tags vault` "a run that
+  looks like it worked." That was true only of the **partial** state: the trap
+  was the other nine includes being broken, not the mirroring. `preflight.yml`
+  needs no second-level change, which was **measured** with a throwaway
+  two-level role rather than reasoned about: an outer `apply:` propagates
+  *through* a nested include into its tasks, so `main.yml`'s
+  `apply: [vault, preflight]` reaches the gates even though `preflight.yml`'s
+  own `apply:` names only `[preflight]`. Confirmed live — `--tags vault` runs
+  15 gate tasks. Tags accumulate down the chain.
+
 - **The FIPS preflight probe crashed instead of asserting when the sysctl was
   absent or unreadable.** `tasks/preflight/fips.yml` read
   `/proc/sys/crypto/fips_enabled` with a bare `slurp` and no `failed_when`, so a

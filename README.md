@@ -470,9 +470,9 @@ skipped rather than converged.
 
 Two further caveats. The parent check is **lexical**: if `vault_tls_dir` is itself a
 symlink, a staged path under it still matches and the write lands on the
-resolved target. And this repair only happens on a **full** role run — the
-phases are dynamic `include_tasks`, which do not propagate tags, so a
-`--tags system` run does not perform it (see [issue #28](https://github.com/mpe-es/ansible-role-vault/issues/28)).
+resolved target. A `--tags system` run performs this repair, since [#28](https://github.com/mpe-es/ansible-role-vault/issues/28) made every
+include apply its own tags to the tasks it includes; on revisions before that
+fix, only a full role run did.
 
 ### HA Cluster (3-Node with Load Balancer) — developmental
 
@@ -666,10 +666,9 @@ writes to the posture files are denied — including `tls.key` — while reads o
 does not change, so trust stays valid. Note: an out-of-band `dnf update vault` may
 revert `/etc/vault.d` to the RPM's shipped ownership until the next role run —
 the unseal script fails closed (refuses to unseal) rather than trusting
-an unexpected parent, so re-run the **full** role after out-of-band
-package updates. A `--tags system` run does not suffice: the role's
-phases are dynamically included, so tags do not propagate to the
-ownership-remediation task (see the fapolicyd note and issue #28).
+an unexpected parent, so re-run the role after out-of-band
+package updates. `--tags system` is sufficient for the ownership repair as of
+[#28](https://github.com/mpe-es/ansible-role-vault/issues/28); before that fix only a full run reached it.
 
 **Upgrading from earlier role versions.** The tokens file path is
 unchanged; on the next full role run the directory ownership tightens
@@ -856,31 +855,33 @@ Until #44 lands, treat cluster standup as a manual runbook: run the role for
 configuration, then initialize exactly one node, join and unseal followers by
 hand.
 
-### Tag-scoped runs execute a single unrelated phase ([#28](https://github.com/mpe-es/ansible-role-vault/issues/28))
+### Tag-scoped runs
 
-`tasks/main.yml` composes the role with `include_tasks`, which does not
-propagate tags to the included file's tasks unless the include also carries an
-`apply:` block. Only Phase 8.5 (fapolicyd) does. So a run such as `--tags stig`
-executes **exactly that one phase and nothing else** — measured: `--tags stig`,
-`--tags fapolicyd` and `--tags vault` each run the fapolicyd trust tasks alone,
-with no install, no configuration and no service management. (`--tags install`
-does the same; Phase 8.5 carries that tag too.)
+Every include in `tasks/main.yml` carries an `apply:` block whose tags mirror the
+include's own, so a tag reaches the tasks inside the phase it names:
 
-That is more dangerous than executing nothing, because the run reports success
-having applied a fragment of the role. Do not use tag-scoped runs
-to apply a subset of hardening until this is fixed.
+| Tag | Runs |
+|-----|------|
+| `vault` | every phase — the whole role |
+| `preflight` | all twelve gates, and nothing else |
+| `repo`, `install`, `system`, `tls`, `configure`, `firewall`, `stig`, `service` | that phase only |
+| `fapolicyd` | the fapolicyd trust phase |
 
-**Exception: `--tags preflight` works.** The preflight phase was split into
-per-gate files under [#36](https://github.com/mpe-es/ansible-role-vault/issues/36) and its includes carry both their own tags
-and an `apply:` block, so `--tags preflight` runs every gate. That is a
-behaviour change: it previously ran nothing and reported success.
+`install` and `stig` additionally run the fapolicyd trust phase, which carries
+both tags deliberately: the trust entries are part of installing and of
+hardening.
 
-Phase 8.5 carries `vault`, `install`, `stig` and `fapolicyd`, so those four tags
-run the fapolicyd phase alone — measured. Every *other* tag (`repo`, `system`,
-`configure`, `firewall`, `tls`, `service`) still matches no inner task and does
-nothing at all. `apply:` on the preflight includes carries `preflight` alone
-precisely so `--tags vault` does not ALSO pull in the gates and become a larger
-partial run that looks complete.
+Conditional phases still honour their own toggles — `--tags tls` does nothing
+when `vault_manage_tls` is false, because the `when:` gates the include itself.
+
+> **Before [#28](https://github.com/mpe-es/ansible-role-vault/issues/28), this did not work and failed silently.** `include_tasks` does not
+> propagate its own tags; nine of the ten includes carried `tags:` without
+> `apply:`, so a tag selected the *include* — which ran, making the output look
+> right — and then executed none of its tasks. Measured on a live host:
+> `--tags configure` ran three tasks (facts, argument-spec validation, and the
+> include itself) and reported `ok=3 changed=0 failed=0`. A green run that
+> configured nothing. If you are on an older revision, do not use tag-scoped
+> runs to apply a subset of hardening.
 
 ### Other tracked gaps
 

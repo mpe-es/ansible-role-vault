@@ -11,9 +11,18 @@
 #   skipped entirely under --tags; one with only tags: includes the file but
 #   runs none of its tasks. tasks/main.yml Phase 8.5 is the in-repo precedent.
 #
-#   apply: carries [preflight] ONLY, not [vault, preflight]: mirroring both
-#   would make --tags vault run the gates and then nothing else -- a run that
-#   looks like it worked. That is the #28 trap, which this change does not fix.
+#   apply: here carries [preflight] ONLY, and that is now safe. It was written
+#   when the other nine includes in tasks/main.yml had no apply: at all, where
+#   mirroring [vault, preflight] would have made --tags vault run the gates and
+#   then nothing else -- a run that looks like it worked. #28 fixed that partial
+#   state: every include now mirrors its own tags, so --tags vault runs every
+#   phase.
+#
+#   This file needs no second-level change, which was MEASURED rather than
+#   assumed: an outer apply: propagates THROUGH a nested include into its tasks,
+#   so main.yml's apply: [vault, preflight] reaches these gates even though the
+#   apply: below names only [preflight]. Tags accumulate down the chain.
+#   Confirmed on a live host -- --tags vault runs 15 gate tasks.
 # Classification: UNCLASSIFIED
 ###############################################################################
 - name: Include preflight gate - os_family
