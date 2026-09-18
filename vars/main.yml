@@ -37,6 +37,10 @@ vault_binary: /usr/bin/vault
 # unreadable-path branches can be exercised without a bespoke kernel (#66);
 # internal, not an operator knob.
 __vault_fips_path: /proc/sys/crypto/fips_enabled
+# Probed by tasks/preflight/san.yml. A variable for the same reason as the FIPS
+# path above (#66): the absent-binary branch is untestable otherwise, and that
+# branch is exactly where a gate silently stops gating.
+__vault_san_openssl_bin: openssl
 vault_service_file: /usr/lib/systemd/system/vault.service
 
 ###############################################################################

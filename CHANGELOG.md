@@ -8,6 +8,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+
+- **Preflight gate for the certificate SAN contract.** Preflight verified that the
+  TLS trio *exists* and never looked inside it, so a certificate missing the
+  `127.0.0.1` IP SAN passed all twelve gates, the role converged the host in full
+  — package installed, config written, STIG hardening applied, firewall opened —
+  and only then did init and unseal fail at service start. Same
+  late-failure-after-mutation class Phase 1 exists to eliminate, on the **default**
+  TLS path. Measured on live hardware rather than inferred: a certificate carrying
+  `DNS:<fqdn>` and the node's own IP but no loopback SAN yields `x509: certificate
+  is valid for 10.110.11.55, not 127.0.0.1` from the loopback callers, while the
+  **same certificate works via the FQDN** — it is not invalid, merely unusable by
+  this role. The gate checks the two things the role itself depends on: the
+  loopback IP SAN, and the `vault_api_addr` host encoded to match its **type**
+  (a `DNS:` SAN does not validate `https://10.0.0.5`). It inspects on the
+  **controller** for the managed path and the **target** for the staged path,
+  since that is where each certificate lives; a relative `vault_tls_src_cert` and
+  `vault_tls_source: vault_pki` are **reported as uninspectable, never rejected**,
+  following the precedent set by #80. **Hostname verification is delegated to
+  `openssl x509 -checkhost`/`-checkip`, not reimplemented** — an earlier revision
+  compared strings and rejected `DNS:*.example.com` for `vault.example.com`, a
+  certificate every TLS client accepts. A certificate matching only through its
+  **Common Name is rejected**, because openssl falls back to CN when no `dNSName`
+  SAN exists while Vault's Go client has ignored CN since 1.15 — accepting it
+  would pass preflight and fail at service start, the exact failure this gate
+  prevents. `vault_api_addr` is parsed with `urlsplit` rather than a regex, so
+  the documented bracketed IPv6 form works. **Decisions are made on openssl's
+  printed result, never its exit code**, which is not portable: the
+  `ubuntu-latest` runner's openssl returns 0 for a mismatch that EL9's 3.5.8 and
+  macOS brew's 3.6.4 both return 1 for, so an rc-based gate passed a certificate
+  with no loopback SAN in CI while correctly failing it locally. **A missing
+  openssl fails the gate**, the same posture the port gate takes for a missing
+  `ss` and the DNS gate for a missing `getent`: a host without the tool is broken
+  rather than merely unverified, and skipping would let the gate stop gating
+  without saying so. Where openssl is *present but* does not implement
+  `-checkhost`/`-checkip` — LibreSSL, which is what a stock macOS controller
+  resolves — the gate **reports the contract as unverified and skips**, the same posture it already takes for a relative
+  source and for `vault_pki`, rather than failing or silently believing a usage
+  error. Scope is deliberately narrow — expiry, key
+  size, chain trust and EKU are out of scope, so a pass is never mistaken for
+  "this certificate is good". Five behavioural cases in the container-free
+  harness. (#85)
 - **Preflight gate for the role-managed TLS path.** `vault_manage_tls: true` had
   no preflight coverage at all: `vault_tls_src_cert`/`_key`/`_ca` and
   `vault_pki_mount`/`_role` all default to `""` and pass argspec validation, so an
