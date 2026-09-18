@@ -122,7 +122,7 @@
 ###############################################################################
 - name: Detect openssl for SAN inspection
   ansible.builtin.command:
-    cmd: command -v openssl
+    cmd: command -v {{ __vault_san_openssl_bin }}
   register: __vault_san_ossl
   check_mode: false
   changed_when: false
@@ -152,7 +152,7 @@
 # usage error exits 0 and would otherwise read as a pass.
 - name: Determine whether this openssl implements -checkhost
   ansible.builtin.command:
-    argv: [openssl, x509, -help]
+    argv: ["{{ __vault_san_openssl_bin }}", x509, -help]
   register: __vault_san_help
   check_mode: false
   changed_when: false
@@ -201,7 +201,7 @@
 - name: Verify the certificate serves the loopback address
   ansible.builtin.command:
     argv:
-      - openssl
+      - "{{ __vault_san_openssl_bin }}"
       - x509
       - -in
       - "{{ __vault_san_path }}"
@@ -227,7 +227,7 @@
     # it is what makes DNS:10.0.0.5 fail to satisfy https://10.0.0.5, which is
     # correct: that certificate does not validate for that URL.
     argv:
-      - openssl
+      - "{{ __vault_san_openssl_bin }}"
       - x509
       - -in
       - "{{ __vault_san_path }}"
@@ -250,7 +250,7 @@
 - name: Read the certificate's subjectAltName extension for reporting
   ansible.builtin.command:
     argv:
-      - openssl
+      - "{{ __vault_san_openssl_bin }}"
       - x509
       - -in
       - "{{ __vault_san_path }}"
@@ -271,6 +271,11 @@
 - name: "Preflight | san | the certificate serves this role's own callers"
   ansible.builtin.assert:
     that:
+      # A missing openssl fails HERE rather than skipping. The port gate takes
+      # the same posture for a missing ss and the dns gate for a missing getent:
+      # a host without the tool is broken, not merely unverified, and skipping
+      # would let this gate stop gating without saying so.
+      - __vault_san_ossl.rc | default(1) == 0
       # "does match" is not a substring of "does NOT match", so one test
       # discriminates both outcomes on every implementation that has the option.
       - __vault_san_loopback.stdout | default('') is search('does match')
@@ -330,4 +335,9 @@
     # posture this gate already takes for a relative source and for vault_pki.
     # Reporting "unverified" and then failing would be two contradictory
     # statements about one host.
-    - __vault_san_can_check | default(false) | bool
+    # Skips ONLY for a present-but-incapable openssl (LibreSSL), where the
+    # diagnostic above already reported the contract as unverified; reporting
+    # and then failing would be two contradictory statements about one host.
+    # An ABSENT openssl does NOT skip -- it falls through and fails here,
+    # because nothing else would have said anything at all.
+    - (__vault_san_ossl.rc | default(1) != 0) or (__vault_san_can_check | default(false) | bool)

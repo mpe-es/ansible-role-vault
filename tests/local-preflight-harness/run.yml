@@ -232,6 +232,29 @@
         vault_tls_cert_file: "{{ fx }}/san-v6.crt"
         vault_api_addr: "https://[2001:db8::10]:8200"
 
+    - name: "S9 FIRES - openssl absent is a failure, not a silent skip"
+      # The branch where a gate stops gating without saying so. With no openssl
+      # the contract cannot be checked at all, so the gate must fail rather than
+      # let the run proceed -- the same posture the port gate takes for a
+      # missing ss and the dns gate for a missing getent. Uses a GOOD
+      # certificate on purpose: the failure must come from the inability to
+      # check, not from the certificate.
+      block:
+        - ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/san.yml
+          vars:
+            vault_manage_tls: false
+            vault_tls_cert_file: "{{ fx }}/san-good.crt"
+            vault_api_addr: "https://vault.fixture.test:8200"
+            __vault_san_openssl_bin: openssl-deliberately-absent
+        - ansible.builtin.fail: {msg: "S9 did not fire"}
+      rescue:
+        - ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg | default('') is search('openssl is not available')
+            success_msg: "S9: missing openssl fails the gate instead of bypassing it"
+
     ###########################################################################
     # fips (#66) - the probe must ASSERT, never crash, and must distinguish
     # "FIPS is off" from "FIPS state could not be observed". Those are

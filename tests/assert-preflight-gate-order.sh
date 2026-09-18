@@ -129,7 +129,8 @@ WANT_PREDICATES = {
     # ubuntu-latest runner's openssl returns 0 for a mismatch that EL9's and
     # macOS brew's return 1 for, so an rc-based gate passed a certificate with
     # no loopback SAN in CI while failing it locally.
-    "san": ["__vault_san_loopback.stdout | default('') is search('does match')",
+    "san": ["__vault_san_ossl.rc | default(1) == 0",
+            "__vault_san_loopback.stdout | default('') is search('does match')",
             "__vault_san_advertised.stdout | default('') is search('does match')",
             "true if (__vault_san_host | ansible.utils.ipaddr) else (__vault_san_raw.stdout | default('') is search('DNS:'))"],
     "managed_tls": ["item.stat is defined",
