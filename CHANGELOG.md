@@ -96,6 +96,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [#69](https://github.com/mpe-es/ansible-role-vault/issues/69).
 
 ### Changed
+
+- **CI pins `ansible-core` and the Python version together.** `ansible-core` was
+  installed unpinned at five sites; the #36 close-out had already identified that
+  as the cause of local/CI divergence, where a "verified" claim was measured on
+  one version while CI resolved another. Both values now come from one
+  workflow-level `env:` block so the five sites cannot drift apart. **They are
+  coupled:** `ansible-core` 2.20+ requires Python >= 3.12, so raising the core
+  version without raising `PYTHON_VERSION` fails at install time with "No
+  matching distribution found" — which is how the first attempt at this pin
+  broke, having been set to the version a developer ran locally without checking
+  what CI installs. That constraint is now written into the workflow. `2.19.13`
+  is the newest core available for Python 3.11 and is what CI already resolved
+  unpinned; pinning does not by itself make local and CI agree, but it makes CI's
+  version known and changeable only by a reviewed commit. (#78)
 - **The DNS preflight check is now a conditional gate, not warn-only.** It probed
   `getent hosts` and warned only on a non-zero rc, measuring *"did resolution
   return an answer"* rather than *"is the answer reachable"* — while
