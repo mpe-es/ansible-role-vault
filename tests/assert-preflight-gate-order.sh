@@ -125,8 +125,12 @@ WANT_PREDICATES = {
     # reimplementation; and the DNS-SAN term is what stops openssl's Common Name
     # fallback accepting a certificate that Vault's Go client would reject.
     # Dropping any one of them restores a real defect with a green guard.
-    "san": ["__vault_san_loopback.rc | default(1) == 0",
-            "__vault_san_advertised.rc | default(1) == 0",
+    # Keyed on the printed result, NOT the exit code: rc is not portable. The
+    # ubuntu-latest runner's openssl returns 0 for a mismatch that EL9's and
+    # macOS brew's return 1 for, so an rc-based gate passed a certificate with
+    # no loopback SAN in CI while failing it locally.
+    "san": ["__vault_san_loopback.stdout | default('') is search('does match')",
+            "__vault_san_advertised.stdout | default('') is search('does match')",
             "true if (__vault_san_host | ansible.utils.ipaddr) else (__vault_san_raw.stdout | default('') is search('DNS:'))"],
     "managed_tls": ["item.stat is defined",
                     "item.stat.exists | default(false)",

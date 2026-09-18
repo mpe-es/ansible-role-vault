@@ -31,6 +31,16 @@
 #   IP SANs; where that is so, this gate reports the conflict at Phase 1 instead
 #   of letting it surface as an opaque service-start failure.
 #
+#   THE EXIT CODE IS NOT PORTABLE; THE OUTPUT TEXT IS. Measured across three
+#   implementations: OpenSSL 3.6.4 (macOS brew) and 3.5.8 (EL9) both return rc 1
+#   on a mismatch, the ubuntu-latest CI runner's OpenSSL returns rc 0 for the
+#   same mismatch, and LibreSSL 3.3.6 -- which is what `command -v openssl`
+#   finds on a stock macOS controller -- does not implement -checkip at all and
+#   exits 0 on the usage error. Keying on rc therefore passed a certificate with
+#   no loopback SAN in CI while failing it locally. Every decision below is made
+#   on the printed result, which is identical everywhere the option exists, and
+#   an openssl that lacks the option is REPORTED rather than silently believed.
+#
 #   HOSTNAME VERIFICATION IS DELEGATED, NOT REIMPLEMENTED. An earlier revision
 #   compared the advertised name against the DNS SAN list with string equality.
 #   That rejected `DNS:*.example.com` for `vault.example.com` -- a certificate
@@ -122,20 +132,6 @@
   delegate_to: "{{ 'localhost' if (__vault_san_on_controller | bool) else inventory_hostname }}"
   when: __vault_san_inspectable | bool
 
-- name: Read the certificate's subjectAltName extension
-  ansible.builtin.command:
-    cmd: "openssl x509 -in {{ __vault_san_path }} -noout -ext subjectAltName"
-  register: __vault_san_raw
-  check_mode: false
-  changed_when: false
-  failed_when: false
-  environment:
-    LC_ALL: C
-  delegate_to: "{{ 'localhost' if (__vault_san_on_controller | bool) else inventory_hostname }}"
-  when:
-    - __vault_san_inspectable | bool
-    - __vault_san_ossl.rc | default(1) == 0
-
 ###############################################################################
 # Verify. Two questions, each asked of openssl rather than of a parsed string:
 # does the certificate serve the loopback address the role's own callers use,
@@ -151,6 +147,49 @@
     # urlsplit, not a regex: it returns the hostname with IPv6 brackets already
     # removed, which is the whole reason the regex form was wrong.
     __vault_san_host: "{{ vault_api_addr | urlsplit('hostname') }}"
+
+# LibreSSL implements no -checkhost/-checkip. Detected explicitly, because its
+# usage error exits 0 and would otherwise read as a pass.
+- name: Determine whether this openssl implements -checkhost
+  ansible.builtin.command:
+    argv: [openssl, x509, -help]
+  register: __vault_san_help
+  check_mode: false
+  changed_when: false
+  failed_when: false
+  environment:
+    LC_ALL: C
+  delegate_to: "{{ 'localhost' if (__vault_san_on_controller | bool) else inventory_hostname }}"
+  when:
+    - __vault_san_inspectable | bool
+    - __vault_san_ossl.rc | default(1) == 0
+
+- name: "Preflight | san | record whether openssl can check hostnames"
+  ansible.builtin.set_fact:
+    # Parenthesised deliberately: `a ~ b is search(x)` binds as
+    # `a ~ (b is search(x))` and yields a STRING, which ansible-core rejects as
+    # a conditional. -help goes to stderr on some builds and stdout on others,
+    # so both are searched.
+    __vault_san_can_check: >-
+      {{ (((__vault_san_help.stdout | default('')) ~ (__vault_san_help.stderr | default('')))
+          is search('-checkhost')) | bool }}
+  when:
+    - __vault_san_inspectable | bool
+    - __vault_san_ossl.rc | default(1) == 0
+
+- name: "Preflight | san | this openssl cannot check hostnames"
+  ansible.builtin.debug:
+    msg: >-
+      The openssl on
+      {{ 'the Ansible controller' if (__vault_san_on_controller | bool) else 'this host' }}
+      does not implement -checkhost/-checkip (LibreSSL does not), so the SAN
+      contract is UNVERIFIED here. It still applies: the certificate must serve
+      127.0.0.1 and {{ vault_api_addr | urlsplit('hostname') }}. Provide an
+      OpenSSL build to have it checked.
+  when:
+    - __vault_san_inspectable | bool
+    - __vault_san_ossl.rc | default(1) == 0
+    - not (__vault_san_can_check | default(false) | bool)
 
 - name: Verify the certificate serves the loopback address
   ansible.builtin.command:
@@ -172,6 +211,7 @@
   when:
     - __vault_san_inspectable | bool
     - __vault_san_ossl.rc | default(1) == 0
+    - __vault_san_can_check | default(false) | bool
 
 - name: Verify the certificate serves the advertised identity
   ansible.builtin.command:
@@ -224,9 +264,10 @@
 - name: "Preflight | san | the certificate serves this role's own callers"
   ansible.builtin.assert:
     that:
-      - __vault_san_loopback.rc is defined
-      - __vault_san_loopback.rc | default(1) == 0
-      - __vault_san_advertised.rc | default(1) == 0
+      # "does match" is not a substring of "does NOT match", so one test
+      # discriminates both outcomes on every implementation that has the option.
+      - __vault_san_loopback.stdout | default('') is search('does match')
+      - __vault_san_advertised.stdout | default('') is search('does match')
       # openssl falls back to the Common Name when a certificate carries no
       # dNSName SAN, so -checkhost alone would accept a CN-only certificate.
       # Vault's client is Go, and Go has ignored CN since 1.15 -- such a
@@ -242,11 +283,11 @@
       {{ 'on the Ansible controller' if (__vault_san_on_controller | bool) else 'on this host' }},
       so the certificate cannot be checked. Install it, or accept that the SAN
       contract is unverified and may fail at service start.
-      {% elif __vault_san_loopback.rc is not defined %}
+      {% elif __vault_san_loopback.stdout is not defined %}
       {{ __vault_san_path }} was never inspected
       {{ 'on the Ansible controller' if (__vault_san_on_controller | bool) else 'on this host' }};
       the check did not run, so the SAN contract is unverified.
-      {% elif __vault_san_loopback.rc | default(1) != 0 %}
+      {% elif not (__vault_san_loopback.stdout | default('') is search('does match')) %}
       {{ __vault_san_path }} does not serve 127.0.0.1. The role's own callers use
       the loopback address -- tasks/service.yml verifies against
       https://127.0.0.1:{{ vault_listener_port }}, and the unseal unit sets
@@ -276,4 +317,10 @@
       {% endif %}
     success_msg: >-
       Certificate SANs: serves {{ __vault_san_host }} and 127.0.0.1
-  when: __vault_san_inspectable | bool
+  when:
+    - __vault_san_inspectable | bool
+    # Skipped, not failed, where openssl cannot answer the question -- the same
+    # posture this gate already takes for a relative source and for vault_pki.
+    # Reporting "unverified" and then failing would be two contradictory
+    # statements about one host.
+    - __vault_san_can_check | default(false) | bool

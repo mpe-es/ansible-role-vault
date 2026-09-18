@@ -33,7 +33,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   SAN exists while Vault's Go client has ignored CN since 1.15 — accepting it
   would pass preflight and fail at service start, the exact failure this gate
   prevents. `vault_api_addr` is parsed with `urlsplit` rather than a regex, so
-  the documented bracketed IPv6 form works. Scope is deliberately narrow — expiry, key
+  the documented bracketed IPv6 form works. **Decisions are made on openssl's
+  printed result, never its exit code**, which is not portable: the
+  `ubuntu-latest` runner's openssl returns 0 for a mismatch that EL9's 3.5.8 and
+  macOS brew's 3.6.4 both return 1 for, so an rc-based gate passed a certificate
+  with no loopback SAN in CI while correctly failing it locally. Where openssl
+  does not implement `-checkhost`/`-checkip` at all — LibreSSL, which is what a
+  stock macOS controller resolves — the gate **reports the contract as
+  unverified and skips**, the same posture it already takes for a relative
+  source and for `vault_pki`, rather than failing or silently believing a usage
+  error. Scope is deliberately narrow — expiry, key
   size, chain trust and EKU are out of scope, so a pass is never mistaken for
   "this certificate is good". Five behavioural cases in the container-free
   harness. (#85)
