@@ -181,8 +181,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`--tags preflight` now runs the gates.** It previously matched nothing and
   reported success having done nothing. A tag-scoped job that was green may now
-  go red — which is the point. `--tags vault|install|stig|fapolicyd` run the
-  fapolicyd phase alone (measured); the remaining tags still do nothing. (#36)
+  go red — which is the point. (#36)
+
+  **Historical note, superseded within this same release.** When #36 shipped,
+  every *other* tag was still broken: `--tags vault|install|stig|fapolicyd` ran
+  the fapolicyd phase alone and the remaining tags did nothing. **#28 repaired
+  all of them** — see the Fixed entry below for the behaviour this release
+  actually ships. Read the two together; #36 describes an intermediate state
+  that no longer exists.
 - **The TLS material gate fires under shipped defaults.** `vault_manage_tls`
   defaults to `false` and the certificate paths default under `/opt/vault/tls/`,
   which the role does not populate. A deployment that stages certificates in a
@@ -395,9 +401,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on live hardware; containers cannot reproduce it because they do not run
   fapolicyd. Documentation only — no behaviour change.
 - Added a **Known Limitations** section covering developmental multi-node HA
-  (#44), the silent no-op on tag-scoped runs (#28 — `--tags preflight` is now
-  an exception), the preflight gaps (#36 — since repaired and removed),
-  and the tracked functional gaps (#35, #39, #40, #42, #45).
+  (#44), the silent no-op on tag-scoped runs (#28 — since repaired, and that
+  limitation entry replaced by a per-tag reference table), the preflight gaps
+  (#36 — since repaired and removed), and the tracked functional gaps
+  (#35, #39, #40, #42, #45).
 - Requirements now document every prerequisite `tasks/preflight.yml` actually
   hard-fails on — FIPS mode, SELinux enforcing, chrony synchronization,
   firewalld running, and RHSM registration — none of which were previously
