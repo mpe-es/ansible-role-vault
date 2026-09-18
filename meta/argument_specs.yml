@@ -236,13 +236,13 @@ argument_specs:
           - API address advertised to clients.
           - "Format: https://<fqdn_or_ip>:8200"
         type: str
-        default: "https://{{ ansible_fqdn }}:{{ vault_listener_port }}"
+        default: "https://{{ ansible_facts['fqdn'] }}:{{ vault_listener_port }}"
 
       vault_cluster_addr:
         description:
           - Cluster address for Raft replication between nodes.
         type: str
-        default: "https://{{ ansible_fqdn }}:8201"
+        default: "https://{{ ansible_facts['fqdn'] }}:8201"
 
       vault_cluster_leader_addr:
         description:

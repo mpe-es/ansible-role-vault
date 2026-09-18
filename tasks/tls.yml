@@ -56,7 +56,7 @@
     - name: Generate certificate from Vault PKI
       community.hashi_vault.vault_pki_generate_certificate:
         role_name: "{{ vault_pki_role }}"
-        common_name: "{{ ansible_fqdn }}"
+        common_name: "{{ ansible_facts['fqdn'] }}"
         engine_mount_point: "{{ vault_pki_mount }}"
       register: __vault_pki_cert
 

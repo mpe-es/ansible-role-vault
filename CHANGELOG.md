@@ -96,6 +96,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [#69](https://github.com/mpe-es/ansible-role-vault/issues/69).
 
 ### Changed
+
+- **CI pins `ansible-core` and the Python version together.** `ansible-core` was
+  installed unpinned at five sites; the #36 close-out had already identified that
+  as the cause of local/CI divergence, where a "verified" claim was measured on
+  one version while CI resolved another. Both values now come from one
+  workflow-level `env:` block so the five sites cannot drift apart. **They are
+  coupled:** `ansible-core` 2.20+ requires Python >= 3.12, so raising the core
+  version without raising `PYTHON_VERSION` fails at install time with "No
+  matching distribution found" — which is how the first attempt at this pin
+  broke, having been set to the version a developer ran locally without checking
+  what CI installs. That constraint is now written into the workflow. `2.19.13`
+  is the newest core available for Python 3.11 and is what CI already resolved
+  unpinned; pinning does not by itself make local and CI agree, but it makes CI's
+  version known and changeable only by a reviewed commit. (#78)
 - **The DNS preflight check is now a conditional gate, not warn-only.** It probed
   `getent hosts` and warned only on a non-zero rc, measuring *"did resolution
   return an answer"* rather than *"is the answer reachable"* — while
@@ -180,6 +194,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Install `iproute` on minimal images. (#36)
 
 ### Fixed
+
+- **Facts are now read through `ansible_facts[...]`, so the role survives the
+  removal of `INJECT_FACTS_AS_VARS`.** That setting is what makes `ansible_fqdn`
+  exist alongside `ansible_facts['fqdn']`; its default-`True` behaviour is
+  deprecated and slated for removal. Measured with injection disabled, the role
+  did not merely fail a gate — it died on its **first task**, because
+  `meta/argument_specs.yml` embedded `{{ ansible_fqdn }}` in a default and
+  argument-spec validation could not resolve it. Blast radius was total, and CI
+  installed `ansible-core` unpinned, so the break would have landed on a
+  scheduled run with no commit to blame. Converted across `defaults/`, `vars/`,
+  `meta/`, `tasks/` and the molecule scenarios; `main` emitted 16 deprecation
+  warnings on a preflight run and now emits none. Verified on live hardware with
+  `ANSIBLE_INJECT_FACT_VARS=False`: full converge `ok=87 changed=0 failed=0`,
+  byte-identical to the run with injection on. (#78)
+
+- **The molecule fixtures and the container-free preflight harness overrode facts
+  in a way that silently stopped working.** They set `ansible_fqdn:`/`ansible_distribution:` as task vars
+  (precedence 21 beats host facts 15) to drive per-case behaviour. Once the gates
+  read `ansible_facts[...]`, those overrides no longer reach them and each case
+  would have exercised the container's real values while still claiming to test a
+  fixture. Three candidate replacements were measured rather than assumed:
+  overriding `ansible_facts` in `vars:` self-references and dies with "Recursive
+  loop detected"; replacing the whole dict loses every other fact
+  (`os_family` came back empty); and `set_fact` is host-global, so cases leak into
+  each other. The working form snapshots the real facts once into a plain var and
+  rebuilds per include — `ansible_facts: "{{ __real_facts | combine({...}) }}"` —
+  which is scoped, leak-free and preserves untouched facts. Proven with a
+  three-case probe where the third case, which overrides nothing, still sees the
+  real value. `tests/local-preflight-harness/run.yml` drives eighteen DNS cases
+  the same way and needed the same treatment; CI caught it because the guard's
+  first version did not scan `tests/`, which it now does. (#78)
 
 - **The common parent `/opt/vault` was never asserted on, so a STIG-hardened host
   could not start Vault.** The role created and enforced `vault_data_dir`,
@@ -266,6 +311,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   wired. (#46, closes #32)
 
 ### Documentation
+
+- **The README's controller-Python claim now matches what CI tests.** It advertised
+  `>= 3.10` — a correct derivation from the ansible-core 2.17 floor, but one
+  nothing verified, since CI installs 3.11 only. Pinning the Python version (#78)
+  turned that from incidental into explicit and made the untested claim visible.
+  The entry now states 3.11, notes that core 2.20+ requires Python 3.12+ so the
+  controller's Python and core version move together, and separates the managed
+  host's Python (EL platform Python, 3.9 on RHEL/Rocky 9) which is a different
+  axis entirely. Same "reconcile the README with what is actually enforced" class
+  as #36, on a new axis. (#78)
 
 - **Documented that pipelining is a hard requirement on fapolicyd-enforcing
   hosts.** This role targets STIG-hardened RHEL-family systems, where fapolicyd

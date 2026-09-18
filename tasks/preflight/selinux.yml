@@ -8,9 +8,9 @@
 - name: "Preflight | selinux | SELinux is enforcing"
   ansible.builtin.assert:
     that:
-      - ansible_selinux.status == 'enabled'
-      - ansible_selinux.mode == 'enforcing'
+      - ansible_facts['selinux']['status'] == 'enabled'
+      - ansible_facts['selinux']['mode'] == 'enforcing'
     fail_msg: >-
-      SELinux must be in enforcing mode. Current status: {{ ansible_selinux.status }},
-      mode: {{ ansible_selinux.mode | default('unknown') }}
+      SELinux must be in enforcing mode. Current status: {{ ansible_facts['selinux']['status'] }},
+      mode: {{ ansible_facts['selinux']['mode'] | default('unknown') }}
     success_msg: "SELinux: enforcing"

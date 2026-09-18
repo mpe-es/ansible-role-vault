@@ -8,8 +8,8 @@
 - name: "Preflight | os_version | supported OS major version (EL 8, 9, or 10)"
   ansible.builtin.assert:
     that:
-      - ansible_distribution_major_version in ['8', '9', '10']
+      - ansible_facts['distribution_major_version'] in ['8', '9', '10']
     fail_msg: >-
       This role supports RHEL/EL 8, 9, and 10 only.
-      Detected version: {{ ansible_distribution }} {{ ansible_distribution_version }}
-    success_msg: "OS version: {{ ansible_distribution }} {{ ansible_distribution_version }}"
+      Detected version: {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }}
+    success_msg: "OS version: {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }}"

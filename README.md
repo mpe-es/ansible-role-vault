@@ -45,13 +45,13 @@ one of them applies and the other does not.
 | TLS material | `vault_manage_tls: false` **(the default)** | `vault_tls_cert_file`, `vault_tls_key_file` and `vault_tls_ca_file` all exist and are regular files (symlinks followed). Whether the Vault account can READ them is tracked separately |
 | Managed TLS inputs | `vault_manage_tls: true` | under `vault_tls_source: file`, `vault_tls_src_cert`/`_key`/`_ca` are **set**. An *absolute* path is additionally statted **on the Ansible controller** and must be readable — `copy` resolves `src` there, so checking the target would answer a different question. A *relative* path (`files/vault-tls.crt`, as the examples below use) is reported as unverifiable and left to `copy`'s own search path, never rejected. Under `vault_tls_source: vault_pki`, `vault_pki_mount` and `vault_pki_role` are set; reachability of the PKI engine is not proven (#80) |
 | API port | always | `vault_listener_port` is free, or already held by the Vault service itself. Requires `iproute` (`ss`) — a missing query tool is a hard failure, not a skip |
-| DNS | `vault_api_addr` or `vault_cluster_addr` still contain `ansible_fqdn` (the default), **or** `vault_manage_tls: true` **with** `vault_tls_source: vault_pki` (which issues against `ansible_fqdn`) | the FQDN resolves **locally** to at least one address that is not loopback (`127.0.0.0/8`, `::1`) or link-local (`169.254.0.0/16`, `fe80::/10`). Checked with `getent ahosts` rather than `getent hosts`, which returns the first match only and prefers IPv6, so a loopback AAAA masks a routable A. Classification is delegated to `ansible.utils.ipaddr` rather than pattern-matched, so loopback, link-local (the full `fe80::/10`), multicast, unspecified and broadcast are excluded — while RFC1918, CGNAT and reserved ranges stay valid, since "not globally routable" is not the same claim as "no peer can reach it". Note `ahosts` applies `AI_ADDRCONFIG`, so it reports the families the host itself has configured — a host with no IPv6 address will not be told about AAAA records. Pin `vault_api_addr`/`vault_cluster_addr` explicitly and this becomes a warning instead (#79) |
+| DNS | `vault_api_addr` or `vault_cluster_addr` still contain `ansible_facts['fqdn']` (the default), **or** `vault_manage_tls: true` **with** `vault_tls_source: vault_pki` (which issues against `ansible_facts['fqdn']`) | the FQDN resolves **locally** to at least one address that is not loopback (`127.0.0.0/8`, `::1`) or link-local (`169.254.0.0/16`, `fe80::/10`). Checked with `getent ahosts` rather than `getent hosts`, which returns the first match only and prefers IPv6, so a loopback AAAA masks a routable A. Classification is delegated to `ansible.utils.ipaddr` rather than pattern-matched, so loopback, link-local (the full `fe80::/10`), multicast, unspecified and broadcast are excluded — while RFC1918, CGNAT and reserved ranges stay valid, since "not globally routable" is not the same claim as "no peer can reach it". Note `ahosts` applies `AI_ADDRCONFIG`, so it reports the families the host itself has configured — a host with no IPv6 address will not be told about AAAA records. Pin `vault_api_addr`/`vault_cluster_addr` explicitly and this becomes a warning instead (#79) |
 
 Every gate above is a hard failure. The DNS gate is the one that changes shape:
 pin `vault_api_addr` and `vault_cluster_addr` to explicit reachable addresses and
 it downgrades to a warning — **unless** the role is also managing TLS
 (`vault_manage_tls: true`) with `vault_tls_source: vault_pki`, which issues a
-certificate whose common name is `ansible_fqdn` regardless of what the
+certificate whose common name is `ansible_facts['fqdn']` regardless of what the
 advertised addresses say. Note that the
 availability of `getent` itself is checked unconditionally and is a hard failure
 for everyone, the same posture the port gate takes for a missing `ss`: a host
@@ -144,7 +144,12 @@ no manual step is required.
 ### Ansible
 
 - ansible-core >= **2.17.0** (required by `community.hashi_vault` collection)
-- Python >= **3.10** (required by ansible-core 2.17+)
+- Python >= **3.11** on the CONTROLLER — the version CI installs and tests.
+  ansible-core 2.17 itself permits 3.10, but nothing verifies that floor, so
+  3.11 is what this role claims. Note that ansible-core **2.20+ requires Python
+  3.12+**; the role works on either, but the controller's Python and core
+  version move together. The MANAGED HOST's Python is a separate matter — the
+  role runs against EL8/9/10 platform Python (3.9 on RHEL/Rocky 9).
 - **Pipelining must be enabled** on any target where fapolicyd is enforcing —
   see immediately below. This is a hard requirement on this role's primary
   target platform, not a performance tuning knob.
@@ -315,8 +320,8 @@ auto-generation and input validation.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `vault_raft_node_id` | `{{ inventory_hostname_short }}` | Raft node identifier |
-| `vault_api_addr` | `https://{{ ansible_fqdn }}:8200` | Advertised API address |
-| `vault_cluster_addr` | `https://{{ ansible_fqdn }}:8201` | Cluster replication address |
+| `vault_api_addr` | `https://{{ ansible_facts['fqdn'] }}:8200` | Advertised API address |
+| `vault_cluster_addr` | `https://{{ ansible_facts['fqdn'] }}:8201` | Cluster replication address |
 | `vault_cluster_leader_addr` | `""` | LB/leader address for HA retry_join |
 
 ### TLS Certificate Deployment

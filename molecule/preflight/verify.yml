@@ -28,6 +28,21 @@
   hosts: all
   gather_facts: true
 
+  pre_tasks:
+    # Fixtures below override individual FACTS per include. With
+    # INJECT_FACTS_AS_VARS gone (#78) the gates read ansible_facts[...], so
+    # setting `ansible_fqdn:` in vars no longer reaches them -- the gate would
+    # silently read the container's real value and the case would stop testing
+    # what it names. Overriding ansible_facts directly self-references and dies
+    # with "Recursive loop detected"; replacing the whole dict loses every other
+    # fact. Snapshotting once into a plain var breaks the self-reference, so a
+    # per-include `ansible_facts: "{{ __real_facts | combine({...}) }}"` is
+    # scoped, leak-free and keeps the untouched facts. All three behaviours were
+    # measured before this was written.
+    - name: Snapshot the real facts so fixtures can override one at a time
+      ansible.builtin.set_fact:
+        __real_facts: "{{ ansible_facts }}"
+
   tasks:
     ###########################################################################
     # The repo-source gate - repo source coherence
@@ -41,7 +56,7 @@
           vars:
             vault_manage_repo: true
             vault_repo_source: satellite
-            ansible_distribution: Rocky
+            ansible_facts: "{{ __real_facts | combine({'distribution': 'Rocky'}) }}"
         - name: Satellite-on-rebuild should not have passed
           ansible.builtin.fail:
             msg: "repo_source did not fire for satellite on a non-RHEL host"
@@ -79,7 +94,7 @@
       vars:
         vault_manage_repo: false
         vault_repo_source: satellite
-        ansible_distribution: Rocky
+        ansible_facts: "{{ __real_facts | combine({'distribution': 'Rocky'}) }}"
 
     - name: Assert the repo-source marker was skipped, not merely non-failing
       ansible.builtin.assert:
@@ -436,10 +451,11 @@
     ###########################################################################
     # The dns gate - the FQDN resolves to a reachable address (issue #79)
     #
-    # ansible_fqdn is overridable per-include (vars precedence 21 beats host
-    # facts 15) and prepare.yml owns /etc/hosts, so both of this gate's inputs
-    # are under the scenario's control. It does NOT have to settle for whatever
-    # the container's own name resolves to.
+    # The fqdn FACT is overridable per-include -- ansible_facts rebuilt from
+    # __real_facts (vars precedence 21 beats host facts 15, see pre_tasks) --
+    # and prepare.yml owns /etc/hosts, so both of this gate's inputs are under
+    # the scenario's control. It does NOT have to settle for whatever the
+    # container's own name resolves to.
     #
     # vault_api_addr is set per case ON PURPOSE: it is the polarity input, and
     # a case that left it at the default would prove only one half.
@@ -451,7 +467,7 @@
             name: ansible-role-vault
             tasks_from: preflight/dns.yml
           vars:
-            ansible_fqdn: dns-loopback-fixture.test
+            ansible_facts: "{{ __real_facts | combine({'fqdn': 'dns-loopback-fixture.test'}) }}"
             vault_api_addr: "https://dns-loopback-fixture.test:8200"
             vault_cluster_addr: "https://dns-loopback-fixture.test:8201"
         - name: A loopback-only name should not have passed
@@ -475,7 +491,7 @@
             name: ansible-role-vault
             tasks_from: preflight/dns.yml
           vars:
-            ansible_fqdn: dns-linklocal-fixture.test
+            ansible_facts: "{{ __real_facts | combine({'fqdn': 'dns-linklocal-fixture.test'}) }}"
             vault_api_addr: "https://dns-linklocal-fixture.test:8200"
             vault_cluster_addr: "https://dns-linklocal-fixture.test:8201"
         - name: A link-local-only name should not have passed
@@ -496,7 +512,7 @@
         name: ansible-role-vault
         tasks_from: preflight/dns.yml
       vars:
-        ansible_fqdn: dns-routable-fixture.test
+        ansible_facts: "{{ __real_facts | combine({'fqdn': 'dns-routable-fixture.test'}) }}"
         vault_api_addr: "https://dns-routable-fixture.test:8200"
         vault_cluster_addr: "https://dns-routable-fixture.test:8201"
 
@@ -517,7 +533,7 @@
         name: ansible-role-vault
         tasks_from: preflight/dns.yml
       vars:
-        ansible_fqdn: dns-loopback-fixture.test
+        ansible_facts: "{{ __real_facts | combine({'fqdn': 'dns-loopback-fixture.test'}) }}"
         vault_api_addr: "https://10.99.0.1:8200"
         vault_cluster_addr: "https://10.99.0.1:8201"
 
@@ -615,7 +631,7 @@
       vars:
         vault_manage_repo: true
         vault_repo_source: satellite
-        ansible_distribution: Rocky
+        ansible_facts: "{{ __real_facts | combine({'distribution': 'Rocky'}) }}"
 
     - name: Assert the RHSM gate marker skipped on an EL rebuild
       ansible.builtin.assert:
@@ -1087,7 +1103,7 @@
     # #71 tracks the fix. It does NOT paper over it: EL8 and EL9 still execute
     # this case, so the repo lifecycle stays covered.
     - name: Write a repo file as the hashicorp source would
-      when: ansible_distribution_major_version is version('10', '<')
+      when: ansible_facts['distribution_major_version'] is version('10', '<')
       ansible.builtin.include_role:
         name: ansible-role-vault
         tasks_from: repo.yml
@@ -1104,7 +1120,7 @@
       ansible.builtin.stat:
         path: /etc/yum.repos.d/hashicorp.repo
       register: __repo_after_hashicorp
-      when: ansible_distribution_major_version is version('10', '<')
+      when: ansible_facts['distribution_major_version'] is version('10', '<')
 
     - name: Re-run under the satellite source
       ansible.builtin.include_role:
@@ -1112,20 +1128,20 @@
         tasks_from: repo.yml
       vars:
         vault_repo_source: satellite
-      when: ansible_distribution_major_version is version('10', '<')
+      when: ansible_facts['distribution_major_version'] is version('10', '<')
 
     - name: Stat the repo file after the satellite run
       ansible.builtin.stat:
         path: /etc/yum.repos.d/hashicorp.repo
       register: __repo_after_satellite
-      when: ansible_distribution_major_version is version('10', '<')
+      when: ansible_facts['distribution_major_version'] is version('10', '<')
 
     # Both halves, or the case proves nothing: without "present before",
     # deleting the template task passes; without "absent after", deleting the
     # cleanup passes. The split removed these assertions along with an adjacent
     # Satellite block and left the two stat tasks recording nothing.
     - name: "Assert the role wrote the file, then removed it for satellite"
-      when: ansible_distribution_major_version is version('10', '<')
+      when: ansible_facts['distribution_major_version'] is version('10', '<')
       ansible.builtin.assert:
         that:
           - __repo_after_hashicorp.stat.exists

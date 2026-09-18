@@ -10,8 +10,8 @@
 #   anything can reach". The second is what the role depends on, because
 #   defaults/main.yml derives BOTH advertised addresses from this same name:
 #
-#       vault_api_addr:     "https://{{ ansible_fqdn }}:{{ vault_listener_port }}"
-#       vault_cluster_addr: "https://{{ ansible_fqdn }}:8201"
+#       vault_api_addr:     "https://{{ ansible_facts['fqdn'] }}:{{ vault_listener_port }}"
+#       vault_cluster_addr: "https://{{ ansible_facts['fqdn'] }}:8201"
 #
 #   A Debian-convention `127.0.1.1 <fqdn>` line in /etc/hosts satisfies the old
 #   predicate completely. The host converges and Vault advertises an api_addr
@@ -34,14 +34,14 @@
 #   family, which is the set this gate needs.
 #
 #   POLARITY. This is a hard gate only when the ROLE needs the name to resolve:
-#   when vault_api_addr or vault_cluster_addr still contain ansible_fqdn (the
+#   when vault_api_addr or vault_cluster_addr still contain ansible_facts['fqdn'] (the
 #   default), OR when vault_manage_tls is true AND vault_tls_source is
 #   'vault_pki', because tasks/tls.yml
-#   issues that certificate with `common_name: "{{ ansible_fqdn }}"` regardless
+#   issues that certificate with `common_name: "{{ ansible_facts['fqdn'] }}"` regardless
 #   of what the advertised addresses say. An operator with neither dependency
 #   gets a warning instead of a failure. An earlier draft armed on the addresses
 #   alone and claimed in three places that pinning them removed the dependency
-#   entirely -- `grep -rn ansible_fqdn` across the role disproves that.
+#   entirely -- `grep -rn "ansible_facts\[.fqdn.\]"` across the role disproves that.
 # NIST 800-53: SC-8, CM-6 (Configuration Settings)
 # Classification: UNCLASSIFIED
 ###############################################################################
@@ -67,13 +67,13 @@
       - __vault_getent_bin.rc == 0
     fail_msg: >-
       `getent` is not on PATH, so this gate cannot determine whether
-      {{ ansible_fqdn }} resolves. getent ships with glibc and should always be
+      {{ ansible_facts['fqdn'] }} resolves. getent ships with glibc and should always be
       present; its absence is a broken host, not a DNS problem. Install glibc-common.
     success_msg: "Resolver query tool: present"
 
 - name: Resolve the host FQDN across all address families
   ansible.builtin.command:
-    cmd: "getent ahosts {{ ansible_fqdn }}"
+    cmd: "getent ahosts {{ ansible_facts['fqdn'] }}"
   register: __vault_dns_check
   check_mode: false          # command/shell are skipped under --check;
   # a skipped probe returns rc 0 with empty output, which would read here as
@@ -173,12 +173,12 @@
 - name: Determine whether the advertised addresses depend on this hostname
   ansible.builtin.set_fact:
     __vault_dns_advertised: >-
-      {{ (ansible_fqdn | default('', true) | length > 0)
-         and (((ansible_fqdn | lower) in (vault_api_addr | default('', true) | lower))
-              or ((ansible_fqdn | lower) in (vault_cluster_addr | default('', true) | lower))) }}
+      {{ (ansible_facts['fqdn'] | default('', true) | length > 0)
+         and (((ansible_facts['fqdn'] | lower) in (vault_api_addr | default('', true) | lower))
+              or ((ansible_facts['fqdn'] | lower) in (vault_cluster_addr | default('', true) | lower))) }}
 
 # The addresses are not the only consumer of this name. tasks/tls.yml issues a
-# Vault-PKI certificate with `common_name: "{{ ansible_fqdn }}"`, so an operator
+# Vault-PKI certificate with `common_name: "{{ ansible_facts['fqdn'] }}"`, so an operator
 # who pinned both advertised addresses AND selected vault_pki still depends on
 # the FQDN -- and would otherwise be downgraded to a warning while the role mints
 # a certificate for a name nothing resolves. An earlier draft asserted in three
@@ -195,7 +195,7 @@
     that:
       - __vault_dns_routable | length > 0
     fail_msg: >-
-      {{ ansible_fqdn }} resolves to no reachable address
+      {{ ansible_facts['fqdn'] }} resolves to no reachable address
       {% if __vault_dns_check.rc == 0 %}
       -- only to loopback or link-local
       ({{ __vault_dns_check.stdout_lines | map('regex_replace', '^(\S+).*$', '\1') | unique | join(', ') }})
@@ -213,7 +213,7 @@
       or the /etc/hosts entry for this host.
       {% endif %}
       A Debian-style 127.0.1.1 line is the usual cause.
-    success_msg: "DNS: {{ ansible_fqdn }} -> {{ __vault_dns_routable | join(', ') }}"
+    success_msg: "DNS: {{ ansible_facts['fqdn'] }} -> {{ __vault_dns_routable | join(', ') }}"
   when: __vault_dns_required | bool
 
 # The operator pinned explicit advertised addresses, so an unreachable hostname
@@ -222,7 +222,7 @@
 - name: Warn when the FQDN is unreachable but the advertised addresses are pinned
   ansible.builtin.debug:
     msg: >-
-      WARNING: {{ ansible_fqdn }} does not resolve to a reachable address.
+      WARNING: {{ ansible_facts['fqdn'] }} does not resolve to a reachable address.
       vault_api_addr and vault_cluster_addr are set explicitly, so this does not
       block the run -- but remove those overrides and the deployment breaks.
   when:

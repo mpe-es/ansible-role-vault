@@ -91,14 +91,14 @@ for gate in EXPECTED:
 # whose semantics nothing checks.
 WANT_PREDICATES = {
     "fips": ["(__vault_fips_status.content | b64decode | trim) == '1'"],
-    "selinux": ["ansible_selinux.status == 'enabled'",
-                "ansible_selinux.mode == 'enforcing'"],
+    "selinux": ["ansible_facts['selinux']['status'] == 'enabled'",
+                "ansible_facts['selinux']['mode'] == 'enforcing'"],
     # Pinned to the EXACT conditions, not merely "asserts something": a semantic
     # mutation -- widening the family, or adding a version the role does not
     # support -- would otherwise pass CI, because no behavioural case can run on
     # a platform the container is not.
-    "os_family": ["ansible_os_family == 'RedHat'"],
-    "os_version": ["ansible_distribution_major_version in ['8', '9', '10']"],
+    "os_family": ["ansible_facts['os_family'] == 'RedHat'"],
+    "os_version": ["ansible_facts['distribution_major_version'] in ['8', '9', '10']"],
     # The whole point of #79: "length > 0" over the ROUTABLE set, never over the
     # raw resolver answer. `__vault_dns_check.rc == 0` would pass on a host whose
     # name resolves only to 127.0.1.1 -- which is the defect this gate replaced.

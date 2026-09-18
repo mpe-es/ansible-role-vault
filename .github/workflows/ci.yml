@@ -27,6 +27,29 @@ on:
 permissions:
   contents: read
 
+# Pinned deliberately (#78). ansible-core was installed unpinned at five sites,
+# which the #36 close-out already identified as the cause of local/CI divergence
+# -- a "verified" claim measured on one version while CI resolved another. The
+# INJECT_FACTS_AS_VARS removal was the second bill for it: a core release would
+# have turned this repository red on a scheduled run with no commit to blame.
+#
+# THE TWO VALUES BELOW ARE COUPLED. ansible-core 2.20+ requires Python >= 3.12,
+# so bumping ANSIBLE_CORE_VERSION past 2.19.x without also raising
+# PYTHON_VERSION fails at install time with "No matching distribution found" --
+# which is exactly how the first attempt at this pin broke, because it was set
+# to the version a developer happened to run locally (2.21.4 on Python 3.14)
+# without checking what CI installs.
+#
+# 2.19.13 is the newest ansible-core available for Python 3.11, and is what CI
+# was already resolving unpinned. Pinning does not by itself make local and CI
+# agree -- a developer on Python 3.12+ will still run a newer core. What it buys
+# is that CI's version is now KNOWN and changes only by a reviewed commit, which
+# is the actual defect #36 identified: not the specific version, but that it
+# drifted silently and made "verified" claims unreliable.
+env:
+  PYTHON_VERSION: "3.11"
+  ANSIBLE_CORE_VERSION: "2.19.13"
+
 # RUNNERS. These jobs ran on the org's private [self-hosted, rocky10] fleet
 # briefly and every job queued forever with runner=UNASSIGNED, while the fleet
 # sat idle with matching labels.
@@ -62,13 +85,13 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
-          python-version: '3.11'
+          python-version: "${{ env.PYTHON_VERSION }}"
           cache: 'pip'
 
       - name: Install linting dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install yamllint ansible-core ansible-lint
+          pip install yamllint ansible-core==${{ env.ANSIBLE_CORE_VERSION }} ansible-lint
 
       - name: Install required Ansible collections
         run: ansible-galaxy collection install -r requirements.yml
@@ -125,13 +148,13 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
-          python-version: '3.11'
+          python-version: "${{ env.PYTHON_VERSION }}"
           cache: 'pip'
 
       - name: Install Ansible and dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install ansible-core
+          pip install ansible-core==${{ env.ANSIBLE_CORE_VERSION }}
           pip install -r requirements.txt
 
       - name: Install required Ansible collections
@@ -206,14 +229,14 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
-          python-version: '3.11'
+          python-version: "${{ env.PYTHON_VERSION }}"
           cache: 'pip'
 
       - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
           pip install \
-            ansible-core \
+            ansible-core==${{ env.ANSIBLE_CORE_VERSION }} \
             molecule \
             molecule-plugins[podman] \
             ansible-lint \
@@ -318,14 +341,14 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
-          python-version: '3.11'
+          python-version: "${{ env.PYTHON_VERSION }}"
           cache: 'pip'
 
       - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
           pip install \
-            ansible-core \
+            ansible-core==${{ env.ANSIBLE_CORE_VERSION }} \
             molecule \
             molecule-plugins[podman] \
             ansible-lint \
@@ -411,14 +434,14 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
-          python-version: '3.11'
+          python-version: "${{ env.PYTHON_VERSION }}"
           cache: 'pip'
 
       - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
           pip install \
-            ansible-core \
+            ansible-core==${{ env.ANSIBLE_CORE_VERSION }} \
             molecule \
             molecule-plugins[podman] \
             ansible-lint \

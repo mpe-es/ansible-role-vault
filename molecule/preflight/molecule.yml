@@ -16,8 +16,9 @@
 #   their exact predicates.
 #
 #   dns IS covered, and getting there took correcting an assumption: the gate
-#   reads ansible_fqdn, which is overridable per-include (vars precedence 21
-#   beats host facts 15), and /etc/hosts is writable in prepare.yml. So the
+#   reads the fqdn FACT, which is overridable per-include by rebuilding
+#   ansible_facts from the __real_facts snapshot (vars precedence 21 beats host
+#   facts 15; #78), and /etc/hosts is writable in prepare.yml. So the
 #   scenario controls both of the gate's inputs and does not have to settle for
 #   whatever the container's own name happens to resolve to. Its predicate and
 #   polarity are ALSO pinned in the order guard, because a container cannot

@@ -28,10 +28,10 @@
     - name: "Preflight | repo_source | Satellite mode requires Red Hat Enterprise Linux"
       ansible.builtin.assert:
         that:
-          - ansible_distribution == 'RedHat'
+          - ansible_facts['distribution'] == 'RedHat'
         fail_msg: >-
           vault_repo_source is 'satellite' but this host is
-          {{ ansible_distribution }} {{ ansible_distribution_major_version }}.
+          {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_major_version'] }}.
           Red Hat Satellite is a licensed Red Hat product and does not manage
           EL rebuilds; subscription-manager is not available here. Use 'mirror'
           with your internal reposync URL, or 'hashicorp' for an
