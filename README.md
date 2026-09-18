@@ -44,6 +44,7 @@ one of them applies and the other does not.
 | Repo source | `vault_manage_repo` | `mirror` mode must not name `rpm.releases.hashicorp.com` — checked for **both** `vault_repo_url` and `vault_repo_gpg_key`, since the target host fetches the key directly. This proves inequality with the shipped host, **not** that the endpoint is internal or airgap-safe. `satellite` mode requires RHEL |
 | TLS material | `vault_manage_tls: false` **(the default)** | `vault_tls_cert_file`, `vault_tls_key_file` and `vault_tls_ca_file` all exist and are regular files (symlinks followed). Whether the Vault account can READ them is tracked separately |
 | Managed TLS inputs | `vault_manage_tls: true` | under `vault_tls_source: file`, `vault_tls_src_cert`/`_key`/`_ca` are **set**. An *absolute* path is additionally statted **on the Ansible controller** and must be readable — `copy` resolves `src` there, so checking the target would answer a different question. A *relative* path (`files/vault-tls.crt`, as the examples below use) is reported as unverifiable and left to `copy`'s own search path, never rejected. Under `vault_tls_source: vault_pki`, `vault_pki_mount` and `vault_pki_role` are set; reachability of the PKI engine is not proven (#80) |
+| Certificate SANs | `vault_manage_tls: false` **(the default)**, or `vault_manage_tls: true` with `vault_tls_source: file` and an **absolute** `vault_tls_src_cert` | the certificate carries a **`127.0.0.1` IP SAN** and the host identity from `vault_api_addr`, encoded to match its type (DNS SAN for a name, IP SAN for an address). Inspected with `openssl x509 -ext subjectAltName` — on the **controller** for the managed path, on the **target** for the staged path, since that is where each certificate lives. A *relative* `vault_tls_src_cert` and `vault_tls_source: vault_pki` are **reported as uninspectable, never rejected**. This checks only what the role itself depends on: expiry, key size, chain trust and EKU are out of scope, so a pass here is not a statement that the certificate is otherwise good (#85) |
 | API port | always | `vault_listener_port` is free, or already held by the Vault service itself. Requires `iproute` (`ss`) — a missing query tool is a hard failure, not a skip |
 | DNS | `vault_api_addr` or `vault_cluster_addr` still contain `ansible_facts['fqdn']` (the default), **or** `vault_manage_tls: true` **with** `vault_tls_source: vault_pki` (which issues against `ansible_facts['fqdn']`) | the FQDN resolves **locally** to at least one address that is not loopback (`127.0.0.0/8`, `::1`) or link-local (`169.254.0.0/16`, `fe80::/10`). Checked with `getent ahosts` rather than `getent hosts`, which returns the first match only and prefers IPv6, so a loopback AAAA masks a routable A. Classification is delegated to `ansible.utils.ipaddr` rather than pattern-matched, so loopback, link-local (the full `fe80::/10`), multicast, unspecified and broadcast are excluded — while RFC1918, CGNAT and reserved ranges stay valid, since "not globally routable" is not the same claim as "no peer can reach it". Note `ahosts` applies `AI_ADDRCONFIG`, so it reports the families the host itself has configured — a host with no IPv6 address will not be told about AAAA records. Pin `vault_api_addr`/`vault_cluster_addr` explicitly and this becomes a warning instead (#79) |
 
@@ -98,6 +99,27 @@ openssl req -new -newkey rsa:3072 -nodes \
   -subj "/CN=$(hostname -f)" \
   -addext "subjectAltName=DNS:$(hostname -f),IP:127.0.0.1"
 ```
+
+**This contract is enforced at preflight** as of [#85](https://github.com/mpe-es/ansible-role-vault/issues/85) — a certificate missing
+the `127.0.0.1` IP SAN now fails Phase 1 with an actionable message, rather than
+converging the host in full and then failing at service start.
+
+Measured on a live host: a certificate carrying `DNS:<fqdn>` and the node's own
+IP but no loopback SAN produces
+
+```
+x509: certificate is valid for 10.110.11.55, not 127.0.0.1
+```
+
+from the loopback callers, while the **same** certificate works via the FQDN. The
+certificate is not invalid — it is unusable by this role.
+
+> **If your issuing CA refuses IP SANs**, that conflict must be resolved before
+> this role can initialise Vault. Enterprise ADCS/RHCS policy sometimes declines
+> them. The gate surfaces the problem at Phase 1 instead of at service start, but
+> it cannot remove the dependency: `templates/vault-unseal.service.j2` sets
+> `VAULT_ADDR` to the loopback address because the unit runs before DNS is
+> dependable.
 
 This contract covers `vault_tls_source: file` (the default). The
 `vault_pki` source cannot satisfy it until [#63](https://github.com/mpe-es/ansible-role-vault/issues/63) lands, and multi-node

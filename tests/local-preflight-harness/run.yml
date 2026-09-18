@@ -74,12 +74,116 @@
             mode: '0000'
           when: lookup('env', 'USER') != 'root'
 
+        - name: SAN fixture CA + certs (#85)
+          # Generated at run time, never committed: no key material in the repo
+          # and no expiry to rot. Each cert isolates ONE property of the SAN
+          # contract so a case cannot pass for the wrong reason.
+          ansible.builtin.shell:
+            chdir: "{{ fx }}"
+            cmd: |
+              set -e
+              umask 077
+              openssl req -x509 -newkey rsa:2048 -sha256 -days 2 -nodes \
+                -keyout san-ca.key -out san-ca.crt -subj "/CN=SAN Fixture CA" 2>/dev/null
+              mk() {  # $1=name  $2=SAN string
+                openssl req -newkey rsa:2048 -sha256 -nodes -keyout "$1.key" \
+                  -out "$1.csr" -subj "/CN=vault.fixture.test" 2>/dev/null
+                printf "subjectAltName=%s\nbasicConstraints=CA:FALSE\n" "$2" > "$1.ext"
+                openssl x509 -req -in "$1.csr" -CA san-ca.crt -CAkey san-ca.key \
+                  -CAcreateserial -out "$1.crt" -days 2 -sha256 -extfile "$1.ext" 2>/dev/null
+              }
+              mk san-good      "DNS:vault.fixture.test,IP:127.0.0.1"
+              mk san-noloop    "DNS:vault.fixture.test,IP:10.0.0.5"
+              mk san-nodns     "IP:127.0.0.1"
+              mk san-wrongtype "DNS:10.0.0.5,IP:127.0.0.1"
+              mk san-upper     "DNS:VAULT.FIXTURE.TEST,IP:127.0.0.1"
+            creates: "{{ fx }}/san-good.crt"
+          changed_when: true
+
         - name: A symlinked source (certmonger shape)
           ansible.builtin.file:
             src: "{{ fx }}/good.crt"
             dest: "{{ fx }}/link.crt"
             state: link
             force: true
+
+    ###########################################################################
+    # san (#85) - the certificate must carry the SANs the role's OWN callers
+    # need. Measured on a live host: with no 127.0.0.1 IP SAN, a loopback
+    # caller gets "x509: certificate is valid for 10.110.11.55, not 127.0.0.1"
+    # while the SAME cert works fine via the FQDN -- so the certificate is not
+    # invalid, it is merely unusable by tasks/service.yml and the unseal unit.
+    # That failure lands at service start, after the host is fully mutated.
+    ###########################################################################
+    - name: "S1 PASSES - FQDN DNS SAN and loopback IP SAN both present"
+      ansible.builtin.include_role:
+        name: ansible-role-vault
+        tasks_from: preflight/san.yml
+      vars:
+        vault_manage_tls: false
+        vault_tls_cert_file: "{{ fx }}/san-good.crt"
+        vault_api_addr: "https://vault.fixture.test:8200"
+
+    - name: "S2 FIRES - no 127.0.0.1 IP SAN"
+      block:
+        - ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/san.yml
+          vars:
+            vault_manage_tls: false
+            vault_tls_cert_file: "{{ fx }}/san-noloop.crt"
+            vault_api_addr: "https://vault.fixture.test:8200"
+        - ansible.builtin.fail: {msg: "S2 did not fire"}
+      rescue:
+        - ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg | default('') is search('127.0.0.1')
+            success_msg: "S2: missing loopback IP SAN caught before mutation"
+
+    - name: "S3 FIRES - advertised hostname has no matching DNS SAN"
+      block:
+        - ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/san.yml
+          vars:
+            vault_manage_tls: false
+            vault_tls_cert_file: "{{ fx }}/san-nodns.crt"
+            vault_api_addr: "https://vault.fixture.test:8200"
+        - ansible.builtin.fail: {msg: "S3 did not fire"}
+      rescue:
+        - ansible.builtin.assert:
+            that:
+              # Literal gate text, not the hostname: the name is interpolated
+              # from a variable, so searching for it could match incidental
+              # output and pass for the wrong reason (caught by
+              # assert-rescue-patterns-are-emittable.sh).
+              - ansible_failed_result.msg | default('') is search('absent from the certificate')
+            success_msg: "S3: advertised name absent from the cert"
+
+    - name: "S4 FIRES - address advertised but encoded as a DNS SAN, not an IP SAN"
+      block:
+        - ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/san.yml
+          vars:
+            vault_manage_tls: false
+            vault_tls_cert_file: "{{ fx }}/san-wrongtype.crt"
+            vault_api_addr: "https://10.0.0.5:8200"
+        - ansible.builtin.fail: {msg: "S4 did not fire"}
+      rescue:
+        - ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg | default('') is search('IP SAN')
+            success_msg: "S4: DNS:10.0.0.5 does not validate https://10.0.0.5"
+
+    - name: "S5 PASSES - DNS names are case-insensitive per RFC 4343"
+      ansible.builtin.include_role:
+        name: ansible-role-vault
+        tasks_from: preflight/san.yml
+      vars:
+        vault_manage_tls: false
+        vault_tls_cert_file: "{{ fx }}/san-upper.crt"
+        vault_api_addr: "https://vault.fixture.test:8200"
 
     ###########################################################################
     # fips (#66) - the probe must ASSERT, never crash, and must distinguish

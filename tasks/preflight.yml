@@ -125,6 +125,16 @@
     - vault
     - preflight
 
+- name: Include preflight gate - san
+  ansible.builtin.include_tasks:
+    file: preflight/san.yml
+    apply:
+      tags:
+        - preflight
+  tags:
+    - vault
+    - preflight
+
 - name: Include preflight gate - port
   ansible.builtin.include_tasks:
     file: preflight/port.yml

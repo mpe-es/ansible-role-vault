@@ -30,7 +30,7 @@ orch = os.path.join(root, "tasks", "preflight.yml")
 # TLS question answered in one place whichever mode they are in (#80).
 EXPECTED = [
     "os_family", "os_version", "fips", "selinux", "chrony", "firewalld",
-    "rhsm", "repo_source", "tls", "managed_tls", "port", "dns",
+    "rhsm", "repo_source", "tls", "managed_tls", "san", "port", "dns",
 ]
 # A dynamic include does not propagate its own tags. With only apply: the
 # include is skipped entirely under --tags; with only tags: the file is
@@ -113,6 +113,14 @@ WANT_PREDICATES = {
     # own comment above forbids exactly that. `stat.readable` in particular was
     # deletable with every test and every guard green while README,
     # argument_specs and CHANGELOG all promised the source "must be readable".
+    # san sits immediately after managed_tls so the whole TLS question -- does
+    # the material exist, and does it carry the SANs this role's callers need --
+    # is answered in one place whichever mode is in use. Both halves pinned:
+    # the loopback SAN is what tasks/service.yml and the unseal unit depend on,
+    # and `stdout is defined` is what keeps the assert from raising on a host
+    # where the read never happened.
+    "san": ["__vault_san_raw.stdout is defined",
+            "'127.0.0.1' in __vault_san_ip"],
     "managed_tls": ["item.stat is defined",
                     "item.stat.exists | default(false)",
                     "item.stat.isreg | default(false)",

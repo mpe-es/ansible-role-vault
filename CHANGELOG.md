@@ -8,6 +8,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+
+- **Preflight gate for the certificate SAN contract.** Preflight verified that the
+  TLS trio *exists* and never looked inside it, so a certificate missing the
+  `127.0.0.1` IP SAN passed all twelve gates, the role converged the host in full
+  — package installed, config written, STIG hardening applied, firewall opened —
+  and only then did init and unseal fail at service start. Same
+  late-failure-after-mutation class Phase 1 exists to eliminate, on the **default**
+  TLS path. Measured on live hardware rather than inferred: a certificate carrying
+  `DNS:<fqdn>` and the node's own IP but no loopback SAN yields `x509: certificate
+  is valid for 10.110.11.55, not 127.0.0.1` from the loopback callers, while the
+  **same certificate works via the FQDN** — it is not invalid, merely unusable by
+  this role. The gate checks the two things the role itself depends on: the
+  loopback IP SAN, and the `vault_api_addr` host encoded to match its **type**
+  (a `DNS:` SAN does not validate `https://10.0.0.5`). It inspects on the
+  **controller** for the managed path and the **target** for the staged path,
+  since that is where each certificate lives; a relative `vault_tls_src_cert` and
+  `vault_tls_source: vault_pki` are **reported as uninspectable, never rejected**,
+  following the precedent set by #80. DNS comparison is case-insensitive and
+  trailing-dot tolerant per RFC 4343. Scope is deliberately narrow — expiry, key
+  size, chain trust and EKU are out of scope, so a pass is never mistaken for
+  "this certificate is good". Five behavioural cases in the container-free
+  harness. (#85)
 - **Preflight gate for the role-managed TLS path.** `vault_manage_tls: true` had
   no preflight coverage at all: `vault_tls_src_cert`/`_key`/`_ca` and
   `vault_pki_mount`/`_role` all default to `""` and pass argspec validation, so an
