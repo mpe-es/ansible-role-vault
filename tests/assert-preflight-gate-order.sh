@@ -90,7 +90,12 @@ for gate in EXPECTED:
 # "assert something" fallback, because a gate with no pinned predicate is a gate
 # whose semantics nothing checks.
 WANT_PREDICATES = {
-    "fips": ["(__vault_fips_status.content | b64decode | trim) == '1'"],
+    # Both halves pinned (#66). `content is defined` is what keeps the gate from
+    # raising on a host where the read never happened, and the defaulted decode
+    # is what keeps it from raising when content is absent. Dropping either
+    # restores the crash-at-the-probe behaviour with a green guard.
+    "fips": ["__vault_fips_status.content is defined",
+             "(__vault_fips_status.content | default('') | b64decode | trim) == '1'"],
     "selinux": ["ansible_facts['selinux']['status'] == 'enabled'",
                 "ansible_facts['selinux']['mode'] == 'enforcing'"],
     # Pinned to the EXACT conditions, not merely "asserts something": a semantic

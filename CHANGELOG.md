@@ -195,6 +195,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The FIPS preflight probe crashed instead of asserting when the sysctl was
+  absent or unreadable.** `tasks/preflight/fips.yml` read
+  `/proc/sys/crypto/fips_enabled` with a bare `slurp` and no `failed_when`, so a
+  kernel built without `CONFIG_CRYPTO_FIPS` — or a container with a masked
+  `/proc` — killed the play at the **probe** with
+  `File not found: /proc/sys/crypto/fips_enabled`. The assert below it, and its
+  remediation text, were unreachable on exactly the hosts that needed them: the
+  operator got a module error instead of an instruction. Same defect class #36
+  repaired for chrony, whose branch structure this copies.
+  **The causes are now reported separately, because they are different findings
+  for SC-13:** FIPS off (enable and reboot), sysctl absent (*unobservable*, which
+  is explicitly **not** the same as disabled), sysctl unreadable (a privilege
+  problem — use `become: true`), a readable path that returned nothing, and a
+  value that is neither `1` nor `0` (reported unverified, never assumed off).
+  Discrimination is on `content is defined`, never on `.failed` — `failed_when:
+  false` *defines* `.failed` as `False`, measured again here, and keying on it
+  would be a tautology. Not keyed on size either: procfs reports `st_size` 0 for
+  this file even when it reads as `1`. (#66)
+
 - **Facts are now read through `ansible_facts[...]`, so the role survives the
   removal of `INJECT_FACTS_AS_VARS`.** That setting is what makes `ansible_fqdn`
   exist alongside `ansible_facts['fqdn']`; its default-`True` behaviour is

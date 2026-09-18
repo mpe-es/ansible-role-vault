@@ -33,6 +33,10 @@ vault_plugin_dir: /opt/vault/plugins
 vault_run_dir: /run/vault
 vault_backup_dir: /opt/vault-backup
 vault_binary: /usr/bin/vault
+# Probed by tasks/preflight/fips.yml. A variable so the gate's absent-path and
+# unreadable-path branches can be exercised without a bespoke kernel (#66);
+# internal, not an operator knob.
+__vault_fips_path: /proc/sys/crypto/fips_enabled
 vault_service_file: /usr/lib/systemd/system/vault.service
 
 ###############################################################################
