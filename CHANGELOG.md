@@ -180,6 +180,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Install `iproute` on minimal images. (#36)
 
 ### Fixed
+
+- **The common parent `/opt/vault` was never asserted on, so a STIG-hardened host
+  could not start Vault.** The role created and enforced `vault_data_dir`,
+  `vault_tls_dir`, `vault_log_dir`, `vault_config_dir` and `vault_backup_dir` — but
+  nothing owned the directory that *holds* the first two. STIG mandates `umask 077`,
+  and on the default path (`vault_manage_tls: false`) `tasks/preflight/tls.yml`
+  instructs the operator to stage TLS material at `vault_tls_dir`; their
+  `mkdir -p /opt/vault/tls` therefore creates `/opt/vault` as `0700 root:root`. Both
+  children then converged correctly and the service account still could not
+  **traverse** to reach them, dying on `stat /opt/vault/data/vault.db: permission
+  denied`. All twelve preflight gates passed and 78 tasks converged first, so the
+  host was fully mutated — package installed, config written, STIG hardening
+  applied, firewall opened — before it failed. Now managed as `vault_root_dir`
+  (`root:vault`, `vault_root_dir_mode` `0750`), ordered **before** its children so
+  the parent is posture-correct before anything is created inside it. Fresh installs
+  were never affected: `ansible.builtin.file` propagates owner *and* mode to
+  implicitly created parents, so this required `/opt/vault` to pre-exist
+  restrictively — which following the role's own staging instruction on a STIG host
+  reliably produces. Found on live hardware (Rocky 9.8, FIPS, SELinux enforcing);
+  containers never reproduced it because nothing pre-created the path. Locked by
+  `tests/assert-vault-root-dir-managed.sh`, which derives the parent/child
+  relationship from the real variables rather than a literal, so repointing a child
+  fails the guard instead of passing vacuously.
+
+- **`restorecon` ran without `-F`, so the declared `seuser` was never enforced —
+  and the task reported success.** `vars/main.yml` states the intent outright
+  ("RPM sets `/opt/vault/*` to `unconfined_u:object_r:usr_t` — we enforce
+  `system_u`"). It did not. `restorecon` without `-F` repairs only the **type**,
+  never the SELinux **user**; the type already matched, so it found nothing to do,
+  printed nothing and exited 0 — and `changed_when: stdout | length > 0` read that
+  as a clean no-op. Measured on a live host: `/opt/vault` and everything beneath it
+  sat at `unconfined_u` through a full converge, while `/etc/vault.d` masked the gap
+  because *its* type differed (`etc_t`), forcing a relabel that carried the user
+  along. The command now passes `-RFv`. This is the "derive from the authority, not
+  the projection" class: the task measured type convergence while claiming seuser
+  convergence, and its success oracle could not fail. Locked by
+  `tests/assert-restorecon-forces-seuser.sh`; both new guards are mutation-proven by
+  `tests/assert-parent-dir-and-seuser-mutations.sh` (13 kills, 5 accepted refactors).
 - **Operator-staged TLS material was never made readable by the Vault service.**
   `vault_manage_tls: false` is the role default and a documented path — preflight
   instructs the operator to stage the certificate, key and CA — but the only code

@@ -575,6 +575,7 @@ it needs and OWNS nothing that defines its posture. The role sets:
 | `vault.hcl` | `root:vault` | `0640` | process reads config via the group; cannot rewrite it |
 | `vault.env` | `root:root` | `0600` | only systemd (root) reads it via `EnvironmentFile`; holds the HSM PIN (#41) — the process needs no access |
 | TLS cert / key / CA | `root:vault` | `0640` | process reads the key via the group; cannot swap its trust anchors — for operator-staged material (`vault_manage_tls: false`) the bounds in [Operator-staged TLS material](#operator-staged-tls-material) apply |
+| `/opt/vault` (dir) | `root:vault` | `0750` | the PARENT of `data/` and `tls/`. Group `r-x` is what makes it **traversable**: without it the process gets `EACCES` on everything beneath, however correct the children are. STIG mandates `umask 077`, so an operator staging TLS where preflight instructs creates this `0700 root:root` |
 | `/opt/vault/tls` (dir) | `root:vault` | `0750` | root-owned dir blocks the process from unlink/replacing cert files (dir write ≠ file ownership) |
 | `vault.hcl`/`vault.env` dir `/etc/vault.d` | `root:vault` | `0750` | (already; #30/#34) |
 | helper scripts | `root:root` | `0750` | (already; #30) — the process cannot edit what root executes |

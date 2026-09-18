@@ -79,6 +79,28 @@
 
     - name: Create mock TLS material
       block:
+        # The PARENT, staged 0700 root:root ON PURPOSE. This is what an
+        # operator on a STIG-hardened host actually produces: STIG mandates
+        # `umask 077`, so their `mkdir -p /opt/vault/tls` -- which
+        # tasks/preflight/tls.yml explicitly instructs them to run -- creates
+        # /opt/vault with no group or other bits at all.
+        #
+        # This fixture previously created /opt/vault/tls directly, and
+        # ansible.builtin.file propagates owner AND mode to parents it creates
+        # implicitly. So the parent came out correct BY ACCIDENT and the
+        # scenario could never observe the defect, which is why it took a live
+        # host to find: vault cannot TRAVERSE 0700 root:root, so it gets EACCES
+        # on its own Raft db however correct data/ and tls/ are. Same fixture
+        # class as the staged-cert issue below -- a fixture that mocks a
+        # well-behaved operator proves nothing.
+        - name: Create vault root directory staged restrictively
+          ansible.builtin.file:
+            path: /opt/vault
+            state: directory
+            owner: root
+            group: root
+            mode: '0700'
+
         - name: Create TLS directory
           ansible.builtin.file:
             path: /opt/vault/tls

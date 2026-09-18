@@ -26,6 +26,14 @@
       owner: root
       group: "{{ vault_group }}"
       mode: "{{ vault_config_dir_mode }}"
+    # The PARENT, before anything beneath it. The children were always correct;
+    # the container holding them was never asserted on, so a pre-existing
+    # 0700 root:root (what `mkdir -p` produces under STIG's umask 077) left
+    # vault unable to traverse to its own Raft db while every gate passed.
+    - path: "{{ vault_root_dir }}"
+      owner: root
+      group: "{{ vault_group }}"
+      mode: "{{ vault_root_dir_mode }}"
     - path: "{{ vault_data_dir }}"
       owner: "{{ vault_user }}"
       group: "{{ vault_group }}"
@@ -234,7 +242,13 @@
 
 - name: Apply SELinux file contexts
   ansible.builtin.command:
-    cmd: "restorecon -Rv {{ item.path | regex_replace('\\(.*\\)\\?$', '') }}"
+    # -F is load-bearing. Without it restorecon repairs only the TYPE and
+    # never resets the SELinux USER, so the system_u declared in
+    # vault_selinux_contexts is silently never applied wherever the type
+    # already matches -- and this task still exits 0 with empty stdout, which
+    # changed_when reads as a clean no-op. Measured on a live host: /opt/vault
+    # stayed unconfined_u through a full converge until -F was added.
+    cmd: "restorecon -RFv {{ item.path | regex_replace('\\(.*\\)\\?$', '') }}"
   loop: "{{ vault_selinux_contexts }}"
   loop_control:
     label: "{{ item.path }}"
