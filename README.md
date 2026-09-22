@@ -172,6 +172,14 @@ no manual step is required.
   3.12+**; the role works on either, but the controller's Python and core
   version move together. The MANAGED HOST's Python is a separate matter — the
   role runs against EL8/9/10 platform Python (3.9 on RHEL/Rocky 9).
+- **`min_ansible_version` in `meta/main.yml` is advisory.** ansible-core does not
+  enforce it — verified with a probe role declaring `99.0`, which executed
+  normally — so the floor above is a statement of intent, not a gate. A run below
+  it produces no error, no warning and no failed job.
+- **Under AAP the controller is the execution environment**, so these are
+  properties of the EE rather than of any host. `mpe-ee-rhel9` provides
+  ansible-core 2.21.4 on Python 3.12.13; the stock supported EE provides 2.16.19,
+  which is *below* the floor above. See the AAP section.
 - **Pipelining must be enabled** on any target where fapolicyd is enforcing —
   see immediately below. This is a hard requirement on this role's primary
   target platform, not a performance tuning knob.
@@ -273,15 +281,46 @@ the existing `requirements.txt`, never a fresh path) are documented in
 
 ### Ansible Automation Platform (AAP)
 
-This role runs unmodified on the **default supported Execution Environment** —
-it does not require a custom EE — but the default EE does **not** carry
-everything the role declares. This section is the compliance checklist for an
-AAP deployment.
+The default supported Execution Environment does **not** carry everything this
+role declares. `mpe-es/mpe-ee-rhel9` exists to close that gap; the rest of this
+section is the compliance checklist for anyone not using it.
 
-Everything below was **measured**, not derived from the documentation, against
-`registry.redhat.io/ansible-automation-platform-27/ee-supported-rhel9` on
-2026-09-22. Re-measure when your EE image changes; the commands are given so you
-can.
+Everything below was **measured**, not derived from documentation, against
+`registry.redhat.io/ansible-automation-platform-2{6,7}/ee-supported-rhel9` and a
+built MPE image on 2026-09-22. Re-measure when your EE changes; the commands are
+given so you can.
+
+#### The MPE execution environment
+
+**`mpe-ee-rhel9` satisfies every collection requirement in this role.** Measured
+on a built AAP 2.6 image:
+
+| Requirement | Role declares | MPE EE provides |
+|---|---|---|
+| `ansible-core` | >= 2.17.0 | **2.21.4** |
+| Python (controller) | >= 3.11 | **3.12.13** |
+| `ansible.posix` | >= 1.6.0 | 2.1.0 |
+| `ansible.utils` | >= 6.0.0 | 6.0.3 |
+| `community.general` | >= 9.0.0 | **13.2.0** |
+| `community.hashi_vault` | >= 7.0.0 | **7.1.0** |
+| `openssl` (SAN gate) | any with `-checkhost`/`-checkip` | 3.5.5 |
+| `netaddr` (for `ansible.utils.ipaddr`) | >= 0.10.1 | 1.3.0 |
+
+Two things that follow from it, neither of which the table conveys:
+
+**It does not fix the initialization problem.** The warning above is about
+*where the controller writes*, not *what the controller contains*. The MPE EE is
+still an ephemeral job container, so `vault_initialize: true` still loses the
+root token and every unseal share without an explicit mount.
+
+**The role is not tested on what the EE runs.** CI verifies Python 3.11 /
+ansible-core **2.19.13**; the MPE EE runs 3.12.13 / **2.21.4**. Every "verified"
+claim in this repository — the preflight gates, the SAN contract, the full
+molecule matrix — is measured on a pair the execution path does not use. Closing
+that is tracked in [#87](https://github.com/mpe-es/ansible-role-vault/issues/87)
+(matrix) and [#91](https://github.com/mpe-es/ansible-role-vault/issues/91)
+(floor). Treat a green AAP job and a green CI run as evidence about different
+runtimes until then.
 
 #### STOP — read this before running with `vault_initialize: true` on AAP
 
@@ -310,16 +349,36 @@ The preflight check at `tasks/service.yml:46` does not catch this. It asserts
 `vault_init_capture_dir` is set and absolute; a path inside the EE satisfies
 both.
 
-**Required mitigation — one of:**
+> **Choosing an execution node does not fix this.** Mesh execution nodes run
+> jobs through `ansible-runner` under Podman isolation exactly as container
+> groups do, so `delegate_to: localhost` still writes *inside* the job's
+> execution environment. "A node with real storage" is not custody — the host's
+> disk is not visible to the container unless a path is explicitly exposed.
 
-1. Mount persistent storage into the EE at `vault_init_capture_dir` (a Container
-   Group with a custom pod spec declaring the volume), and confirm the mount is
-   present **before** the first initializing run.
-2. Run initializing plays from a persistent control node or a dedicated
-   Automation Mesh execution node with real storage, not from a default
-   container group.
-3. Leave `vault_initialize: false` in AAP and perform initialization as a
-   separate, deliberate operation with custody arranged in advance.
+**Required mitigation — one of. Each depends on an explicit host-to-container
+mount; verify the mount exists before the first initializing run, not after.**
+
+1. **Container group** — a custom pod spec declaring a volume mounted at
+   `vault_init_capture_dir`.
+2. **Execution node** — expose the host directory through **Paths to expose to
+   isolated jobs** (Settings → Automation Execution → Job, or
+   `AWX_ISOLATION_SHOW_PATHS` at `/api/v2/settings/jobs`):
+
+   ```
+   AWX_ISOLATION_SHOW_PATHS = ['/srv/vault-init-capture']
+   ```
+
+   Note that naming a *file* mounts its containing directory. Without this entry
+   an execution node loses the material exactly as a container group does.
+3. **Neither** — leave `vault_initialize: false` in AAP and perform
+   initialization as a separate, deliberate operation with custody arranged in
+   advance. This is the only option that does not depend on a mount being
+   configured correctly, and is the safest default.
+
+**Verify, do not assume.** After configuring a mount, run one initializing job
+against a throwaway target and confirm the files exist on the host afterwards.
+A missing mount produces a green job and no files — the same silent success this
+whole section is about.
 
 Non-initializing runs (`vault_initialize: false`, the default) are unaffected —
 no secrets are captured and every item below still applies normally.
@@ -338,13 +397,42 @@ constructing a custom EE; on a default EE nothing reads it.
 
 #### Must be added to AAP
 
+**Not required when running `mpe-ee-rhel9`** — it carries items 1–3 already. This
+is the checklist for the stock supported EE.
+
 | # | Item | Why | Scope |
 |---|---|---|---|
 | 1 | **`community.general` >= 9.0.0** | `community.general.sefcontext` (`tasks/system.yml`) sets the SELinux file contexts for every Vault path. On by default (`vault_manage_selinux: true`). The default EE ships **46 collections and none in the `community` namespace**, so this resolves nowhere. | **Required.** Blocks Phase 4 on a default install. |
 | 2 | **`community.hashi_vault` >= 7.0.0** | `vault_pki_generate_certificate` (`tasks/tls.yml`). | **Conditional** — only when `vault_tls_source: vault_pki`. Not needed for the default `file` / operator-staged paths. |
 | 3 | **`hvac` >= 2.0.0 on the managed host** | Required by `community.hashi_vault`, which is **not** delegated and therefore executes on the target, not in the EE. A STIG-hardened EL host has no `pip` and no repo carrying it. | **Conditional**, same trigger as item 2. |
-| 4 | **A Galaxy credential at the Organization level** | AAP runs `ansible-galaxy collection install` from the project's `requirements.yml` during a project update, and needs a `kind=galaxy` credential naming the content source — your private automation hub in a darksite. Without it the install silently resolves nothing. | **Required** if items 1–2 are delivered by project sync rather than pre-seeded. |
-| 5 | **`policycoreutils-python-utils` on the managed host** | `sefcontext` needs the `seobject` Python bindings on the target. Satellite can supply it; this is a target prerequisite, not an EE one. | **Required** whenever `vault_manage_selinux: true`. |
+| 4 | **A `collections/requirements.yml` in the consuming AAP project** | Automation controller discovers collection dependencies for SCM projects **only** at `collections/requirements.yml`. This role ships a top-level `requirements.yml`, which the controller does **not** read — so project sync installs nothing from it and `community.general.sefcontext` is still unresolvable at Phase 4. See below. | **Required** if items 1–2 are delivered by project sync. |
+| 5 | **A Galaxy credential at the Organization level** | With item 4 in place, the controller runs `ansible-galaxy collection install` during project sync and needs a `kind=galaxy` credential naming the content source — your private automation hub in a darksite. Without it the install resolves nothing. A credential **without** item 4 changes nothing at all. | **Required** alongside item 4. |
+| 6 | **`policycoreutils-python-utils` on the managed host** | `sefcontext` needs the `seobject` Python bindings on the target. Satellite can supply it; this is a target prerequisite, not an EE one. | **Required** whenever `vault_manage_selinux: true`. |
+
+##### Where the collection manifest has to live
+
+This is the step most likely to be missed, because the role *looks* like it
+already declares its dependencies.
+
+Automation controller installs project collections from
+**`collections/requirements.yml`** in the SCM project, during the implicit sync
+before a job run. It does not read a top-level `requirements.yml`, and it does
+not read this role's manifest. So the consuming AAP project needs its own
+`collections/requirements.yml`, and something has to keep it aligned with
+`requirements.yml` here — they are two files with one meaning, which is a drift
+source. Prefer baking the collections into the execution environment and
+treating the project manifest as the fallback.
+
+The system-wide toggle is **Settings → Automation Execution → Job → Enable
+Collection(s) Download**; with it unchecked, project collections are not
+installed at all.
+
+> **Project collections override the execution environment, in both directions.**
+> Red Hat: *"if the collection specified in `requirements.yml` is older than the
+> collection within the execution environment, the collection specified in
+> `requirements.yml` is used."* A project manifest pinning an older
+> `community.general` silently downgrades a newer one baked into the EE. If both
+> are in play, they must be kept in lockstep or the project pin wins.
 
 Items 1 and 2 are `community.*` collections. Red Hat's supported EE ships
 **certified** content only, so neither will ever appear there regardless of AAP

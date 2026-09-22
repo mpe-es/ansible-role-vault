@@ -465,11 +465,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   which under AAP is the ephemeral EE job container — Vault comes up initialized
   and unsealed, the job reports success, and nobody holds a root token or a
   single unseal key. The `service.yml:46` gate cannot catch it, because a path
-  inside the EE is both set and absolute. Three mitigations are documented.
-  Beyond that: `community.general` (required — `sefcontext` is on by default and
+  inside the EE is both set and absolute. Three mitigations are documented, each
+  turning on an explicit host-to-container mount: a container-group pod spec, an
+  execution node with the directory listed under **Paths to expose to isolated
+  jobs** (`AWX_ISOLATION_SHOW_PATHS`), or not initializing from AAP at all.
+  **Choosing an execution node is not by itself a mitigation** — mesh nodes run
+  jobs through `ansible-runner` under Podman isolation exactly as container
+  groups do, so the host's disk is invisible to the job unless a path is exposed.
+  The section now leads with **`mpe-es/mpe-ee-rhel9`**, the MPE execution
+  environment, which satisfies every collection requirement this role declares —
+  measured on a built image: ansible-core 2.21.4 on Python 3.12.13,
+  `community.general` 13.2.0, `community.hashi_vault` 7.1.0, `ansible.posix`
+  2.1.0, `ansible.utils` 6.0.3, `openssl` 3.5.5, `netaddr` 1.3.0. Two things that
+  does **not** change, both stated explicitly: it is still an ephemeral job
+  container, so the initialization warning above applies unchanged; and CI still
+  verifies Python 3.11 / ansible-core 2.19.13 while that EE runs 3.12.13 /
+  2.21.4, so a green CI run and a green AAP job are evidence about different
+  runtimes (#87, #91). The remaining checklist is scoped to the stock supported
+  EE: `community.general` (required — `sefcontext` is on by default and
   the EE ships 46 collections with **none** in the `community` namespace) and,
   conditionally, `community.hashi_vault` plus `hvac` on the managed host; a
-  Galaxy credential for hub-sourced installs; and
+  a `collections/requirements.yml` **in the consuming AAP project**, since
+  automation controller discovers project collections only at that path and does
+  not read this role's top-level `requirements.yml`; a Galaxy credential
+  alongside it, which changes nothing on its own; and
   `policycoreutils-python-utils` on the target. `ansible.posix` 2.2.2,
   `ansible.utils` 6.1.0, `netaddr` 1.3.0 and `openssl` 3.5.5 are already present
   and need nothing. The section also records that the default EE runs **Python
