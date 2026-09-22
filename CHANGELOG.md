@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Vault Enterprise license deployment.** `vault_edition` accepted Enterprise
+  builds and `tasks/install.yml` installed the RPM, but the role had no license
+  handling at all — no `vault.hclic`, no `license_path`, and no acknowledgement
+  anywhere that Vault Enterprise **cannot start unlicensed**. Selecting an
+  Enterprise edition produced a service that failed at Phase 9 with nothing in
+  the role explaining why. New `vault_license_content` takes the licence as
+  **plain text** (confirmed against a real `.hclic`), rendered to
+  `{{ vault_config_dir }}/vault.hclic` as `root:vault 0640` with `no_log` and
+  `diff: false` — the ownership model #77 established for TLS material, where
+  vault reads through the group and does not own its own trust material.
+  `license_path` is added inside the **existing**
+  `vault_edition is match('vault-enterprise')` branch in `vault.hcl.j2`, which
+  already covered every Enterprise variant by prefix, so no new conditional.
+  `tests/assert-root-owned-posture.sh` gains the file and its tripwire moves
+  8 → 9, because `'vault_config_file' in dest` is false for `vault.hclic` and
+  the licence would otherwise have sat outside the one lock that keeps
+  secret-bearing deploys root-owned. **There is deliberately no preflight gate
+  for a missing licence** (operator ruling): the service-start failure is loud,
+  immediate and attributable, and a gate would add a code path and a test axis
+  to prevent a failure that already reports itself. Note the config now
+  references `license_path` unconditionally for Enterprise; `VAULT_LICENSE` and
+  `VAULT_LICENSE_PATH` still take precedence, so existing env-var deployments
+  are unaffected. (#42)
+
+
 - **A dev-dependency manifest, and a `CONTRIBUTING.md` that no longer misdirects
   every new contributor.** The setup section instructed contributors to install
   the development toolchain with `pip install -r requirements.txt`

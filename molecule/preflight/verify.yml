@@ -1455,3 +1455,88 @@
         that:
           - not (__ent_report.skipped | default(false))
         fail_msg: "the +ent report did not fire for an Enterprise pin"
+
+    ###########################################################################
+    # Enterprise license - config reference
+    ###########################################################################
+    # The template needs ~22 variables for a non-HSM render and ~31 with the
+    # seal, none of which are in verify.yml's scope. include_role with
+    # public: true makes the role's defaults AND vars live for the rest of the
+    # play, so the lookup resolves and vault_config_dir is the ROLE's value --
+    # not a fixture copy that would make the path assertion prove nothing.
+    - name: Expose role scope for the Enterprise render
+      ansible.builtin.include_role:
+        name: ansible-role-vault
+        tasks_from: preflight/edition.yml
+        public: true
+      vars:
+        vault_hsm_enabled: false
+
+    - name: Render vault.hcl for an Enterprise edition
+      ansible.builtin.set_fact:
+        __rendered_ent: "{{ lookup('template', playbook_dir + '/../../templates/vault.hcl.j2') }}"
+      vars:
+        vault_edition: vault-enterprise-fips1403
+
+    - name: "RENDERS - Enterprise config references the license path"
+      ansible.builtin.assert:
+        that:
+          # NOT `is search(...)`: assert-rescue-patterns-are-emittable.sh:142
+          # collects those literals in molecule/preflight/verify.yml and scopes
+          # them to the preceding tasks_from:, which these renders inherit.
+          # `in` is not matched by that regex and reads the same.
+          - "'license_path' in __rendered_ent"
+          - "(vault_config_dir ~ '/vault.hclic') in __rendered_ent"
+        fail_msg: "license_path missing from the Enterprise render"
+
+    - name: Render vault.hcl for the Community edition
+      ansible.builtin.set_fact:
+        __rendered_oss: "{{ lookup('template', playbook_dir + '/../../templates/vault.hcl.j2') }}"
+      vars:
+        vault_edition: vault
+
+    - name: "RENDERS - Community config carries no license path"
+      ansible.builtin.assert:
+        that:
+          - "'license_path' not in __rendered_oss"
+        fail_msg: "license_path leaked into the Community render"
+
+    ###########################################################################
+    # The PKCS#11 seal - the combination the edition gate permits
+    ###########################################################################
+    # The template gates the seal on vault_hsm_enabled ALONE and is NOT changed
+    # by this arc. The edition contract is enforced at TWO surfaces instead:
+    # tasks/preflight/edition.yml at Phase 1, and the same file included from
+    # tasks/configure.yml before the render -- which is the only one a
+    # --tags configure or --skip-tags preflight run reaches. These cases pin
+    # the supported behaviour so a future template edit cannot drop the seal
+    # silently.
+    - name: Render vault.hcl for the HSM edition with the seal enabled
+      ansible.builtin.set_fact:
+        __rendered_hsm: "{{ lookup('template', playbook_dir + '/../../templates/vault.hcl.j2') }}"
+      vars:
+        vault_edition: vault-enterprise-hsm-fips1403
+        vault_hsm_enabled: true
+
+    - name: "RENDERS - the HSM edition emits the pkcs11 seal stanza"
+      ansible.builtin.assert:
+        that:
+          - "'seal \"pkcs11\"' in __rendered_hsm"
+          - "'license_path' in __rendered_hsm"
+        fail_msg: "pkcs11 seal or license_path missing from the HSM render"
+
+    - name: Render vault.hcl with the seal disabled
+      ansible.builtin.set_fact:
+        __rendered_noseal: "{{ lookup('template', playbook_dir + '/../../templates/vault.hcl.j2') }}"
+      vars:
+        vault_edition: vault-enterprise-hsm-fips1403
+        vault_hsm_enabled: false
+
+    - name: "RENDERS - no seal stanza when HSM is disabled"
+      # Weak on its own -- the role default is already false, so this would pass
+      # even if the task var never applied. It is non-vacuous only paired with
+      # the true-case above.
+      ansible.builtin.assert:
+        that:
+          - "'seal \"pkcs11\"' not in __rendered_noseal"
+        fail_msg: "pkcs11 seal rendered with vault_hsm_enabled false"

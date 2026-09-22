@@ -74,6 +74,20 @@
   ansible.builtin.include_tasks:
     file: preflight/edition.yml
 
+- name: Deploy Vault Enterprise license
+  ansible.builtin.copy:
+    content: "{{ vault_license_content }}"
+    dest: "{{ vault_config_dir }}/vault.hclic"
+    # root:vault 0640 -- vault reads the license through the group but must not
+    # OWN it, the same ownership model as the TLS material (#38, #77).
+    owner: root
+    group: "{{ vault_group }}"
+    mode: '0640'
+  no_log: true
+  diff: false
+  notify: Restart vault
+  when: vault_license_content | length > 0
+
 - name: Deploy Vault server configuration
   ansible.builtin.template:
     src: vault.hcl.j2

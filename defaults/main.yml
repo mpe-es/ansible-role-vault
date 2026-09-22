@@ -247,6 +247,19 @@ vault_rsyslog_port: 514
 vault_edition: "vault"
 
 ###############################################################################
+# Vault Enterprise License
+# NIST 800-53: SC-12 (Cryptographic Key Establishment and Management)
+###############################################################################
+# Plain text -- the contents of a .hclic file. Supply from an AAP credential or
+# Ansible Vault; NEVER commit it. Rendered to {{ vault_config_dir }}/vault.hclic
+# as root:vault 0640 and referenced by license_path in vault.hcl.
+#
+# Empty deploys no license. An Enterprise edition without one fails at service
+# start -- loud, immediate and attributable -- so that case is deliberately NOT
+# gated in preflight (operator ruling, 2026-09-22).
+vault_license_content: ""
+
+###############################################################################
 # TLS Maximum Version
 # NIST 800-53: SC-8 (Transmission Confidentiality and Integrity)
 ###############################################################################

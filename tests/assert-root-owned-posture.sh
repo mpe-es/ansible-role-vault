@@ -15,7 +15,8 @@ python3 - "$ROOT" <<'PY'
 import sys, os, yaml
 root = sys.argv[1]
 POSTURE = ('vault_config_file', 'vault_env_file',
-           'vault_tls_cert_file', 'vault_tls_key_file', 'vault_tls_ca_file')
+           'vault_tls_cert_file', 'vault_tls_key_file', 'vault_tls_ca_file',
+           'vault.hclic')
 fail = []
 
 
@@ -43,11 +44,12 @@ for rel in ('tasks/configure.yml', 'tasks/tls.yml'):
             checked += 1
             if mod.get('owner') != 'root':
                 fail.append(f"{rel}: dest {dest} owner={mod.get('owner')!r} != root")
-# 2 config (hcl+env) + 6 TLS (cert/key/ca x file-branch + pki-branch) = 8.
+# 2 config (hcl+env) + 6 TLS (cert/key/ca x file-branch + pki-branch)
+# + 1 licence (vault.hclic, #42) = 9.
 # This count is a deliberate tripwire: a legitimate topology change (dropping
 # vault_pki, adding a posture file) will fail here — bump the constant ONLY after
 # confirming the new/removed deploy is intentional and correctly root-owned.
-if checked != 8:
+if checked != 9:
     fail.append(f"posture-file deploy count = {checked}, expected 8 (block missed/renamed?)")
 
 # 2. The vault_tls_dir loop entry in system.yml must be owner: root.

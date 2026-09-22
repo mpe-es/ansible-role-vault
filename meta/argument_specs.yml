@@ -436,6 +436,32 @@ argument_specs:
           - vault-enterprise-fips1403
           - vault-enterprise-hsm-fips1403
 
+      vault_license_content:
+        description:
+          - >-
+            Vault Enterprise license, as the plain text contents of a .hclic
+            file. Rendered to <vault_config_dir>/vault.hclic as root:vault 0640
+            and referenced by license_path in vault.hcl.
+          - >-
+            Supply from an AAP credential or Ansible Vault. Never commit it.
+            The deploy task sets no_log and diff false.
+          - >-
+            Empty deploys no license. An Enterprise edition without one fails at
+            service start; that failure is loud and attributable, so it is
+            deliberately NOT gated in preflight.
+        type: str
+        default: ""
+        # Matches vault_hsm_pin below.
+        #
+        # Honest scope: an attempt to observe the value leaking through the
+        # implicit validate_argument_spec task on ansible-core 2.19.6 -- supplied
+        # both as a role param and a play var, at -vvv, -vvvv and
+        # ANSIBLE_DEBUG=1, with and without no_log -- did NOT reproduce a leak.
+        # Kept anyway: it costs nothing, it matches the established precedent for
+        # this role's other secret-bearing option, and "I could not reproduce a
+        # leak on one core version" is not "no surface exists".
+        no_log: true
+
       ################################################################
       # TLS Maximum Version
       ################################################################
