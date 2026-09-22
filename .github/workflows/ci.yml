@@ -27,28 +27,29 @@ on:
 permissions:
   contents: read
 
-# Pinned deliberately (#78). ansible-core was installed unpinned at five sites,
-# which the #36 close-out already identified as the cause of local/CI divergence
-# -- a "verified" claim measured on one version while CI resolved another. The
-# INJECT_FACTS_AS_VARS removal was the second bill for it: a core release would
-# have turned this repository red on a scheduled run with no commit to blame.
+# Pinned deliberately (#78), single-sourced in #65.
 #
-# THE TWO VALUES BELOW ARE COUPLED. ansible-core 2.20+ requires Python >= 3.12,
-# so bumping ANSIBLE_CORE_VERSION past 2.19.x without also raising
-# PYTHON_VERSION fails at install time with "No matching distribution found" --
-# which is exactly how the first attempt at this pin broke, because it was set
-# to the version a developer happened to run locally (2.21.4 on Python 3.14)
-# without checking what CI installs.
+# ansible-core was installed unpinned at five sites, which the #36 close-out
+# identified as the cause of local/CI divergence -- a "verified" claim measured
+# on one version while CI resolved another. The INJECT_FACTS_AS_VARS removal was
+# the second bill for it: a core release would have turned this repository red
+# on a scheduled run with no commit to blame.
 #
-# 2.19.13 is the newest ansible-core available for Python 3.11, and is what CI
-# was already resolving unpinned. Pinning does not by itself make local and CI
-# agree -- a developer on Python 3.12+ will still run a newer core. What it buys
-# is that CI's version is now KNOWN and changes only by a reviewed commit, which
-# is the actual defect #36 identified: not the specific version, but that it
-# drifted silently and made "verified" claims unreliable.
+# THE CORE PIN NO LONGER LIVES HERE. It lives in requirements-dev.in, compiled
+# to requirements-dev.txt with hashes, which CI and contributors both install
+# from -- so there is exactly ONE place to change it. An ANSIBLE_CORE_VERSION
+# env var here as well would recreate the dual-source defect #65 found between
+# this file and .pre-commit-config.yaml, where the commit-gating hook linted
+# against 2.17.8 while CI verified against 2.19.13.
+#
+# PYTHON_VERSION REMAINS COUPLED TO THAT PIN. ansible-core 2.20+ requires
+# Python >= 3.12, so the pinned 2.19.13 is the CEILING for Python 3.11. Raising
+# one without the other fails at install time with "No matching distribution
+# found" -- exactly how the first attempt at the #78 pin broke, because it was
+# set to the version a developer happened to run locally (2.21.4 on Python 3.14)
+# without checking what CI installs. Moving both deliberately is tracked in #91.
 env:
   PYTHON_VERSION: "3.11"
-  ANSIBLE_CORE_VERSION: "2.19.13"
 
 # RUNNERS. These jobs ran on the org's private [self-hosted, rocky10] fleet
 # briefly and every job queued forever with runner=UNASSIGNED, while the fleet
@@ -91,7 +92,9 @@ jobs:
       - name: Install linting dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install yamllint ansible-core==${{ env.ANSIBLE_CORE_VERSION }} ansible-lint
+          # One hash-pinned manifest, shared with contributors (#65). The lint
+          # job needs no runtime deps, so requirements.txt is not installed here.
+          pip install -r requirements-dev.txt
 
       - name: Install required Ansible collections
         run: ansible-galaxy collection install -r requirements.yml
@@ -154,7 +157,7 @@ jobs:
       - name: Install Ansible and dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install ansible-core==${{ env.ANSIBLE_CORE_VERSION }}
+          pip install -r requirements-dev.txt
           pip install -r requirements.txt
 
       - name: Install required Ansible collections
@@ -235,12 +238,7 @@ jobs:
       - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install \
-            ansible-core==${{ env.ANSIBLE_CORE_VERSION }} \
-            molecule \
-            molecule-plugins[podman] \
-            ansible-lint \
-            yamllint
+          pip install -r requirements-dev.txt
           pip install -r requirements.txt
 
       - name: Install required Ansible collections
@@ -347,12 +345,7 @@ jobs:
       - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install \
-            ansible-core==${{ env.ANSIBLE_CORE_VERSION }} \
-            molecule \
-            molecule-plugins[podman] \
-            ansible-lint \
-            yamllint
+          pip install -r requirements-dev.txt
           pip install -r requirements.txt
 
       - name: Install required Ansible collections
@@ -440,12 +433,7 @@ jobs:
       - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install \
-            ansible-core==${{ env.ANSIBLE_CORE_VERSION }} \
-            molecule \
-            molecule-plugins[podman] \
-            ansible-lint \
-            yamllint
+          pip install -r requirements-dev.txt
           pip install -r requirements.txt
 
       - name: Install required Ansible collections
