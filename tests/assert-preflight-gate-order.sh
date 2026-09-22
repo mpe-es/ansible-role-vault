@@ -29,7 +29,7 @@ orch = os.path.join(root, "tasks", "preflight.yml")
 # inverted-polarity pair readable, and an operator reading the output sees the
 # TLS question answered in one place whichever mode they are in (#80).
 EXPECTED = [
-    "os_family", "os_version", "fips", "selinux", "chrony", "firewalld",
+    "os_family", "os_version", "fips", "edition", "selinux", "chrony", "firewalld",
     "rhsm", "repo_source", "tls", "managed_tls", "san", "port", "dns",
 ]
 # A dynamic include does not propagate its own tags. With only apply: the

@@ -4,7 +4,7 @@
 # Role: ansible-role-vault
 # Summary: Default variables for HashiCorp Vault installation and STIG
 #   compliance. Override these in playbooks or inventory to customize behavior.
-# Last Updated: 13 Aug 2026
+# Last Updated: 22 Sep 2026
 # Classification: UNCLASSIFIED
 ###############################################################################
 
@@ -47,9 +47,15 @@ vault_repo_gpgcheck: true
 # Vault Package Configuration
 ###############################################################################
 # Vault package version to install. Use 'latest' for newest available or
-# pin to a specific version (e.g., '1.18.3-1') for reproducibility.
+# pin to a specific version (e.g., '2.1.1') for reproducibility.
+# PINNED BY DEFAULT. 'latest' means NEWEST AT FIRST INSTALL, not kept current:
+# combined with vault_package_state 'present' below, dnf installs the newest
+# available when Vault is absent and does not upgrade it afterwards, so hosts
+# built at different times run different versions and none of them ever move.
+# For Enterprise editions the role appends the '+ent' NEVRA suffix itself, so
+# the same value works on any edition.
 # In airgap environments, this must match what is available in the local repo.
-vault_package_version: "latest"
+vault_package_version: "2.1.1"
 
 # Vault package state for ansible.builtin.dnf
 # Options: 'present' (install if missing), 'latest' (upgrade to newest)
@@ -230,10 +236,30 @@ vault_rsyslog_port: 514
 ###############################################################################
 # Vault Edition
 # Controls the RPM package name installed.
-# 'vault' = Community (OSS), 'vault-enterprise' = Enterprise,
-# 'vault-enterprise-fips1403' = Enterprise with FIPS 140-3 crypto
+# Three choices, deliberately narrower than the seven the repository carries:
+#   vault                          Community (OSS) -- development and test
+#   vault-enterprise-fips1403      Enterprise, FIPS 140-3
+#   vault-enterprise-hsm-fips1403  Enterprise + HSM, opt-in
+# General Enterprise and both FIPS 140-2 builds are EXCLUDED: preflight requires
+# FIPS mode and cites FIPS 140-3, so offering them would contradict the gate.
+# vault_hsm_enabled requires the -hsm build (tasks/preflight/edition.yml).
 ###############################################################################
 vault_edition: "vault"
+
+###############################################################################
+# Vault Enterprise License
+# NIST 800-53: SC-28 (Protection of Information at Rest), IA-5 (Authenticator
+#   Management). NOT SC-12 -- a .hclic is a signed entitlement blob, not key
+#   material, and citing a control this does not implement is an audit finding.
+###############################################################################
+# Plain text -- the contents of a .hclic file. Supply from an AAP credential or
+# Ansible Vault; NEVER commit it. Rendered to {{ vault_config_dir }}/vault.hclic
+# as root:vault 0640 and referenced by license_path in vault.hcl.
+#
+# Empty deploys no license. An Enterprise edition without one fails at service
+# start -- loud, immediate and attributable -- so that case is deliberately NOT
+# gated in preflight (operator ruling, 2026-09-22).
+vault_license_content: ""
 
 ###############################################################################
 # TLS Maximum Version

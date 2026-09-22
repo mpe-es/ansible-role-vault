@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Vault Enterprise license deployment.** `vault_edition` accepted Enterprise
+  builds and `tasks/install.yml` installed the RPM, but the role had no license
+  handling at all — no `vault.hclic`, no `license_path`, and no acknowledgement
+  anywhere that Vault Enterprise **cannot start unlicensed**. Selecting an
+  Enterprise edition produced a service that failed at Phase 9 with nothing in
+  the role explaining why. New `vault_license_content` takes the licence as
+  **plain text** (confirmed against a real `.hclic`), rendered to
+  `{{ vault_config_dir }}/vault.hclic` as `root:vault 0640` with `no_log` and
+  `diff: false` — the ownership model #77 established for TLS material, where
+  vault reads through the group and does not own its own trust material.
+  `license_path` is added inside the **existing**
+  `vault_edition is match('vault-enterprise')` branch in `vault.hcl.j2`, which
+  already covered every Enterprise variant by prefix, so no new conditional.
+  `tests/assert-root-owned-posture.sh` gains the file and its tripwire moves
+  8 → 9, because `'vault_config_file' in dest` is false for `vault.hclic` and
+  the licence would otherwise have sat outside the one lock that keeps
+  secret-bearing deploys root-owned. **There is deliberately no preflight gate
+  for a missing licence** (operator ruling): the service-start failure is loud,
+  immediate and attributable, and a gate would add a code path and a test axis
+  to prevent a failure that already reports itself. Note the config now
+  references `license_path` unconditionally for Enterprise; `VAULT_LICENSE` and
+  `VAULT_LICENSE_PATH` still take precedence, so existing env-var deployments
+  are unaffected. (#42)
+
+
 - **A dev-dependency manifest, and a `CONTRIBUTING.md` that no longer misdirects
   every new contributor.** The setup section instructed contributors to install
   the development toolchain with `pip install -r requirements.txt`
@@ -161,6 +186,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Enterprise version pins now resolve, and the default is pinned rather than
+  floating.** `tasks/install.yml` built its dnf spec as
+  `{{ vault_package_name }}-{{ vault_package_version }}`, but Enterprise NEVRA
+  carries `+ent` in the **version** field — measured against the live
+  repository, `vault-enterprise` is `2.x.y+ent-1` where Community `vault` is
+  `2.x.y-1`. So pinning `2.1.1` on any Enterprise edition produced
+  `vault-enterprise-…-2.1.1`, which matches nothing and fails with "no package
+  available". That hit every Enterprise site, hardest where versions are pinned
+  for compliance traceability. The role now appends the suffix itself rather
+  than demanding operators know the convention, and **reports** the applied
+  value so a pin chosen for an audit trail is still visible in the job log. The
+  release field is preserved in place: `1.18.3-1` becomes `1.18.3+ent-1`, never
+  `1.18.3-1+ent`, which dnf reads as release `1+ent` — the same defect through a
+  different field. A dist tag survives too (`1.18.3-1.el9`). An explicit
+  `+ent` is not doubled. `vault_package_version` also moves from `latest` to
+  **`2.1.1`**: `latest` combined with the default `vault_package_state: present`
+  means *newest at first install*, not kept current, so hosts built at different
+  times run different versions and none of them ever move. `latest` remains
+  accepted with that behaviour now written down. `molecule/init`'s Vault binary
+  moves to 2.1.1 in the same change — it is the only scenario exercising a real
+  `operator init` and unseal, and it was doing so against 1.18.5, across the 2.0
+  API boundary. **BREAKING for airgap and mirror consumers:** a pin that was
+  previously `latest` resolved to whatever the local repository carried, and now
+  hard-fails with "no package available" if that repository does not carry
+  2.1.1. Set `vault_package_version` to the version your mirror or Satellite
+  content view actually has. (#62)
+
+
+- **BREAKING: `vault_edition` no longer accepts `vault-enterprise` or the FIPS
+  140-2 builds.** Three choices remain: `vault` (Community),
+  `vault-enterprise-fips1403`, `vault-enterprise-hsm-fips1403`. The repository
+  carries seven; offering the others contradicts this role's own gate, because
+  `tasks/preflight/fips.yml` requires FIPS mode and its `fail_msg` cites FIPS
+  **140-3** — so a non-FIPS or 140-2 build would pass the edition choice and
+  fail the compliance claim. 140-2 is also the trailing line. Migration:
+  `vault-enterprise` → `vault-enterprise-fips1403`, `vault-enterprise-hsm` →
+  `vault-enterprise-hsm-fips1403`. (#62)
+
+
 - **The `ansible-core` pin is single-sourced; `ANSIBLE_CORE_VERSION` is gone from
   CI.** #78 pinned core at five sites in `.github/workflows/ci.yml` to end the
   local/CI drift that made "verified" claims unreliable. It never reached
@@ -284,6 +348,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Install `iproute` on minimal images. (#36)
 
 ### Fixed
+
+- **The PKCS#11 seal could be rendered for a binary that cannot provide it.**
+  `templates/vault.hcl.j2` gated the `seal "pkcs11"` stanza on
+  `vault_hsm_enabled` **alone** — grepped `tasks/` and `templates/`, nothing
+  anywhere correlated the seal with `vault_edition`. So `vault_hsm_enabled: true`
+  against the default Community binary rendered a PKCS#11 seal into `vault.hcl`,
+  the role reported success, and the service failed opaquely at start: the same
+  late-failure-after-mutation class as #85 and #28. A new
+  `tasks/preflight/edition.yml` asserts the contract, and it is enforced at
+  **two** surfaces rather than one. `tasks/main.yml` tags `configure.yml`
+  separately from `preflight.yml` and dynamic `include_tasks` do not propagate
+  tags, so a `--tags configure` or `--skip-tags preflight` run reaches the render
+  without ever executing a preflight-only gate — and all three converge molecule
+  scenarios take exactly that path. `molecule/hsm` enabled HSM on the Community
+  default and passed only because of that skip, so CI was exercising the invalid
+  combination. `tasks/configure.yml` now includes the same gate before the
+  render, following the #41 precedent recorded at its own `:9-15`. (#62)
+
 
 - **Tag-scoped runs executed almost nothing and reported success.**
   `include_tasks` does not propagate its own tags to the tasks in the included

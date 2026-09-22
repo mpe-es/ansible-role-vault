@@ -50,6 +50,16 @@ provisioner:
         # HSM enabled with a VALID sentinel PIN. Leading/trailing spaces exercise
         # the double-quote whitespace preservation through the render.
         vault_hsm_enabled: true
+        # The PKCS#11 seal requires an HSM-capable build (#62). Without this the
+        # scenario models a combination the role now declares invalid, and the
+        # configure-side assert fails the converge.
+        vault_edition: vault-enterprise-hsm-fips1403
+        # A SENTINEL, not a licence. The earlier reasoning -- "no test licence
+        # exists, so the deploy cannot be exercised" -- conflated a VALID licence
+        # with any bytes. This scenario runs skip-tags: service_start and never
+        # starts Vault, so nothing validates the content; what it proves is that
+        # the file lands at root:vault 0640, which is the posture claim (#42).
+        vault_license_content: "SENTINEL-NOT-A-REAL-LICENCE-#42"
         vault_hsm_pin: " S3NTINEL-hsm-pin "
         vault_hsm_lib_path: /usr/lib64/pkcs11/stub.so
         vault_hsm_key_label: vault-key

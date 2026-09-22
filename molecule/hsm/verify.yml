@@ -38,8 +38,35 @@
     - name: Assert the vault.env deploy task carries diff:false (static guard)
       ansible.builtin.assert:
         that:
-          - "'diff: false' in lookup('file', playbook_dir ~ '/../../tasks/configure.yml')"
-        fail_msg: "configure.yml lost diff:false — PIN could leak into --diff"
+          # Scoped to the vault.env task's OWN comment. A bare 'diff: false'
+          # substring stopped binding when the licence deploy (#42) added a
+          # second one -- deleting this task's would have left the check green.
+          # The authoritative per-task lock is
+          # tests/assert-configure-gates-the-render.sh.
+          - "'keep it out of --diff (#41)' in lookup('file', playbook_dir ~ '/../../tasks/configure.yml')"
+        fail_msg: "configure.yml lost the vault.env diff:false — PIN could leak into --diff"
+
+    # --- Test 1b: the licence file's on-disk posture (#42) ----------------
+    # The static guard asserts what configure.yml DECLARES; this asserts what
+    # actually landed. Both matter: a declaration can be right while a umask,
+    # an SELinux context or a pre-existing file makes the result wrong.
+    - name: Stat the deployed licence file
+      ansible.builtin.stat:
+        path: /etc/vault.d/vault.hclic
+      register: __hsm_licence
+
+    - name: Assert the licence landed root:vault 0640
+      ansible.builtin.assert:
+        that:
+          - __hsm_licence.stat.exists
+          - __hsm_licence.stat.mode == '0640'
+          - __hsm_licence.stat.pw_name == 'root'
+          - __hsm_licence.stat.gr_name == 'vault'
+        fail_msg: >-
+          vault.hclic posture wrong (expect root:vault 0640, #38/#77) --
+          exists={{ __hsm_licence.stat.exists }}
+          mode={{ __hsm_licence.stat.mode | default('n/a') }}
+          owner={{ __hsm_licence.stat.pw_name | default('n/a') }}:{{ __hsm_licence.stat.gr_name | default('n/a') }}
 
     # --- Test 2: systemd EnvironmentFile quote round-trip (no HSM) --------
     - name: Write a round-trip probe EnvironmentFile (quoted, leading/trailing space)

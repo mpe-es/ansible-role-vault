@@ -394,7 +394,7 @@ jobs:
           # Enclave CI overrides MOLECULE_VAULT_URL (repo/org variable) to an
           # internal web server; public default constructed from the version.
           MOLECULE_VAULT_URL: ${{ vars.MOLECULE_VAULT_URL }}
-          MOLECULE_VAULT_VERSION: ${{ vars.MOLECULE_VAULT_VERSION || '1.18.5' }}
+          MOLECULE_VAULT_VERSION: ${{ vars.MOLECULE_VAULT_VERSION || '2.1.1' }}
 
   ###########################################################
   # Molecule HSM Stage (PIN handling, issue #41)
