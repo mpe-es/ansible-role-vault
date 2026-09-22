@@ -1344,3 +1344,114 @@
           edition ran with vault_hsm_enabled false. A suppressed gate must
           register skipped; "nothing failed" is also what a deleted gate looks
           like.
+
+    ###########################################################################
+    # Enterprise NEVRA resolution - the +ent suffix
+    ###########################################################################
+    # TWO MECHANISMS, both required, and they are not the same one.
+    #
+    # 1. `public: true` on ONE include brings the role's defaults/main.yml and
+    #    vars/main.yml into play scope. molecule/preflight/molecule.yml:67-69
+    #    states verify.yml is a plain playbook that loads neither, so without
+    #    this every assertion dies on an undefined variable -- which looks
+    #    identical to the test failing for its real reason.
+    #
+    # 2. The FIXTURE goes in the `vars:` of the ASSERTING task, not on the
+    #    include. An include_role's `vars:` are role PARAMS, scoped to that task
+    #    and the tasks it includes; they are gone by the next task. Because
+    #    __vault_package_version_resolved is lazily templated, it re-resolves
+    #    against defaults at the assert and silently reports the default answer.
+    #
+    # Measured on ansible-core 2.19.6:
+    #    inside the role            -> 2.1.1+ent   (param applies)
+    #    after the include, no vars -> 2.1.1       (param gone: WRONG, and green
+    #                                               for the Community case, so it
+    #                                               would pass vacuously)
+    #    fixture on the assert task -> 2.1.1+ent   (correct)
+    - name: Bring role defaults and vars into play scope (scope only, no fixture)
+      ansible.builtin.include_role:
+        name: ansible-role-vault
+        tasks_from: preflight/edition.yml
+        public: true
+      vars:
+        vault_hsm_enabled: false
+
+    - name: "RESOLVES - Community leaves the pin untouched"
+      ansible.builtin.assert:
+        that:
+          - __vault_package_version_resolved == '2.1.1'
+        fail_msg: "Community pin was rewritten to {{ __vault_package_version_resolved }}"
+      vars:
+        vault_edition: vault
+        vault_package_version: "2.1.1"
+
+    - name: "RESOLVES - Enterprise gains the +ent suffix"
+      ansible.builtin.assert:
+        that:
+          - __vault_package_version_resolved == '2.1.1+ent'
+        fail_msg: "Enterprise pin resolved to {{ __vault_package_version_resolved }}"
+      vars:
+        vault_edition: vault-enterprise-fips1403
+        vault_package_version: "2.1.1"
+
+    - name: "RESOLVES - a release-suffixed pin keeps +ent in the VERSION field"
+      # dnf reads 1.18.3-1+ent as version 1.18.3 release 1+ent, which matches
+      # nothing -- the exact NEVRA defect #62 exists to remove. The suffix must
+      # land before the release: 1.18.3+ent-1.
+      ansible.builtin.assert:
+        that:
+          - __vault_package_version_resolved == '1.18.3+ent-1'
+        fail_msg: "release-suffixed pin resolved to {{ __vault_package_version_resolved }}"
+      vars:
+        vault_edition: vault-enterprise-fips1403
+        vault_package_version: "1.18.3-1"
+
+    - name: "RESOLVES - a dist-tagged release survives the split"
+      # Measured: the narrower '-[0-9]+$' does NOT match 1.18.3-1.el9, so that
+      # pin resolved to 1.18.3-1.el9+ent -- release '1.el9+ent', no match.
+      ansible.builtin.assert:
+        that:
+          - __vault_package_version_resolved == '1.18.3+ent-1.el9'
+        fail_msg: "dist-tagged pin resolved to {{ __vault_package_version_resolved }}"
+      vars:
+        vault_edition: vault-enterprise-fips1403
+        vault_package_version: "1.18.3-1.el9"
+
+    - name: "RESOLVES - an explicit +ent is not doubled"
+      ansible.builtin.assert:
+        that:
+          - __vault_package_version_resolved == '2.1.1+ent'
+        fail_msg: "idempotence broken: {{ __vault_package_version_resolved }}"
+      vars:
+        vault_edition: vault-enterprise-hsm-fips1403
+        vault_package_version: "2.1.1+ent"
+
+    - name: "RESOLVES - latest is never suffixed"
+      ansible.builtin.assert:
+        that:
+          - __vault_package_version_resolved == 'latest'
+        fail_msg: "latest was rewritten to {{ __vault_package_version_resolved }}"
+      vars:
+        vault_edition: vault-enterprise-fips1403
+        vault_package_version: "latest"
+
+    - name: "REPORTS - the suffix report fires for an Enterprise pin"
+      # MIRRORS tasks/install.yml's when: rather than driving it -- the install
+      # task cannot run here without a package transaction. Deleting the report
+      # from install.yml leaves this green; the binding is held instead by
+      # tests/assert-install-uses-resolved-version.sh.
+      ansible.builtin.debug:
+        msg: "resolved={{ __vault_package_version_resolved }}"
+      register: __ent_report
+      when:
+        - vault_package_version != 'latest'
+        - __vault_package_version_resolved != vault_package_version
+      vars:
+        vault_edition: vault-enterprise-fips1403
+        vault_package_version: "2.1.1"
+
+    - name: Assert the Enterprise report was not skipped
+      ansible.builtin.assert:
+        that:
+          - not (__ent_report.skipped | default(false))
+        fail_msg: "the +ent report did not fire for an Enterprise pin"

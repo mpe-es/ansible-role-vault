@@ -161,6 +161,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Enterprise version pins now resolve, and the default is pinned rather than
+  floating.** `tasks/install.yml` built its dnf spec as
+  `{{ vault_package_name }}-{{ vault_package_version }}`, but Enterprise NEVRA
+  carries `+ent` in the **version** field — measured against the live
+  repository, `vault-enterprise` is `2.x.y+ent-1` where Community `vault` is
+  `2.x.y-1`. So pinning `2.1.1` on any Enterprise edition produced
+  `vault-enterprise-…-2.1.1`, which matches nothing and fails with "no package
+  available". That hit every Enterprise site, hardest where versions are pinned
+  for compliance traceability. The role now appends the suffix itself rather
+  than demanding operators know the convention, and **reports** the applied
+  value so a pin chosen for an audit trail is still visible in the job log. The
+  release field is preserved in place: `1.18.3-1` becomes `1.18.3+ent-1`, never
+  `1.18.3-1+ent`, which dnf reads as release `1+ent` — the same defect through a
+  different field. A dist tag survives too (`1.18.3-1.el9`). An explicit
+  `+ent` is not doubled. `vault_package_version` also moves from `latest` to
+  **`2.1.1`**: `latest` combined with the default `vault_package_state: present`
+  means *newest at first install*, not kept current, so hosts built at different
+  times run different versions and none of them ever move. `latest` remains
+  accepted with that behaviour now written down. `molecule/init`'s Vault binary
+  moves to 2.1.1 in the same change — it is the only scenario exercising a real
+  `operator init` and unseal, and it was doing so against 1.18.5, across the 2.0
+  API boundary. (#62)
+
+
 - **BREAKING: `vault_edition` no longer accepts `vault-enterprise` or the FIPS
   140-2 builds.** Three choices remain: `vault` (Community),
   `vault-enterprise-fips1403`, `vault-enterprise-hsm-fips1403`. The repository

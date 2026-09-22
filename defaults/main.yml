@@ -47,9 +47,15 @@ vault_repo_gpgcheck: true
 # Vault Package Configuration
 ###############################################################################
 # Vault package version to install. Use 'latest' for newest available or
-# pin to a specific version (e.g., '1.18.3-1') for reproducibility.
+# pin to a specific version (e.g., '2.1.1') for reproducibility.
+# PINNED BY DEFAULT. 'latest' means NEWEST AT FIRST INSTALL, not kept current:
+# combined with vault_package_state 'present' below, dnf installs the newest
+# available when Vault is absent and does not upgrade it afterwards, so hosts
+# built at different times run different versions and none of them ever move.
+# For Enterprise editions the role appends the '+ent' NEVRA suffix itself, so
+# the same value works on any edition.
 # In airgap environments, this must match what is available in the local repo.
-vault_package_version: "latest"
+vault_package_version: "2.1.1"
 
 # Vault package state for ansible.builtin.dnf
 # Options: 'present' (install if missing), 'latest' (upgrade to newest)

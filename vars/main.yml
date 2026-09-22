@@ -113,3 +113,36 @@ vault_fapolicyd_trust_file: /etc/fapolicyd/trust.d/vault.trust
 # is not one.
 __vault_is_enterprise: "{{ vault_edition is match('vault-enterprise') }}"
 __vault_is_hsm_capable: "{{ 'hsm' in vault_edition }}"
+
+# Enterprise NEVRA carries +ent in the VERSION field: measured against the live
+# repository, vault-enterprise is 2.x.y+ent-1 where Community vault is 2.x.y-1.
+# Same base version, suffix only on Enterprise. So a bare pin like "2.1.1"
+# resolves vault-enterprise-2.1.1, which matches nothing and fails with "no
+# package available".
+#
+# Appending here rather than rejecting in preflight is deliberate (operator
+# ruling, 2026-09-22): +ent is packaging trivia, not a version decision, so
+# vault_package_version means the same thing on either edition. The append is
+# REPORTED by tasks/install.yml, not silent -- an operator who pinned 2.1.1 for
+# an audit trail should see that 2.1.1+ent was installed.
+#
+# Split a trailing release field off before inserting the suffix. A pin may be
+# written version-only (2.1.1) or version-release (1.18.3-1). Appending blindly
+# yields 1.18.3-1+ent, which dnf reads as version 1.18.3 release 1+ent: no
+# match, the very defect this exists to remove. +ent belongs in the VERSION.
+#
+# The release pattern allows a dist tag. Measured: '-[0-9]+$' does NOT match
+# 1.18.3-1.el9, so that pin would resolve to 1.18.3-1.el9+ent -- release
+# '1.el9+ent'. '-[0-9][A-Za-z0-9._]*$' matches both -1 and -1.el9 while leaving
+# a version-only pin like 2.1.1 untouched.
+#
+# The `'+ent' in ...` arm is load-bearing: an operator who already writes
+# 2.1.1+ent must not get 2.1.1+ent+ent.
+__vault_ent_release: "{{ vault_package_version | regex_search('-[0-9][A-Za-z0-9._]*$') | default('', true) }}"
+__vault_ent_base: "{{ vault_package_version | regex_replace('-[0-9][A-Za-z0-9._]*$', '') }}"
+__vault_package_version_resolved: >-
+  {{ vault_package_version
+     if (vault_package_version == 'latest'
+         or not (__vault_is_enterprise | bool)
+         or '+ent' in vault_package_version)
+     else __vault_ent_base ~ '+ent' ~ __vault_ent_release }}

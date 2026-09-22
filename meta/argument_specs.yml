@@ -86,11 +86,21 @@ argument_specs:
       ################################################################
       vault_package_version:
         description:
-          - Vault package version to install.
-          - Use 'latest' for newest available or pin to a specific version (e.g., '1.18.3-1').
+          - Vault package version to install. Pinned by default.
+          - >-
+            For Enterprise editions the role appends the '+ent' NEVRA suffix
+            automatically, so the same value works on any edition. Writing
+            '2.1.1+ent' explicitly is accepted and not doubled, and a release
+            field is preserved in place ('1.18.3-1' becomes '1.18.3+ent-1').
+          - >-
+            'latest' means NEWEST AT FIRST INSTALL, not kept current. Combined
+            with the default vault_package_state 'present', dnf installs the
+            newest available when Vault is absent and does not upgrade it
+            afterwards - so hosts built at different times run different
+            versions and none of them ever move. Pin unless you want that.
           - In airgap environments, this must match what is available in the local repo.
         type: str
-        default: "latest"
+        default: "2.1.1"
 
       vault_package_state:
         description:

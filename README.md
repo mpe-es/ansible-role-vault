@@ -517,9 +517,27 @@ See the initialization warning at the top of this section before enabling
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `vault_package_version` | `latest` | Version to install (e.g., `1.18.3-1`) |
+| `vault_package_version` | `2.1.1` | Version to install. **Pinned by default.** Enterprise editions get the `+ent` NEVRA suffix appended automatically, so one value works on any edition. `latest` means *newest at first install*, not kept current — see below |
 | `vault_package_state` | `present` | DNF state: `present` or `latest` |
 | `vault_edition` | `vault` | Package/edition — three choices: `vault` (Community), `vault-enterprise-fips1403` (Enterprise FIPS 140-3), `vault-enterprise-hsm-fips1403` (Enterprise + HSM). General Enterprise and both FIPS 140-2 builds are **excluded**: preflight requires FIPS mode and cites FIPS 140-3. `vault_hsm_enabled` requires the `-hsm` build |
+
+> **`latest` does not mean "kept current".** `vault_package_version: latest`
+> omits the version from the dnf transaction, so dnf resolves whatever is newest
+> **at that moment**; the default `vault_package_state: present` then installs
+> only if Vault is absent and never upgrades it. A host built in March and one
+> built today therefore run different versions and neither ever moves — estate
+> drift nobody chose and nothing reports. `vault_package_state: latest` would
+> converge, but makes every run a potential upgrade, which is unacceptable for
+> HA Vault where upgrades are ordered and deliberate. Pin unless you want drift.
+>
+> **Enterprise NEVRA carries `+ent` in the version field** — `vault-enterprise`
+> is `2.1.1+ent-1` where Community `vault` is `2.1.1-1`. The role appends it for
+> you, so `2.1.1` resolves `vault-2.1.1` on Community and
+> `vault-enterprise-fips1403-2.1.1+ent` on Enterprise. Writing `2.1.1+ent`
+> yourself is accepted and not doubled, and a release field is preserved in
+> place: `1.18.3-1` becomes `1.18.3+ent-1`, never `1.18.3-1+ent` (which dnf
+> reads as release `1+ent` and matches nothing). The role reports the applied
+> suffix in the job log.
 
 ### Server Configuration
 
@@ -637,7 +655,7 @@ for Python library dependencies. No other Ansible role dependencies.
         vault_repo_source: mirror
         vault_repo_url: "https://repo.closednetwork.local/hashicorp/RHEL/$releasever/$basearch/stable"
         vault_repo_gpg_key: "https://repo.closednetwork.local/hashicorp/gpg"
-        vault_package_version: "1.18.3-1"
+        vault_package_version: "2.1.1"
 ```
 
 ### Single-Node Deployment (Red Hat Satellite)
@@ -649,7 +667,7 @@ for Python library dependencies. No other Ansible role dependencies.
     - role: mpe-es.vault
       vars:
         vault_repo_source: satellite
-        vault_package_version: "1.18.3-1"
+        vault_package_version: "2.1.1"
 ```
 
 > **Enterprise editions need a license.** Satellite deployments are usually
