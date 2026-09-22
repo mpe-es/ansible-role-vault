@@ -450,6 +450,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
+- **An AAP compliance checklist that was measured against the default supported
+  Execution Environment, replacing advice that assumed a custom one.** The
+  previous "Execution Environment (AAP)" section told operators to "ensure your
+  Execution Environment includes" the three manifests — useless guidance for the
+  common case of running on Red Hat's default `ee-supported` image, which the
+  operator does not build and cannot edit, and which never reads `bindep.txt` at
+  all. Everything is now measured against
+  `registry.redhat.io/ansible-automation-platform-27/ee-supported-rhel9`, with
+  the verification commands included so it can be re-measured when the image
+  changes. **Leading the section: running with `vault_initialize: true` from a
+  default AAP job destroys the root token and every unseal share.** The role
+  captures them with `delegate_to: localhost` at `tasks/service.yml:141-178`,
+  which under AAP is the ephemeral EE job container — Vault comes up initialized
+  and unsealed, the job reports success, and nobody holds a root token or a
+  single unseal key. The `service.yml:46` gate cannot catch it, because a path
+  inside the EE is both set and absolute. Three mitigations are documented.
+  Beyond that: `community.general` (required — `sefcontext` is on by default and
+  the EE ships 46 collections with **none** in the `community` namespace) and,
+  conditionally, `community.hashi_vault` plus `hvac` on the managed host; a
+  Galaxy credential for hub-sourced installs; and
+  `policycoreutils-python-utils` on the target. `ansible.posix` 2.2.2,
+  `ansible.utils` 6.1.0, `netaddr` 1.3.0 and `openssl` 3.5.5 are already present
+  and need nothing. The section also records that the default EE runs **Python
+  3.12.14 / ansible-core 2.16.19** while CI verifies **3.11 / 2.19.13**, that
+  `meta/main.yml` declares a `2.17` floor the EE is below, and that
+  `min_ansible_version` is **advisory and unenforced** — verified with a probe
+  role declaring `99.0` that executed normally — so the shortfall is silent.
+
+- **The collections table listed three of the four collections the role
+  requires.** `community.general` was absent from the README while
+  `requirements.yml` declared it and `tasks/system.yml` called
+  `community.general.sefcontext` on a default-enabled path. The table now also
+  states that `community.hashi_vault` is used **only** under
+  `vault_tls_source: vault_pki`, rather than implying it is needed for every
+  deployment.
+
+- **Removed a stale claim that SAN correctness is unvalidated.** The Requirements
+  section still said a certificate missing the `127.0.0.1` IP SAN "passes
+  preflight and then breaks init and unseal at service start", contradicting the
+  SAN gate documented in the same file since #85 shipped.
+
+
 - **The README's controller-Python claim now matches what CI tests.** It advertised
   `>= 3.10` — a correct derivation from the ansible-core 2.17 floor, but one
   nothing verified, since CI installs 3.11 only. Pinning the Python version (#78)

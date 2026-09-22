@@ -247,8 +247,9 @@ Install via `ansible-galaxy collection install -r requirements.yml`:
 | Collection | Min Version | Purpose |
 |------------|-------------|---------|
 | `ansible.posix` | 1.6.0 | `firewalld` module for port management |
-| `ansible.utils` | 6.0.0 | `ipaddr` filters — address classification in the DNS preflight gate |
-| `community.hashi_vault` | 7.0.0 | Vault initialization and post-install configuration |
+| `ansible.utils` | 6.0.0 | `ipaddr` filters — address classification in the DNS and SAN preflight gates |
+| `community.general` | 9.0.0 | `sefcontext` module — SELinux file contexts (`tasks/system.yml`), on by default via `vault_manage_selinux` |
+| `community.hashi_vault` | 7.0.0 | `vault_pki_generate_certificate` — used **only** when `vault_tls_source: vault_pki` |
 
 ### Python Libraries
 
@@ -270,25 +271,141 @@ make it safe (run it on `linux/amd64` Python 3.11 to match CI; run it against
 the existing `requirements.txt`, never a fresh path) are documented in
 `requirements.in` itself.
 
-### Execution Environment (AAP)
+### Ansible Automation Platform (AAP)
 
-For Ansible Automation Platform 2.6+, ensure your Execution Environment includes:
+This role runs unmodified on the **default supported Execution Environment** —
+it does not require a custom EE — but the default EE does **not** carry
+everything the role declares. This section is the compliance checklist for an
+AAP deployment.
 
-- The collections listed in `requirements.yml`
-- The Python packages listed in `requirements.txt`
-- System packages listed in `bindep.txt`
+Everything below was **measured**, not derived from the documentation, against
+`registry.redhat.io/ansible-automation-platform-27/ee-supported-rhel9` on
+2026-09-22. Re-measure when your EE image changes; the commands are given so you
+can.
 
-The role provides `meta/argument_specs.yml` for AAP Job Template survey
+#### STOP — read this before running with `vault_initialize: true` on AAP
+
+**The role captures the root token and every unseal share to the Ansible
+controller. Under AAP the controller is the ephemeral EE job container, so on a
+default configuration that material is destroyed when the job pod exits — and
+the job still reports success.**
+
+`tasks/service.yml` writes all initialization secrets with
+`delegate_to: localhost`:
+
+| Line | Task | Destination |
+|---|---|---|
+| 141 | Create controller capture directory | `{{ vault_init_capture_dir }}/{{ inventory_hostname }}/` |
+| 150 | Capture **root token** | `…/root-token` |
+| 160 | Capture **Shamir unseal shares** | `…/unseal-key-N` (one per share) |
+| 173 | Capture **HSM recovery keys** | `…/recovery-key-N` (one per key) |
+
+This is deliberate and correct on a persistent control node — the design
+guarantees the root token never rests on the Vault node (see *Security Model*
+below). On AAP it inverts: Vault is initialized and unsealed, the job goes
+green, and **nobody holds the root token or a single unseal key.** Recovery is
+not possible.
+
+The preflight check at `tasks/service.yml:46` does not catch this. It asserts
+`vault_init_capture_dir` is set and absolute; a path inside the EE satisfies
+both.
+
+**Required mitigation — one of:**
+
+1. Mount persistent storage into the EE at `vault_init_capture_dir` (a Container
+   Group with a custom pod spec declaring the volume), and confirm the mount is
+   present **before** the first initializing run.
+2. Run initializing plays from a persistent control node or a dedicated
+   Automation Mesh execution node with real storage, not from a default
+   container group.
+3. Leave `vault_initialize: false` in AAP and perform initialization as a
+   separate, deliberate operation with custody arranged in advance.
+
+Non-initializing runs (`vault_initialize: false`, the default) are unaffected —
+no secrets are captured and every item below still applies normally.
+
+#### Already provided — no action required
+
+| Requirement | Declared minimum | In the default EE | Used by |
+|---|---|---|---|
+| `ansible.posix` | 1.6.0 | **2.2.2** | `firewalld` (`tasks/firewall.yml`) |
+| `ansible.utils` | 6.0.0 | **6.1.0** | `ipaddr` filter (DNS + SAN gates) |
+| `netaddr` (controller Python) | 0.10.1 | **1.3.0** | backs `ansible.utils.ipaddr` |
+| `openssl` CLI (controller) | any with `-checkhost`/`-checkip` | **3.5.5** | certificate SAN gate, managed TLS path |
+
+`bindep.txt` is **not** consulted in this model. It feeds `ansible-builder` when
+constructing a custom EE; on a default EE nothing reads it.
+
+#### Must be added to AAP
+
+| # | Item | Why | Scope |
+|---|---|---|---|
+| 1 | **`community.general` >= 9.0.0** | `community.general.sefcontext` (`tasks/system.yml`) sets the SELinux file contexts for every Vault path. On by default (`vault_manage_selinux: true`). The default EE ships **46 collections and none in the `community` namespace**, so this resolves nowhere. | **Required.** Blocks Phase 4 on a default install. |
+| 2 | **`community.hashi_vault` >= 7.0.0** | `vault_pki_generate_certificate` (`tasks/tls.yml`). | **Conditional** — only when `vault_tls_source: vault_pki`. Not needed for the default `file` / operator-staged paths. |
+| 3 | **`hvac` >= 2.0.0 on the managed host** | Required by `community.hashi_vault`, which is **not** delegated and therefore executes on the target, not in the EE. A STIG-hardened EL host has no `pip` and no repo carrying it. | **Conditional**, same trigger as item 2. |
+| 4 | **A Galaxy credential at the Organization level** | AAP runs `ansible-galaxy collection install` from the project's `requirements.yml` during a project update, and needs a `kind=galaxy` credential naming the content source — your private automation hub in a darksite. Without it the install silently resolves nothing. | **Required** if items 1–2 are delivered by project sync rather than pre-seeded. |
+| 5 | **`policycoreutils-python-utils` on the managed host** | `sefcontext` needs the `seobject` Python bindings on the target. Satellite can supply it; this is a target prerequisite, not an EE one. | **Required** whenever `vault_manage_selinux: true`. |
+
+Items 1 and 2 are `community.*` collections. Red Hat's supported EE ships
+**certified** content only, so neither will ever appear there regardless of AAP
+version — they must be synced into your private automation hub (or the role must
+stop depending on them). Building a custom EE is the third option and is
+deliberately **not** recommended here: it adds a multi-gigabyte image to move
+across the airgap to solve a two-collection problem.
+
+#### Version alignment — read this before trusting a green job
+
+The default EE and this role's CI do **not** run the same toolchain:
+
+| | Default supported EE (2.7) | What CI verifies |
+|---|---|---|
+| Python | **3.12.14** | 3.11 |
+| ansible-core | **2.16.19** | 2.19.13 |
+
+`meta/main.yml` declares `min_ansible_version: '2.17'` and this README's Ansible
+section states `>= 2.17.0`. The EE is **below** that floor. **`min_ansible_version`
+is advisory galaxy metadata — ansible-core does not enforce it**, verified with a
+probe role declaring `min_ansible_version: '99.0'` that executed normally. So the
+shortfall produces no error, no warning, and no failed job. It is silent.
+
+Treat a green AAP job as evidence about `3.12.14 / 2.16.19`, and a green CI run as
+evidence about `3.11 / 2.19.13`. Neither is evidence about the other until the CI
+matrix covers the pair AAP actually runs.
+
+#### Verify your own EE
+
+Substitute the image your Job Templates reference:
+
+```bash
+EE=registry.redhat.io/ansible-automation-platform-27/ee-supported-rhel9:latest
+
+# runtime versions
+podman run --rm "$EE" sh -c 'python3 --version; ansible --version | head -1'
+
+# are the required collections present?
+podman run --rm "$EE" ansible-galaxy collection list \
+  | grep -E 'community.general|community.hashi_vault|ansible.posix|ansible.utils'
+
+# controller-side libraries and the SAN gate's openssl
+podman run --rm "$EE" sh -c \
+  'python3 -c "import netaddr; print(netaddr.__version__)"; openssl version'
+```
+
+#### Job Template notes
+
+The role provides `meta/argument_specs.yml` for Job Template survey
 auto-generation and input validation.
+
+See the initialization warning at the top of this section before enabling
+`vault_initialize` in any Job Template.
 
 ### Other
 
 - TLS certificates for the Vault listener (provided externally or via this
   role). **Preflight verifies that all three exist and are regular files** when
-  `vault_manage_tls: false`. **SAN correctness is still not validated** — a
-  certificate missing the `127.0.0.1` IP SAN passes preflight and then breaks
-  init and unseal at service start. See the SAN contract above; enforcement is
-  tracked separately.
+  `vault_manage_tls: false`, and **SAN correctness is now enforced** by the
+  certificate SAN gate — see the SAN contract in the gate table above for what
+  is and is not checked (#85).
 - For airgap: an internal RPM mirror hosting the Vault package and GPG key
   (`vault_repo_source: mirror`), or a Red Hat Satellite content view
   (`vault_repo_source: satellite`, RHEL only — the role then writes no repo
