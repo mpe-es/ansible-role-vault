@@ -519,7 +519,7 @@ See the initialization warning at the top of this section before enabling
 |----------|---------|-------------|
 | `vault_package_version` | `latest` | Version to install (e.g., `1.18.3-1`) |
 | `vault_package_state` | `present` | DNF state: `present` or `latest` |
-| `vault_edition` | `vault` | Package/edition: `vault` (Community), `vault-enterprise`, `vault-enterprise-fips1403` (Enterprise FIPS 140-3) |
+| `vault_edition` | `vault` | Package/edition — three choices: `vault` (Community), `vault-enterprise-fips1403` (Enterprise FIPS 140-3), `vault-enterprise-hsm-fips1403` (Enterprise + HSM). General Enterprise and both FIPS 140-2 builds are **excluded**: preflight requires FIPS mode and cites FIPS 140-3. `vault_hsm_enabled` requires the `-hsm` build |
 
 ### Server Configuration
 
@@ -652,13 +652,11 @@ for Python library dependencies. No other Ansible role dependencies.
         vault_package_version: "1.18.3-1"
 ```
 
-> **Enterprise editions need a license this role does not deliver.** Satellite
-> deployments are usually Enterprise, and `vault_edition: vault-enterprise`
-> selects that package — but Vault Enterprise **cannot start unlicensed**, and
-> the role has no license management
-> ([#42](https://github.com/mpe-es/ansible-role-vault/issues/42)). The example
-> above therefore uses the OSS default, which starts. If you set an Enterprise
-> edition, stage the license separately or the service will fail at Phase 9.
+> **Enterprise editions need a license.** Satellite deployments are usually
+> Enterprise, and `vault_edition: vault-enterprise-fips1403` selects that
+> package — but Vault Enterprise **cannot start unlicensed**. The example above
+> uses the Community default, which starts without one. Licence delivery is
+> covered in the Enterprise licensing section below.
 
 Satellite mode writes no `.repo` file: `subscription-manager` owns
 `/etc/yum.repos.d/redhat.repo` and generates it from the host's content-view

@@ -50,6 +50,10 @@ provisioner:
         # HSM enabled with a VALID sentinel PIN. Leading/trailing spaces exercise
         # the double-quote whitespace preservation through the render.
         vault_hsm_enabled: true
+        # The PKCS#11 seal requires an HSM-capable build (#62). Without this the
+        # scenario models a combination the role now declares invalid, and the
+        # configure-side assert fails the converge.
+        vault_edition: vault-enterprise-hsm-fips1403
         vault_hsm_pin: " S3NTINEL-hsm-pin "
         vault_hsm_lib_path: /usr/lib64/pkcs11/stub.so
         vault_hsm_key_label: vault-key

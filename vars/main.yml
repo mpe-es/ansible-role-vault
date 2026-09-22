@@ -94,3 +94,22 @@ vault_selinux_contexts:
 # fapolicyd Trust Management (internal)
 ###############################################################################
 vault_fapolicyd_trust_file: /etc/fapolicyd/trust.d/vault.trust
+
+###############################################################################
+# Edition Capability (derived -- never set these directly)
+###############################################################################
+# Capability is derivable from the edition name, so derive it ONCE and have
+# every consumer read the fact rather than re-test the string. `is match` is a
+# PREFIX test and is already the precedent at templates/vault.hcl.j2:15, where
+# an Enterprise-only parameter is rendered the same way.
+#
+# Consumers cast with `| bool` defensively. Measured on ansible-core 2.19.6
+# these return native bools, but the vars-plugin return type is not contractual
+# across core versions and the cast is free.
+#
+# __vault_is_fips_build is deliberately NOT derived: every Enterprise choice in
+# vault_edition is a FIPS 140-3 build, so the fact would be a constant -- and a
+# constant dressed as a computed value is a check that looks like a guard and
+# is not one.
+__vault_is_enterprise: "{{ vault_edition is match('vault-enterprise') }}"
+__vault_is_hsm_capable: "{{ 'hsm' in vault_edition }}"

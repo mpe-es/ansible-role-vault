@@ -230,8 +230,13 @@ vault_rsyslog_port: 514
 ###############################################################################
 # Vault Edition
 # Controls the RPM package name installed.
-# 'vault' = Community (OSS), 'vault-enterprise' = Enterprise,
-# 'vault-enterprise-fips1403' = Enterprise with FIPS 140-3 crypto
+# Three choices, deliberately narrower than the seven the repository carries:
+#   vault                          Community (OSS) -- development and test
+#   vault-enterprise-fips1403      Enterprise, FIPS 140-3
+#   vault-enterprise-hsm-fips1403  Enterprise + HSM, opt-in
+# General Enterprise and both FIPS 140-2 builds are EXCLUDED: preflight requires
+# FIPS mode and cites FIPS 140-3, so offering them would contradict the gate.
+# vault_hsm_enabled requires the -hsm build (tasks/preflight/edition.yml).
 ###############################################################################
 vault_edition: "vault"
 

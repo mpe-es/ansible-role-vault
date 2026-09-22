@@ -62,6 +62,18 @@
   when: vault_hsm_enabled | bool
 # ----------------------------------------------------------------------------
 
+# --- issue #62: fail closed BEFORE rendering a PKCS#11 seal -----------------
+# Co-located for the same reason as the #41 PIN checks above: the role uses
+# dynamic include_tasks whose tags do not propagate, so tasks/preflight/
+# edition.yml is unreachable on a --tags configure or --skip-tags preflight run
+# and every converge molecule scenario takes exactly that path. Preflight fails
+# early on the normal path; this fails on EVERY path that reaches the render.
+#
+# INCLUDED, not copied: one assert, one fail_msg, one set of test cases.
+- name: Re-assert the edition contract on the render path
+  ansible.builtin.include_tasks:
+    file: preflight/edition.yml
+
 - name: Deploy Vault server configuration
   ansible.builtin.template:
     src: vault.hcl.j2

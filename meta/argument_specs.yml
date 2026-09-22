@@ -406,17 +406,25 @@ argument_specs:
       ################################################################
       vault_edition:
         description:
-          - Vault RPM package name to install.
+          - Vault RPM package name to install. This string IS the package name -
+            vars/main.yml sets vault_package_name from it directly.
           - >-
-            'vault' for Community (OSS), 'vault-enterprise' for Enterprise,
-            'vault-enterprise-fips1403' for Enterprise with FIPS 140-3
-            crypto.
+            Deliberately NARROWER than what the HashiCorp repository carries.
+            The repository ships seven editions; three are offered. General
+            Enterprise (vault-enterprise) and both FIPS 140-2 builds are
+            excluded - tasks/preflight/fips.yml requires FIPS mode and its
+            fail_msg cites FIPS 140-3, so offering a non-FIPS or 140-2 build
+            would contradict the gate.
+          - >-
+            Enterprise editions require a license to start; see
+            vault_license_content. vault_hsm_enabled requires the -hsm build
+            and is asserted by tasks/preflight/edition.yml.
         type: str
         default: "vault"
         choices:
           - vault
-          - vault-enterprise
           - vault-enterprise-fips1403
+          - vault-enterprise-hsm-fips1403
 
       ################################################################
       # TLS Maximum Version

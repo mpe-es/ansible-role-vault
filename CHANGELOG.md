@@ -161,6 +161,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING: `vault_edition` no longer accepts `vault-enterprise` or the FIPS
+  140-2 builds.** Three choices remain: `vault` (Community),
+  `vault-enterprise-fips1403`, `vault-enterprise-hsm-fips1403`. The repository
+  carries seven; offering the others contradicts this role's own gate, because
+  `tasks/preflight/fips.yml` requires FIPS mode and its `fail_msg` cites FIPS
+  **140-3** — so a non-FIPS or 140-2 build would pass the edition choice and
+  fail the compliance claim. 140-2 is also the trailing line. Migration:
+  `vault-enterprise` → `vault-enterprise-fips1403`, `vault-enterprise-hsm` →
+  `vault-enterprise-hsm-fips1403`. (#62)
+
+
 - **The `ansible-core` pin is single-sourced; `ANSIBLE_CORE_VERSION` is gone from
   CI.** #78 pinned core at five sites in `.github/workflows/ci.yml` to end the
   local/CI drift that made "verified" claims unreliable. It never reached
@@ -284,6 +295,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Install `iproute` on minimal images. (#36)
 
 ### Fixed
+
+- **The PKCS#11 seal could be rendered for a binary that cannot provide it.**
+  `templates/vault.hcl.j2` gated the `seal "pkcs11"` stanza on
+  `vault_hsm_enabled` **alone** — grepped `tasks/` and `templates/`, nothing
+  anywhere correlated the seal with `vault_edition`. So `vault_hsm_enabled: true`
+  against the default Community binary rendered a PKCS#11 seal into `vault.hcl`,
+  the role reported success, and the service failed opaquely at start: the same
+  late-failure-after-mutation class as #85 and #28. A new
+  `tasks/preflight/edition.yml` asserts the contract, and it is enforced at
+  **two** surfaces rather than one. `tasks/main.yml` tags `configure.yml`
+  separately from `preflight.yml` and dynamic `include_tasks` do not propagate
+  tags, so a `--tags configure` or `--skip-tags preflight` run reaches the render
+  without ever executing a preflight-only gate — and all three converge molecule
+  scenarios take exactly that path. `molecule/hsm` enabled HSM on the Community
+  default and passed only because of that skip, so CI was exercising the invalid
+  combination. `tasks/configure.yml` now includes the same gate before the
+  render, following the #41 precedent recorded at its own `:9-15`. (#62)
+
 
 - **Tag-scoped runs executed almost nothing and reported success.**
   `include_tasks` does not propagate its own tags to the tasks in the included

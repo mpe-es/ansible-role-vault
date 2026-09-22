@@ -1246,3 +1246,101 @@
             argv: [systemctl, stop, checkmode-squatter.service]
           failed_when: false
           changed_when: true
+
+    ###########################################################################
+    # The edition gate - the PKCS#11 seal requires an HSM-capable build
+    ###########################################################################
+    - name: "FIRES - HSM enabled on the Community edition"
+      block:
+        - name: Run edition with HSM enabled on a Community build
+          ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/edition.yml
+          vars:
+            vault_edition: vault
+            vault_hsm_enabled: true
+        - name: Community plus HSM should not have passed
+          ansible.builtin.fail:
+            msg: "edition gate did not fire for HSM on a Community build"
+      rescue:
+        - name: Assert the message names the cause and the remedy
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg is search('not an HSM-capable build')
+              - ansible_failed_result.msg is search('vault-enterprise-hsm-fips1403')
+            fail_msg: "wrong cause: {{ ansible_failed_result.msg | default('') }}"
+
+    - name: "FIRES - HSM enabled on the non-HSM Enterprise edition"
+      # Block vars reach the rescue; an include_role param does NOT -- it is
+      # scoped to that task. The rescue below concatenates vault_edition into
+      # its pattern, so without this the rescue itself dies on
+      # "'vault_edition' is undefined" and, being IN the rescue, nothing catches
+      # it: the play aborts and the remaining edition cases never run.
+      vars:
+        vault_edition: vault-enterprise-fips1403
+      block:
+        - name: Run edition with HSM enabled on Enterprise FIPS without HSM
+          ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/edition.yml
+          vars:
+            vault_hsm_enabled: true
+        - name: Enterprise-without-HSM plus HSM should not have passed
+          # The scaffold msg MUST NOT contain the edition string: the rescue
+          # asserts on it, and tests/assert-verify-rescues-discriminate.sh fails
+          # any rescue whose pattern also matches its own scaffold.
+          ansible.builtin.fail:
+            msg: "edition gate did not fire for the non-HSM Enterprise build"
+      rescue:
+        - name: Assert Enterprise alone is not treated as HSM-capable
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg is search('not an HSM-capable build')
+              # Concatenated, NOT a bare literal: preflight/edition.yml emits the
+              # edition only via {{ vault_edition }}, so this literal appears
+              # nowhere in the gate's source and
+              # assert-rescue-patterns-are-emittable.sh:142 rejects it. That
+              # guard skips patterns containing ` ~ `.
+              - ansible_failed_result.msg is search("is '" ~ vault_edition ~ "'")
+            fail_msg: "wrong cause: {{ ansible_failed_result.msg | default('') }}"
+
+    - name: "EXECUTES - the gate runs and passes on an HSM-capable edition"
+      ansible.builtin.include_role:
+        name: ansible-role-vault
+        tasks_from: preflight/edition.yml
+      vars:
+        vault_edition: vault-enterprise-hsm-fips1403
+        vault_hsm_enabled: true
+
+    - name: Assert the edition marker executed rather than skipping
+      ansible.builtin.assert:
+        that:
+          - __vault_edition_marker is defined
+          - not (__vault_edition_marker.skipped | default(false))
+          # REQUIRED, and the reason this case is not vacuous. The marker is a
+          # registered HOST var and the FIRES cases above already set it --
+          # register captures even on a failed assert. Without the failed check,
+          # deleting this include_role leaves the assert reading the leftover
+          # marker and passing.
+          - not (__vault_edition_marker.failed | default(false))
+        fail_msg: >-
+          the edition gate did not execute on an HSM-capable edition; a gate
+          that never runs is indistinguishable from a deleted one.
+
+    - name: "DID NOT FIRE - HSM disabled suppresses the edition gate entirely"
+      ansible.builtin.include_role:
+        name: ansible-role-vault
+        tasks_from: preflight/edition.yml
+      vars:
+        vault_edition: vault
+        vault_hsm_enabled: false
+
+    - name: Assert the edition marker was skipped, not merely non-failing
+      ansible.builtin.assert:
+        that:
+          - __vault_edition_marker is defined
+          - __vault_edition_marker.skipped | default(false)
+        fail_msg: >-
+          edition ran with vault_hsm_enabled false. A suppressed gate must
+          register skipped; "nothing failed" is also what a deleted gate looks
+          like.
