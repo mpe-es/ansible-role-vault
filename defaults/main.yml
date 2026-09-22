@@ -248,7 +248,9 @@ vault_edition: "vault"
 
 ###############################################################################
 # Vault Enterprise License
-# NIST 800-53: SC-12 (Cryptographic Key Establishment and Management)
+# NIST 800-53: SC-28 (Protection of Information at Rest), IA-5 (Authenticator
+#   Management). NOT SC-12 -- a .hclic is a signed entitlement blob, not key
+#   material, and citing a control this does not implement is an audit finding.
 ###############################################################################
 # Plain text -- the contents of a .hclic file. Supply from an AAP credential or
 # Ansible Vault; NEVER commit it. Rendered to {{ vault_config_dir }}/vault.hclic

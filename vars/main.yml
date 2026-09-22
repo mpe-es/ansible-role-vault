@@ -16,7 +16,8 @@ vault_service_name: vault
 
 ###############################################################################
 # System Paths (HashiCorp RPM standard layout)
-# Verified against vault-1.21.4-1.x86_64 RPM
+# Verified against vault-1.21.4-1.x86_64 RPM. NOT re-verified against 2.x --
+# the default pin crossed a major boundary (#62); re-check on the next bump.
 ###############################################################################
 vault_config_dir: /etc/vault.d
 vault_config_file: /etc/vault.d/vault.hcl
@@ -98,10 +99,17 @@ vault_fapolicyd_trust_file: /etc/fapolicyd/trust.d/vault.trust
 ###############################################################################
 # Edition Capability (derived -- never set these directly)
 ###############################################################################
-# Capability is derivable from the edition name, so derive it ONCE and have
-# every consumer read the fact rather than re-test the string. `is match` is a
-# PREFIX test and is already the precedent at templates/vault.hcl.j2:15, where
-# an Enterprise-only parameter is rendered the same way.
+# Capability is derivable from the edition name. These derive it once for TASK
+# consumers; `is match` is a PREFIX test, the same form templates/vault.hcl.j2
+# uses inline.
+#
+# templates/vault.hcl.j2 deliberately does NOT read these. It is rendered
+# standalone by tests/render-hsm-pin-test.sh with hand-pinned variables and no
+# role scope, so a derived fact is undefined there -- measured: routing the
+# Enterprise branch through __vault_is_enterprise failed that test with
+# "'__vault_is_enterprise' is undefined". The duplication is the cost of keeping
+# the template renderable outside the role, which is what makes that #41 lock
+# possible at all.
 #
 # Consumers cast with `| bool` defensively. Measured on ansible-core 2.19.6
 # these return native bools, but the vars-plugin return type is not contractual
@@ -115,7 +123,9 @@ __vault_is_enterprise: "{{ vault_edition is match('vault-enterprise') }}"
 __vault_is_hsm_capable: "{{ 'hsm' in vault_edition }}"
 
 # Enterprise NEVRA carries +ent in the VERSION field: measured against the live
-# repository, vault-enterprise is 2.x.y+ent-1 where Community vault is 2.x.y-1.
+# repository (#62's dnf evidence), vault-enterprise-fips1403 and
+# vault-enterprise-hsm-fips1403 are both 2.x.y+ent-1 where Community vault is
+# 2.x.y-1 -- plain '+ent', not '+ent.fips1403'.
 # Same base version, suffix only on Enterprise. So a bare pin like "2.1.1"
 # resolves vault-enterprise-2.1.1, which matches nothing and fails with "no
 # package available".
@@ -138,6 +148,14 @@ __vault_is_hsm_capable: "{{ 'hsm' in vault_edition }}"
 #
 # The `'+ent' in ...` arm is load-bearing: an operator who already writes
 # 2.1.1+ent must not get 2.1.1+ent+ent.
+#
+# CONTRACT EDGES, measured on ansible-core 2.19.6 and deliberately NOT handled
+# -- vault_package_version is documented as version or version-release:
+#   2.1.1-rc1            -> 2.1.1-rc1+ent   (the -[0-9] anchor needs a digit)
+#   LATEST               -> LATEST+ent      ('latest' comparisons are case-sensitive)
+#   2.1.1-1.el9.x86_64   -> 2.1.1+ent-1.el9.x86_64  (arch swallowed as release)
+# All are outside the documented contract. Widening the pattern to catch them
+# would make it guess at strings the role does not claim to accept.
 __vault_ent_release: "{{ vault_package_version | regex_search('-[0-9][A-Za-z0-9._]*$') | default('', true) }}"
 __vault_ent_base: "{{ vault_package_version | regex_replace('-[0-9][A-Za-z0-9._]*$', '') }}"
 __vault_package_version_resolved: >-

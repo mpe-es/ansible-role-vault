@@ -50,7 +50,7 @@ for rel in ('tasks/configure.yml', 'tasks/tls.yml'):
 # vault_pki, adding a posture file) will fail here — bump the constant ONLY after
 # confirming the new/removed deploy is intentional and correctly root-owned.
 if checked != 9:
-    fail.append(f"posture-file deploy count = {checked}, expected 8 (block missed/renamed?)")
+    fail.append(f"posture-file deploy count = {checked}, expected 9 (block missed/renamed?)")
 
 # 2. The vault_tls_dir loop entry in system.yml must be owner: root.
 found = False

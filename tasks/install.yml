@@ -16,6 +16,7 @@
       resolved to '{{ __vault_package_version_resolved }}'. The +ent suffix is
       part of the Enterprise NEVRA; without it dnf matches no package.
   when:
+    - vault_manage_install | bool
     - vault_package_version != 'latest'
     - __vault_package_version_resolved != vault_package_version
 

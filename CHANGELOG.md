@@ -207,7 +207,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   accepted with that behaviour now written down. `molecule/init`'s Vault binary
   moves to 2.1.1 in the same change — it is the only scenario exercising a real
   `operator init` and unseal, and it was doing so against 1.18.5, across the 2.0
-  API boundary. (#62)
+  API boundary. **BREAKING for airgap and mirror consumers:** a pin that was
+  previously `latest` resolved to whatever the local repository carried, and now
+  hard-fails with "no package available" if that repository does not carry
+  2.1.1. Set `vault_package_version` to the version your mirror or Satellite
+  content view actually has. (#62)
 
 
 - **BREAKING: `vault_edition` no longer accepts `vault-enterprise` or the FIPS

@@ -86,7 +86,17 @@
   no_log: true
   diff: false
   notify: Restart vault
-  when: vault_license_content | length > 0
+  when:
+    # trim, matching the #41 PIN check 70 lines above: a whitespace-only survey
+    # answer would otherwise write a junk vault.hclic and Vault would fail with
+    # a PARSE error rather than the loud, attributable missing-licence error the
+    # design promises. default('', true) also survives a bare `key:` (YAML null).
+    - vault_license_content | default('', true) | trim | length > 0
+    # Edition-gated: Community renders no license_path, so writing secret
+    # material the config never references is pure exposure. Migrating
+    # Enterprise -> Community leaves the old file on disk; removing it is
+    # licence-lifecycle work and is deferred with #42's renewal scope.
+    - __vault_is_enterprise | bool
 
 - name: Deploy Vault server configuration
   ansible.builtin.template:

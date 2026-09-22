@@ -1379,11 +1379,14 @@
     - name: "RESOLVES - Community leaves the pin untouched"
       ansible.builtin.assert:
         that:
-          - __vault_package_version_resolved == '2.1.1'
+          - __vault_package_version_resolved == '1.18.3-1'
         fail_msg: "Community pin was rewritten to {{ __vault_package_version_resolved }}"
       vars:
         vault_edition: vault
-        vault_package_version: "2.1.1"
+        # NON-DEFAULT on purpose. With 2.1.1 (the role default) this case passes
+        # whether or not the task-scoped fixture applies -- vacuous. 1.18.3-1
+        # also proves Community does NOT split the release field.
+        vault_package_version: "1.18.3-1"
 
     - name: "RESOLVES - Enterprise gains the +ent suffix"
       ansible.builtin.assert:
