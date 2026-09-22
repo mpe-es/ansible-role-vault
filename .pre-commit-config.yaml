@@ -19,7 +19,22 @@ repos:
         types: [yaml]
 
   # Ansible Linting
-  # Note: ansible-core 2.17+ requires Python 3.10+, so we specify python3.11
+  # Note: ansible-core 2.17+ requires Python 3.10+, so we specify python3.11.
+  #
+  # ansible-core is pinned to the SAME version as requirements-dev.in, which is
+  # the single source of the pin -- CI installs it from requirements-dev.txt and
+  # no longer carries a version of its own (#65). This hook previously sat at
+  # 2.17.8 while CI verified against 2.19.13, so the hook that gates commits
+  # linted against a core two minor versions behind CI's, and a rule added
+  # between the two passed locally then failed in CI. That is the #78 defect:
+  # its close-out pinned ci.yml's five sites and never reached this file.
+  #
+  # pre-commit resolves additional_dependencies itself, so this cannot read the
+  # manifest -- it is the one place the version is necessarily duplicated. Keep
+  # it equal to requirements-dev.in's pin.
+  #
+  # ansible-core 2.20+ requires Python >= 3.12, so 2.19.13 is the ceiling while
+  # language_version is python3.11. Both move together, tracked in #91.
   - repo: https://github.com/ansible/ansible-lint
     rev: v25.1.0
     hooks:
@@ -27,7 +42,7 @@ repos:
         args: []
         language_version: python3.11
         additional_dependencies:
-          - ansible-core==2.17.8
+          - ansible-core==2.19.13
 
   # General file hygiene
   - repo: https://github.com/pre-commit/pre-commit-hooks

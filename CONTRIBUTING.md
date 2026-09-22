@@ -54,8 +54,26 @@ python --version    # Should show Python 3.11.x
 
 #### Installing Development Dependencies
 
-All Python dependencies are pinned in `requirements.txt` for consistency between
-local development and CI/CD. Choose **one** of the following installation methods:
+This repository keeps **two** pinned manifests, and you need both. They are not
+interchangeable:
+
+| File | Contains | Who needs it |
+|------|----------|--------------|
+| `requirements.txt` | The **runtime** dependency chain only — `hvac` (for `community.hashi_vault` on the target) and `netaddr` (for `ansible.utils.ipaddr` on the controller) | The role at run time |
+| `requirements-dev.txt` | The **development toolchain** — `ansible-core`, `ansible-lint`, `yamllint`, `molecule`, `molecule-plugins[podman]`, `pre-commit` | You, to run the gates below |
+
+Both are compiled with `pip-compile --generate-hashes` from their `.in` source
+files, so installs are reproducible and hash-verified. **CI installs from the
+same two files**, which is what keeps your local toolchain and CI's identical —
+`ansible-core` in particular is pinned to one version across
+`requirements-dev.in`, `.github/workflows/ci.yml` and `.pre-commit-config.yaml`,
+and those three move together or not at all.
+
+> **NOTE**: `shellcheck` is a **system** package, not a Python distribution.
+> Install it from your distribution (`dnf install ShellCheck`) — it is declared
+> in `bindep.txt`, not in either Python manifest.
+
+Choose **one** of the following installation methods:
 
 ##### Option A: System-wide Installation (Simpler)
 
@@ -65,7 +83,10 @@ Install tools directly using the `python` (3.11) command:
 # Upgrade pip first
 python -m pip install --upgrade pip
 
-# Install all dev dependencies from requirements.txt
+# Install the development toolchain (linters, molecule, pre-commit)
+python -m pip install -r requirements-dev.txt
+
+# Install the runtime dependency chain
 python -m pip install -r requirements.txt
 ```
 
@@ -85,8 +106,9 @@ source ~/.bashrc
 source ~/.venv/ansible-dev/bin/activate
 # Or use the alias: ansible-dev
 
-# Install dependencies inside the venv
+# Install dependencies inside the venv -- both manifests
 pip install --upgrade pip
+pip install -r requirements-dev.txt
 pip install -r requirements.txt
 
 # Deactivate when done

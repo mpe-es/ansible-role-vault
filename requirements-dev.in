@@ -1,0 +1,94 @@
+# DEVELOPMENT dependencies for ansible-role-vault -- the toolchain a contributor
+# needs to run the gates CONTRIBUTING.md requires before submitting (#65).
+#
+# This is NOT requirements.txt. That file pins the RUNTIME dependency chain
+# (hvac for community.hashi_vault on the target, netaddr for ansible.utils.ipaddr
+# on the controller). Nothing in it is a linter. CONTRIBUTING.md claimed
+# otherwise at lines 57, 68-69 and 90, which left every new contributor without
+# a single tool the same document told them to run.
+#
+# Source file for pip-compile. DO NOT edit requirements-dev.txt directly.
+#
+# Dependency UPDATES are Dependabot's job -- .github/dependabot.yml sets the
+# cooldown floor and the grouping, and it maintains the compiled lock directly.
+# Do not hand-bump a version here or there.
+#
+# This file is edited only to ADD or REMOVE a dependency, which Dependabot does
+# not do. After editing, regenerate the lock on the platform CI installs it on:
+#
+#   podman run --rm --platform linux/amd64 -v "$PWD:/w" -w /w python:3.11-slim \
+#     sh -c 'pip install -q pip-tools && \
+#            pip-compile --generate-hashes --output-file=requirements-dev.txt requirements-dev.in'
+#
+# The same two constraints requirements.in documents apply here, for the same
+# measured reasons: run it in that container (--generate-hashes enumerates only
+# the wheels the resolver can SEE, which is OS/arch/Python dependent), and run it
+# against the EXISTING requirements-dev.txt rather than a fresh path, so nothing
+# is silently upgraded behind Dependabot's back.
+#
+# Classification: UNCLASSIFIED
+
+###############################################################################
+# Ansible toolchain
+###############################################################################
+
+# THE SINGLE SOURCE OF THE ansible-core PIN. CI installs it from the compiled
+# requirements-dev.txt and carries no version of its own -- .github/workflows/ci.yml
+# had an ANSIBLE_CORE_VERSION env var until #65 removed it, precisely so this value
+# lives in one place.
+#
+# Two things elsewhere stay coupled to it and CANNOT read it:
+#   .pre-commit-config.yaml  ansible-lint additional_dependencies (pre-commit
+#                            resolves those itself) -- keep it equal to this pin
+#   .github/workflows/ci.yml PYTHON_VERSION (see below)
+#
+# Gotcha 3 from the #78 lessons: pinning a toolchain version pins TWO things.
+# ansible-core 2.20+ requires Python >= 3.12. CI runs Python 3.11, so 2.19.13 is the
+# CEILING -- raising it here without raising PYTHON_VERSION fails at install time with
+# "No matching distribution found", which is exactly how the first #78 pin attempt broke.
+#
+# Before this file existed, three versions were live and no two agreed: ci.yml at
+# 2.19.13, .pre-commit-config.yaml at 2.17.8, and whatever a contributor's machine
+# resolved. The hook gating commits linted against a core two minor versions behind
+# the one CI verified against -- a rule added between 2.17 and 2.19 passed locally and
+# failed in CI. The #78 close-out pinned ci.yml's five sites and never reached the hook
+# config; this file is where that is reconciled.
+#
+# DELIBERATE NEXT STEP, tracked separately: raise the floor to Python 3.12 +
+# ansible-core 2.21.x as one reviewed arc. Do not bump this line alone.
+ansible-core==2.19.13
+
+# Ansible playbook/role linter. Gate: `ansible-lint` in the ci.yml lint job.
+ansible-lint
+
+# YAML linter, driven by .yamllint. Gate: `yamllint .` in the ci.yml lint job.
+yamllint
+
+###############################################################################
+# Molecule test harness
+###############################################################################
+
+# Scenario runner for molecule/{default,init,hsm,preflight}.
+molecule
+
+# Podman driver. The CI molecule jobs and the local harness both use podman,
+# never docker -- the extras marker is what pulls the driver plugin.
+molecule-plugins[podman]
+
+###############################################################################
+# Commit-time hooks
+###############################################################################
+
+# Runs .pre-commit-config.yaml. Also the delivery mechanism for #61's opt-in
+# pre-push stage, which cannot work until this file exists.
+pre-commit
+
+###############################################################################
+# NOT here, deliberately
+###############################################################################
+#
+#   shellcheck  -- a system package, not a Python distribution. It belongs in
+#                  bindep.txt alongside openssl, and #47 tracks consolidating and
+#                  pinning its coverage repo-wide.
+#   hvac        -- runtime, not dev. Lives in requirements.in.
+#   netaddr     -- controller-side runtime. Lives in requirements.in.

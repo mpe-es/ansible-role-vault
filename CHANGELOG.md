@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A dev-dependency manifest, and a `CONTRIBUTING.md` that no longer misdirects
+  every new contributor.** The setup section instructed contributors to install
+  the development toolchain with `pip install -r requirements.txt`
+  (`CONTRIBUTING.md:57`, `:68-69`, `:90`). That file pins the **runtime** chain
+  only — `hvac` for `community.hashi_vault` on the target and `netaddr` for
+  `ansible.utils.ipaddr` on the controller — and contains **not one** of the
+  tools the same document then requires them to run. Anyone following the
+  documented setup verbatim ended up without `yamllint`, `ansible-lint`,
+  `molecule`, `pre-commit` or `ansible-core`, and discovered it when a gate
+  failed or, worse, when CI caught what they could not run locally. The
+  authoritative tool list was in practice `.github/workflows/ci.yml`, duplicated
+  across five install sites and unpinned. New `requirements-dev.in` /
+  `requirements-dev.txt`, compiled with the same
+  `pip-compile --generate-hashes` discipline `requirements.txt` already uses, now
+  carry that toolchain — and **CI installs from it**, so contributors and CI share
+  one hash-verified list and the five duplicated install blocks collapse to a
+  file reference. The two manifests hold zero packages in common, verified before
+  wiring, so installing both cannot silently re-resolve the other. `shellcheck`
+  is deliberately absent: it is a system package, declared in `bindep.txt`, and
+  #47 tracks consolidating its coverage. Unblocks #61, whose opt-in pre-push hook
+  cannot work until the tools it invokes are installable. (#65)
+
+
 - **Preflight gate for the certificate SAN contract.** Preflight verified that the
   TLS trio *exists* and never looked inside it, so a certificate missing the
   `127.0.0.1` IP SAN passed all twelve gates, the role converged the host in full
@@ -137,6 +160,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [#69](https://github.com/mpe-es/ansible-role-vault/issues/69).
 
 ### Changed
+
+- **The `ansible-core` pin is single-sourced; `ANSIBLE_CORE_VERSION` is gone from
+  CI.** #78 pinned core at five sites in `.github/workflows/ci.yml` to end the
+  local/CI drift that made "verified" claims unreliable. It never reached
+  `.pre-commit-config.yaml`, which went on pinning `ansible-core==2.17.8` in
+  ansible-lint's `additional_dependencies` while CI verified against `2.19.13` —
+  so **the hook that gates commits linted against a core two minor versions
+  behind CI's**, and any rule added between the two passed locally and failed in
+  CI. That is the #78 defect rebuilt in the one file its close-out did not open,
+  and it is invisible from either file alone. The pin now lives in
+  `requirements-dev.in` alone; CI installs it from the compiled manifest and
+  carries **no version of its own**, because an env var pinning the same value
+  would be a second source of truth that still reads as authoritative.
+  `.pre-commit-config.yaml` remains the one necessary duplicate — `pre-commit`
+  resolves `additional_dependencies` itself and cannot read a manifest — and is
+  now equal to the manifest and documented as such. `PYTHON_VERSION` stays in CI
+  and stays coupled: core 2.20+ requires Python >= 3.12, so `2.19.13` is a
+  **ceiling imposed by Python 3.11**, not a chosen version. Raising both
+  deliberately is tracked in #91. (#65, #78)
+
 
 - **CI pins `ansible-core` and the Python version together.** `ansible-core` was
   installed unpinned at five sites; the #36 close-out had already identified that
