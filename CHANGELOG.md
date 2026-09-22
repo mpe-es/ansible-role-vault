@@ -465,10 +465,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   which under AAP is the ephemeral EE job container — Vault comes up initialized
   and unsealed, the job reports success, and nobody holds a root token or a
   single unseal key. The `service.yml:46` gate cannot catch it, because a path
-  inside the EE is both set and absolute. Three mitigations are documented, each
-  turning on an explicit host-to-container mount: a container-group pod spec, an
-  execution node with the directory listed under **Paths to expose to isolated
-  jobs** (`AWX_ISOLATION_SHOW_PATHS`), or not initializing from AAP at all.
+  inside the EE is both set and absolute. Three mitigations are documented. The
+  two that keep initialization in AAP each turn on an explicit host-to-container
+  mount — a container-group pod spec, or an execution node with the directory
+  listed under **Paths to expose to isolated jobs**
+  (`AWX_ISOLATION_SHOW_PATHS`). The third avoids the mount entirely by not
+  initializing from AAP, which is the only option not contingent on a mount
+  being configured correctly.
   **Choosing an execution node is not by itself a mitigation** — mesh nodes run
   jobs through `ansible-runner` under Podman isolation exactly as container
   groups do, so the host's disk is invisible to the job unless a path is exposed.
@@ -485,7 +488,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   EE: `community.general` (required — `sefcontext` is on by default and
   the EE ships 46 collections with **none** in the `community` namespace) and,
   conditionally, `community.hashi_vault` plus `hvac` on the managed host; a
-  a `collections/requirements.yml` **in the consuming AAP project**, since
+  `collections/requirements.yml` **in the consuming AAP project**, since
   automation controller discovers project collections only at that path and does
   not read this role's top-level `requirements.yml`; a Galaxy credential
   alongside it, which changes nothing on its own; and

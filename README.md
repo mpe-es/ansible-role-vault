@@ -355,8 +355,10 @@ both.
 > execution environment. "A node with real storage" is not custody — the host's
 > disk is not visible to the container unless a path is explicitly exposed.
 
-**Required mitigation — one of. Each depends on an explicit host-to-container
-mount; verify the mount exists before the first initializing run, not after.**
+**Required mitigation — one of. Options 1 and 2 keep initialization in AAP and
+therefore depend on an explicit host-to-container mount; verify that mount
+exists before the first initializing run, not after. Option 3 avoids the
+mount entirely by moving initialization out of AAP.**
 
 1. **Container group** — a custom pod spec declaring a volume mounted at
    `vault_init_capture_dir`.
