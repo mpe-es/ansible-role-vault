@@ -31,7 +31,7 @@ Environment=VAULT_ADDR=https://127.0.0.1:{{ vault_listener_port }}
     unit would time out at every boot and the cluster would stay sealed -- the exact
     failure the auto-unseal service exists to prevent. Runs as root, which is what can
     read the 0640 vault:vault private key. #}
-{% if (vault_tls_require_client_cert | default(false) | string | lower) in ['true', 'yes', '1', 'on', 't', 'y'] %}
+{% if (vault_tls_require_client_cert | default(false) | string | lower) in ['true', 'yes', 'on', '1'] %}
 Environment=VAULT_CLIENT_CERT={{ vault_tls_cert_file }}
 Environment=VAULT_CLIENT_KEY={{ vault_tls_key_file }}
 {% endif %}

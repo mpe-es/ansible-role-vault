@@ -1662,6 +1662,39 @@
               - __looped_msgs is search('not a bare host or IP')
             fail_msg: "wrong cause: {{ ansible_failed_result.msg | default('') }}"
 
+    # The LEGACY scalar goes through the identical leader_api_addr expression in the
+    # template, so it is validated by the same gate -- it previously had none at all.
+    - name: "FIRES - a legacy leader address carrying a scheme"
+      block:
+        - name: Run cluster with a URL as the legacy leader address
+          ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/cluster.yml
+          vars:
+            vault_cluster_members: []
+            vault_cluster_leader_addr: "https://vault-vip.mpe.mil"
+            vault_init_host: ""
+        - name: A legacy leader address with a scheme should not have passed
+          ansible.builtin.fail:
+            msg: "the gate accepted a legacy join address carrying a URL scheme"
+      rescue:
+        - name: Assert the message names the bare-host rejection
+          vars:
+            __looped_msgs: "{{ ansible_failed_result.results | default([]) | map(attribute='msg') | join(' ') }}"
+          ansible.builtin.assert:
+            that:
+              - __looped_msgs is search('not a bare host or IP')
+            fail_msg: "wrong cause: {{ ansible_failed_result.msg | default('') }}"
+
+    - name: "PASSES - a bare legacy leader address"
+      ansible.builtin.include_role:
+        name: ansible-role-vault
+        tasks_from: preflight/cluster.yml
+      vars:
+        vault_cluster_members: []
+        vault_cluster_leader_addr: vault-vip.mpe.mil
+        vault_init_host: ""
+
     - name: "FIRES - a peer list given as a string"
       block:
         - name: Run cluster with a string where a list belongs

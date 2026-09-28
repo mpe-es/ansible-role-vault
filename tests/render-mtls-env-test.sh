@@ -16,7 +16,11 @@
 #      meta/argument_specs.yml types the variable `bool` and every task-side
 #      `| bool` reads them as TRUE. mTLS was therefore enabled everywhere EXCEPT
 #      the rendered files.
-# Both forms are in the table below so neither can come back.
+#   3. a truthy set of true/yes/on/1/t/y -- a SUPERSET of Ansible's. MEASURED on
+#      ansible-core 2.21.4: `"t" | bool` and `"y" | bool` are FALSE (with a
+#      deprecation warning), so those two forms disagreed in the other direction.
+# All three forms are in the table below so none can come back. The rule is that the
+# template must agree with `| bool` exactly -- not a subset, not a superset.
 #
 # `| bool` CANNOT BE USED IN THESE TEMPLATES. tests/render-hsm-pin-test.sh renders
 # vault.hcl.j2 under plain Jinja with no Ansible scope, so only Jinja builtins are
@@ -99,19 +103,40 @@ check () {
   echo "ok: $tpl $label -> $( [ "$want" = yes ] && echo 'client identity present' || echo 'no client identity' )"
 }
 
-# Every form meta/argument_specs.yml's `type: bool` accepts, plus the two that
-# previously broke. Ansible's truthy set is true/yes/on/1/t/y, case-insensitive.
+# Ansible's truthy set, MEASURED on the pinned core: true / yes / on / 1,
+# case-insensitive. "t" and "y" are FALSE there and must be FALSE here.
 for tpl in vault.hcl.j2 vault-unseal.service.j2 vault.env.j2; do
   check "$tpl" 'true'    yes 'bool true'
   check "$tpl" '"true"'  yes 'string "true"'
   check "$tpl" '"True"'  yes 'string "True"'
-  check "$tpl" '"yes"'   yes 'string "yes"   (read as FALSE by the == comparison)'
-  check "$tpl" '1'       yes 'integer 1      (read as FALSE by the == comparison)'
+  check "$tpl" '"yes"'   yes 'string "yes"   (the == comparison read this FALSE)'
+  check "$tpl" '1'       yes 'integer 1      (the == comparison read this FALSE)'
   check "$tpl" '"on"'    yes 'string "on"'
   check "$tpl" 'false'   no  'bool false'
-  check "$tpl" '"false"' no  'string "false" (rendered by bare truthiness)'
+  check "$tpl" '"false"' no  'string "false" (bare truthiness rendered this)'
   check "$tpl" '"no"'    no  'string "no"'
   check "$tpl" '0'       no  'integer 0'
+  check "$tpl" '"t"'     no  'string "t"     (a superset read this TRUE; | bool says false)'
+  check "$tpl" '"y"'     no  'string "y"     (a superset read this TRUE; | bool says false)'
+done
+
+# The LISTENER value, not just the retry_join fields. `| lower` on the string "yes"
+# rendered `tls_require_and_verify_client_cert = yes`, which is not an HCL boolean
+# literal -- an accepted input producing invalid configuration.
+listener () {  # $1=json value -> the rendered listener line's value
+  render vault.hcl.j2 "{\"vault_tls_require_client_cert\": $1}" || { echo RENDER_FAILED; return; }
+  sed -n 's/^  tls_require_and_verify_client_cert = \(.*\)$/\1/p' "$WORK/out"
+}
+for pair in 'true:true' '"true":true' '"yes":true' '1:true' '"on":true' \
+            'false:false' '"false":false' '"no":false' '0:false' '"t":false' '"y":false'; do
+  val="${pair%:*}"; want="${pair##*:}"
+  got="$(listener "$val")"
+  if [ "$got" = "$want" ]; then
+    echo "ok: listener value for $val -> $got"
+  else
+    echo "FAIL: listener value for $val -> '$got', expected '$want' (must be an HCL boolean literal)"
+    fail=1
+  fi
 done
 
 # Non-vacuity: the grep must be capable of matching at all, or every "no" case above

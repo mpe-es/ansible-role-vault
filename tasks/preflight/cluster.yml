@@ -39,12 +39,12 @@
     that:
       - __vault_peer_is_ip or __vault_peer_is_name
     fail_msg: >-
-      vault_cluster_members entry '{{ item }}' is not a bare host or IP. The
-      template adds https:// and vault_listener_port and brackets IPv6 itself, so
-      a peer carries neither. The sibling variables vault_api_addr and
+      Join address '{{ item }}' is not a bare host or IP. The template adds
+      https:// and vault_listener_port and brackets IPv6 itself, so a join address
+      carries neither. The sibling variables vault_api_addr and
       vault_cluster_addr ARE full URLs, so copying their form here renders
       https://https://host:8200:8200.
-    success_msg: "Peer '{{ item }}' is a bare host or IP"
+    success_msg: "Join address '{{ item }}' is a bare host or IP"
     quiet: true
   vars:
     # NOT urlsplit('scheme'). That test was measured wrong in BOTH directions on
@@ -83,7 +83,10 @@
       {{ item is string and item | length > 0 and item | length <= 253
          and (item is match(__vault_peer_name_re))
          and not (item is match('^[0-9.]+$')) }}
-  loop: "{{ vault_cluster_members | default([]) }}"
+  loop: >-
+    {{ (vault_cluster_members | default([]))
+       + ([vault_cluster_leader_addr]
+          if (vault_cluster_leader_addr | default('') | length > 0) else []) }}
 
 - name: "Preflight | cluster | an HA cluster names its init host"
   ansible.builtin.assert:

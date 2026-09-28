@@ -692,7 +692,7 @@ See the initialization warning at the top of this section before enabling
 | `vault_cluster_addr` | `https://{{ ansible_facts['fqdn'] }}:8201` | Cluster replication address |
 | `vault_cluster_members` | `[]` | Raft peers, one `retry_join` stanza each. **Bare host or IP** — no scheme, no port, no CIDR prefix; the template adds both and brackets IPv6, including ULA (`fd00::/8`). Validated with `ansible.utils.ipaddr` plus a DNS-label pattern; a **zone-indexed** link-local such as `fe80::1%eth0` is rejected, so link-local peers are not usable in practice. An all-numeric name such as `123` is rejected too — legal DNS syntax, but here it is a mistyped address. Every entry must be a SAN on that peer's listener certificate. Empty means single-node |
 | `vault_init_host` | `""` | The one node that runs `operator init`. **Required** when `vault_cluster_members` is set. Empty means this host (single-node). Must be in the play |
-| `vault_cluster_leader_addr` | `""` | **Deprecated for HA** — renders a single `retry_join` stanza, which is not the Raft join contract. Mutually exclusive with `vault_cluster_members`. The HA VIP belongs on client traffic, not here |
+| `vault_cluster_leader_addr` | `""` | **Deprecated for HA** — renders a single `retry_join` stanza, which is not the Raft join contract. Mutually exclusive with `vault_cluster_members`. The HA VIP belongs on client traffic, not here. Same **bare host or IP** shape as `vault_cluster_members`, validated by the same gate, and its stanza carries the same IPv6 bracketing and mTLS client identity |
 
 ### TLS Certificate Deployment
 

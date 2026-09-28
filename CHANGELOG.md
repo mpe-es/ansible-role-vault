@@ -100,6 +100,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   seven omissions; it caught that the guard was ignoring its root argument and silently
   re-checking the real tree, which would have made every mutation claim false.
 
+  **Every boolean rendered into `vault.hcl` is normalized, not just the mTLS one.** This
+  was never one line. `{{ x | lower }}` renders the **string** `"yes"` as `= yes`, which is
+  not an HCL boolean literal, so an input `meta/argument_specs.yml` declares `type: bool`
+  produced invalid configuration — and it applied to `ui`, `disable_mlock` (which keeps
+  secrets out of swap), `disable_performance_standby`, `generate_key` and
+  `tls_disable_client_certs`. A bare `{% if vault_hsm_enabled %}` was the same defect in
+  its other form: the string `"false"` is truthy to Jinja, so it would have rendered a
+  `pkcs11` seal stanza onto a node with no HSM. One `hcl_bool()` macro now normalizes all
+  of them.
+
+  **`retry_join` has ONE definition.** The legacy `vault_cluster_leader_addr` scalar
+  rendered its own copy of the stanza, so it silently missed **both** the IPv6 bracketing
+  and the mTLS client credentials the peer loop had gained — `fd00::99` rendered as
+  `https://fd00::99:8200`, unbracketed and invalid, and the stanza had no client identity
+  at all. It also had **no shape validation whatever**: every rejection class built for
+  `vault_cluster_members` simply did not apply to it. Both paths now render through one
+  Jinja macro and are validated by one gate, which makes the divergence unrepresentable
+  rather than merely fixed.
+
+  **`tests/render-retry-join-test.sh` now checks HCL STRUCTURE, not only field names.**
+  The first version of that shared macro used `{%- if %}`, which strips the preceding
+  newline and rendered two attributes on one line with `}` on the end of another — invalid
+  HCL that every name-based check passed. The structural assertion (one assignment per
+  line, no assignment sharing a line with a brace) was verified to fail on exactly that
+  malformation.
+
   **The rendered condition matches Ansible's own boolean set.** `{% if x | default(false) %}`
   rendered credentials for the **string** `"false"`; a first correction to
   `| lower == 'true'` then read `1` and `"yes"` as false, although

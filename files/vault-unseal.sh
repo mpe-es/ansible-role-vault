@@ -24,6 +24,20 @@ RETRY_INTERVAL="${VAULT_UNSEAL_RETRY_INTERVAL:-2}"
 export VAULT_ADDR="${VAULT_ADDR:-https://127.0.0.1:8200}"
 export VAULT_CACERT="$VAULT_CA_FILE"
 
+# Client identity, defaulted the same way the CA above is. The systemd unit exports
+# these when vault_tls_require_client_cert is set, but this script is installed in
+# /usr/local/bin and WILL be run by hand during an incident -- and on a listener with
+# tls_require_and_verify_client_cert both `vault status` and `vault operator unseal`
+# fail TLS without them. Only exported when the files are actually present, so a
+# non-mTLS host is unaffected; a server that does not request a client certificate
+# never receives one.
+VAULT_CLIENT_CERT_FILE="${VAULT_CLIENT_CERT:-/opt/vault/tls/tls.crt}"
+VAULT_CLIENT_KEY_FILE="${VAULT_CLIENT_KEY:-/opt/vault/tls/tls.key}"
+if [ -r "$VAULT_CLIENT_CERT_FILE" ] && [ -r "$VAULT_CLIENT_KEY_FILE" ]; then
+  export VAULT_CLIENT_CERT="$VAULT_CLIENT_CERT_FILE"
+  export VAULT_CLIENT_KEY="$VAULT_CLIENT_KEY_FILE"
+fi
+
 # Reject a symlinked tokens file BEFORE any follow: -r/stat/source all
 # follow the link, so a symlink whose lexical parent is trusted but whose
 # TARGET sits under an attacker-writable directory would pass the guard

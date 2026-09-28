@@ -113,6 +113,46 @@ else
   echo "FAIL: client credentials rendered although require_client_cert is false"; fail=1
 fi
 
+# STRUCTURE, not just field names. The mTLS fields were first added inside a macro whose
+# `{%- if %}` stripped the preceding NEWLINE, rendering
+#   leader_ca_cert_file = "..."    leader_client_cert_file = "..."
+# and `}` on the end of another attribute line -- two attributes per line is invalid HCL,
+# and a grep for field NAMES passed on it. Every check above is name-based; this one is
+# the only thing here that would have caught it.
+structure () {  # -> a complaint per malformed line, or nothing
+  awk '
+    /^[[:space:]]*#/ { next }                      # comments may contain anything
+    {
+      n = gsub(/[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=/, "&")
+      if (n > 1) print "  two or more assignments on line " NR ": " $0
+      if ($0 ~ /=/ && $0 ~ /\}/) print "  assignment shares a line with a brace, line " NR ": " $0
+    }
+  ' "$WORK/out.hcl"
+}
+for js in '{"vault_cluster_members": ["a.mpe.mil","fd00::9"], "vault_cluster_leader_addr": "", "vault_tls_require_client_cert": true}' \
+          '{"vault_cluster_members": ["a.mpe.mil"], "vault_cluster_leader_addr": "", "vault_tls_require_client_cert": false}' \
+          '{"vault_cluster_members": [], "vault_cluster_leader_addr": "vip.mpe.mil", "vault_tls_require_client_cert": true}' \
+          '{"vault_cluster_members": [], "vault_cluster_leader_addr": "fd00::99", "vault_tls_require_client_cert": true}'; do
+  render "$js" >/dev/null
+  bad="$(structure)"
+  if [ -n "$bad" ]; then
+    echo "FAIL: malformed HCL for $js"; printf '%s\n' "$bad"; fail=1
+  else
+    echo "ok: one assignment per line, braces on their own lines"
+  fi
+done
+
+# THE LEGACY SCALAR IS THE SAME STANZA. It was a separate copy of the block and silently
+# missed both the IPv6 bracketing and the mTLS credentials the peer loop had gained, so
+# it is now rendered by the same macro -- and pinned here in both respects.
+check "legacy scalar brackets IPv6"               '{"vault_cluster_members": [], "vault_cluster_leader_addr": "fd00::99"}' 1 'https://\[fd00::99\]:8200'
+render '{"vault_cluster_members": [], "vault_cluster_leader_addr": "vip.mpe.mil", "vault_tls_require_client_cert": true}' >/dev/null
+if [ "$(grep -c 'leader_client_cert_file' "$WORK/out.hcl")" = "1" ] && [ "$(grep -c 'leader_client_key_file' "$WORK/out.hcl")" = "1" ]; then
+  echo "ok: legacy scalar carries the mTLS client identity too"
+else
+  echo "FAIL: legacy scalar stanza has no client identity under mTLS"; fail=1
+fi
+
 check "five peers -> five stanzas"               '{"vault_cluster_members": ["v1","v2","v3","v4","v5"], "vault_cluster_leader_addr": ""}' 5
 
 exit "$fail"
