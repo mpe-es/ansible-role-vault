@@ -253,7 +253,7 @@ simpler format:
 ```yaml
 - name: vault | Install HashiCorp Vault package
   ansible.builtin.dnf:
-    name: "vault-{{ vault_package_version }}"
+    name: "{{ vault_package_name }}-{{ __vault_package_version_resolved }}"
     state: "{{ vault_package_state }}"
   tags:
     - vault

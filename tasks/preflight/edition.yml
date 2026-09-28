@@ -1,0 +1,36 @@
+---
+###############################################################################
+# Filename: tasks/preflight/edition.yml
+# Role: ansible-role-vault
+# Summary: Preflight gate - edition contract (a PKCS#11 seal needs an HSM build)
+# Classification: UNCLASSIFIED
+###############################################################################
+# templates/vault.hcl.j2 gates the seal "pkcs11" stanza on vault_hsm_enabled
+# ALONE -- nothing there correlates the seal with the edition that can provide
+# it. Without this gate, enabling HSM on a Community binary renders a PKCS#11
+# seal into vault.hcl, the role reports success, and the service fails opaquely
+# at start: the same late-failure-after-mutation class as #85 and #28.
+#
+# ALSO INCLUDED FROM tasks/configure.yml. Preflight is Phase 1 and fails before
+# any mutation, but tasks/main.yml tags configure.yml separately and dynamic
+# include_tasks do not propagate tags -- so a --tags configure or
+# --skip-tags preflight run (which every converge molecule scenario uses) never
+# reaches this file via preflight. Including it from configure.yml puts the same
+# assert on the render path. Same reasoning as the #41 PIN checks.
+#
+# There is deliberately NO license assert here. An Enterprise edition selected
+# without a license fails at service start, which is loud, immediate and
+# attributable -- a gate would add a code path and a test axis to prevent a
+# failure that already reports itself clearly (operator ruling, 2026-09-22).
+- name: "Preflight | edition | PKCS#11 seal requires an HSM-capable edition"
+  ansible.builtin.assert:
+    that:
+      - __vault_is_hsm_capable | bool
+    fail_msg: >-
+      vault_hsm_enabled is true but vault_edition is '{{ vault_edition }}',
+      which is not an HSM-capable build. The PKCS#11 seal is available only on
+      Enterprise HSM builds -- select vault-enterprise-hsm-fips1403.
+    success_msg: >-
+      Edition {{ vault_edition }} supports the PKCS#11 seal
+  register: __vault_edition_marker
+  when: vault_hsm_enabled | bool

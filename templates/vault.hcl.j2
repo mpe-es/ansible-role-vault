@@ -12,9 +12,29 @@ ui            = {{ vault_ui_enabled | lower }}
 disable_mlock = {{ vault_disable_mlock | lower }}
 log_level     = "{{ vault_log_level }}"
 
+{# Inline edition test, NOT __vault_is_enterprise, deliberately. This template
+   is rendered standalone by tests/render-hsm-pin-test.sh, which pins its
+   variables by hand and loads no role scope -- the property that makes it a
+   container-free lock proving the HSM PIN never lands in vault.hcl (#41).
+   Routing it through the derived fact made that test die on
+   "'__vault_is_enterprise' is undefined". A template that only renders inside
+   the role is a template its cheapest test cannot reach. #}
 {% if vault_edition is match('vault-enterprise') %}
-# Enterprise-only parameter
+# Enterprise-only parameters
 disable_performance_standby = {{ vault_disable_performance_standby | lower }}
+# Autoloaded license (#42). Written by tasks/configure.yml when
+# vault_license_content is supplied, and REMOVED by it when the desired state
+# supplies none -- see vault_license_manage_state. Referenced unconditionally
+# for Enterprise.
+#
+# What Vault does when this file is MISSING is deliberately not claimed here.
+# An expired licence does not block start: Vault comes up and loses Enterprise
+# features until a valid one is supplied (operator, 28 Sep 2026). The absent
+# case has never been measured against a real Enterprise binary. The role
+# therefore reports a licence removal itself rather than relying on Vault to
+# raise the alarm. VAULT_LICENSE and VAULT_LICENSE_PATH both take precedence
+# over this path if an operator already uses them.
+license_path                = "{{ vault_config_dir }}/vault.hclic"
 {% endif %}
 
 ###############################################################################

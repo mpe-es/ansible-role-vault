@@ -9,9 +9,25 @@
 ###############################################################################
 # Package Installation
 ###############################################################################
+- name: "Install | report the Enterprise NEVRA suffix applied to the version pin"
+  ansible.builtin.debug:
+    msg: >-
+      Enterprise edition selected: version pin '{{ vault_package_version }}'
+      resolved to '{{ __vault_package_version_resolved }}'. The +ent suffix is
+      part of the Enterprise NEVRA; without it dnf matches no package.
+  when:
+    - vault_manage_install | bool
+    - vault_package_version != 'latest'
+    - __vault_package_version_resolved != vault_package_version
+
 - name: Install Vault package
   ansible.builtin.dnf:
-    name: "{{ vault_package_name }}{% if vault_package_version != 'latest' %}-{{ vault_package_version }}{% endif %}"
+    # __vault_package_version_resolved, NOT vault_package_version: Enterprise
+    # NEVRA carries +ent in the version field and a bare pin matches no package
+    # (#62). tests/assert-install-uses-resolved-version.sh locks this, because
+    # every molecule scenario sets vault_manage_install: false so reverting it
+    # is invisible to the whole suite.
+    name: "{{ vault_package_name }}{% if vault_package_version != 'latest' %}-{{ __vault_package_version_resolved }}{% endif %}"
     state: "{{ vault_package_state }}"
   register: __vault_install_pkg
   notify: Enable vault

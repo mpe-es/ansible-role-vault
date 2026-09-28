@@ -46,7 +46,10 @@ cat > "$WORK/render.yml" <<EOF
     vault_api_addr: https://127.0.0.1:8200
     vault_cluster_addr: https://127.0.0.1:8201
     vault_cluster_leader_addr: ""
-    vault_edition: "vault"
+    vault_edition: "vault-enterprise-hsm-fips1403"
+    # Required once the Enterprise branch renders license_path (#42); this
+    # playbook loads no role scope, so vars/main.yml:21 is not available.
+    vault_config_dir: /etc/vault.d
     vault_data_dir: /opt/vault/data
   tasks:
     - template: { src: "$ROOT/templates/vault.hcl.j2", dest: "$WORK/vault.hcl" }

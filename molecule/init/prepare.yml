@@ -11,7 +11,7 @@
   hosts: all
   gather_facts: false
   vars:
-    __vault_version: "{{ lookup('env', 'MOLECULE_VAULT_VERSION') | default('1.18.5', true) }}"
+    __vault_version: "{{ lookup('env', 'MOLECULE_VAULT_VERSION') | default('2.1.1', true) }}"
     __vault_url: >-
       {{ lookup('env', 'MOLECULE_VAULT_URL')
          | default('https://releases.hashicorp.com/vault/' ~ __vault_version

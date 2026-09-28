@@ -4,7 +4,7 @@
 # Role: ansible-role-vault
 # Summary: Internal variables for HashiCorp Vault role. These have higher
 #   precedence than defaults and should NOT be overridden by consumers.
-# Last Updated: 13 Aug 2026
+# Last Updated: 28 Sep 2026
 # Classification: UNCLASSIFIED
 ###############################################################################
 
@@ -16,7 +16,8 @@ vault_service_name: vault
 
 ###############################################################################
 # System Paths (HashiCorp RPM standard layout)
-# Verified against vault-1.21.4-1.x86_64 RPM
+# Verified against vault-1.21.4-1.x86_64 RPM. NOT re-verified against 2.x --
+# the default pin crossed a major boundary (#62); re-check on the next bump.
 ###############################################################################
 vault_config_dir: /etc/vault.d
 vault_config_file: /etc/vault.d/vault.hcl
@@ -94,3 +95,139 @@ vault_selinux_contexts:
 # fapolicyd Trust Management (internal)
 ###############################################################################
 vault_fapolicyd_trust_file: /etc/fapolicyd/trust.d/vault.trust
+
+###############################################################################
+# Edition Capability (derived -- never set these directly)
+###############################################################################
+# Capability is derivable from the edition name. These derive it once for TASK
+# consumers; `is match` is a PREFIX test, the same form templates/vault.hcl.j2
+# uses inline.
+#
+# templates/vault.hcl.j2 deliberately does NOT read these. It is rendered
+# standalone by tests/render-hsm-pin-test.sh with hand-pinned variables and no
+# role scope, so a derived fact is undefined there -- measured: routing the
+# Enterprise branch through __vault_is_enterprise failed that test with
+# "'__vault_is_enterprise' is undefined". The duplication is the cost of keeping
+# the template renderable outside the role, which is what makes that #41 lock
+# possible at all.
+#
+# Consumers cast with `| bool` defensively. Measured on ansible-core 2.19.6
+# these return native bools, but the vars-plugin return type is not contractual
+# across core versions and the cast is free.
+#
+# __vault_is_fips_build is deliberately NOT derived: every Enterprise choice in
+# vault_edition is a FIPS 140-3 build, so the fact would be a constant -- and a
+# constant dressed as a computed value is a check that looks like a guard and
+# is not one.
+__vault_is_enterprise: "{{ vault_edition is match('vault-enterprise') }}"
+__vault_is_hsm_capable: "{{ 'hsm' in vault_edition }}"
+
+# Enterprise NEVRA carries +ent in the VERSION field: measured against the live
+# repository (#62's dnf evidence), vault-enterprise-fips1403 and
+# vault-enterprise-hsm-fips1403 are both 2.x.y+ent-1 where Community vault is
+# 2.x.y-1 -- plain '+ent', not '+ent.fips1403'.
+# Same base version, suffix only on Enterprise. So a bare pin like "2.1.1"
+# resolves vault-enterprise-2.1.1, which matches nothing and fails with "no
+# package available".
+#
+# Appending here rather than rejecting in preflight is deliberate (operator
+# ruling, 2026-09-22): +ent is packaging trivia, not a version decision, so
+# vault_package_version means the same thing on either edition. The append is
+# REPORTED by tasks/install.yml, not silent -- an operator who pinned 2.1.1 for
+# an audit trail should see that 2.1.1+ent was installed.
+#
+# Split a trailing release field off before inserting the suffix. A pin may be
+# written version-only (2.1.1) or version-release (1.18.3-1). Appending blindly
+# yields 1.18.3-1+ent, which dnf reads as version 1.18.3 release 1+ent: no
+# match, the very defect this exists to remove. +ent belongs in the VERSION.
+#
+# The release pattern allows a dist tag. Measured: '-[0-9]+$' does NOT match
+# 1.18.3-1.el9, so that pin would resolve to 1.18.3-1.el9+ent -- release
+# '1.el9+ent'. '-[0-9][A-Za-z0-9._]*$' matches both -1 and -1.el9 while leaving
+# a version-only pin like 2.1.1 untouched.
+#
+# The `'+ent' in ...` arm is load-bearing: an operator who already writes
+# 2.1.1+ent must not get 2.1.1+ent+ent.
+#
+# CONTRACT EDGES, measured on ansible-core 2.19.6 and deliberately NOT handled
+# -- vault_package_version is documented as version or version-release:
+#   2.1.1-rc1            -> 2.1.1-rc1+ent   (the -[0-9] anchor needs a digit)
+#   LATEST               -> LATEST+ent      ('latest' comparisons are case-sensitive)
+#   2.1.1-1.el9.x86_64   -> 2.1.1+ent-1.el9.x86_64  (arch swallowed as release)
+# All are outside the documented contract. Widening the pattern to catch them
+# would make it guess at strings the role does not claim to accept.
+__vault_ent_release: "{{ vault_package_version | regex_search('-[0-9][A-Za-z0-9._]*$') | default('', true) }}"
+__vault_ent_base: "{{ vault_package_version | regex_replace('-[0-9][A-Za-z0-9._]*$', '') }}"
+__vault_package_version_resolved: >-
+  {{ vault_package_version
+     if (vault_package_version == 'latest'
+         or not (__vault_is_enterprise | bool)
+         or '+ent' in vault_package_version)
+     else __vault_ent_base ~ '+ent' ~ __vault_ent_release }}
+
+###############################################################################
+# License Desired State (derived -- never set this directly)
+# NIST 800-53: SC-28 (Protection of Information at Rest), IA-5 (Authenticator
+#   Management). Rationale for the control choice is in defaults/main.yml.
+###############################################################################
+# THREE states, not a boolean, because the role must distinguish "inventory
+# supplies no licence" from "inventory declines to manage the licence at all":
+#
+#   present    -- deploy vault.hclic from vault_license_content
+#   absent     -- REMOVE vault.hclic: the desired state supplies no licence, or
+#                 the selected edition renders no license_path that could read
+#                 one, so keeping it is residual entitlement material exposed
+#                 to the vault group for no operational reason
+#   unmanaged  -- touch NOTHING. The licence arrives out of band (golden image,
+#                 a separate playbook, VAULT_LICENSE / VAULT_LICENSE_PATH), and
+#                 vault_license_content is EMPTY BY DEFAULT -- so without this
+#                 state the very first routine role run would delete a file the
+#                 role never wrote and never had any claim to.
+#
+# Derived ONCE and consumed by BOTH licence tasks in tasks/configure.yml rather
+# than hand-negating the deploy task's `when:` into a second condition. Two
+# hand-written complements drift, and this repo has already paid for that: the
+# #41 PIN guard in molecule/hsm/verify.yml was a whole-file `diff: false`
+# substring check, and the moment #42 added a SECOND occurrence of that string
+# the guard stopped binding while still reporting green. A gap between two
+# negated conditions here means NEITHER licence task fires -- which is exactly
+# the defect this review found, reintroduced silently.
+#
+# Inputs:
+#   vault_license_manage_state  bool   defaults/main.yml -- false => unmanaged
+#   vault_license_content       string may be '', whitespace-only, or YAML null
+#   __vault_is_enterprise       bool   derived above
+#
+# Contract the two tasks rely on -- the value is always exactly one of the
+# three, and 'present' drives the copy while 'absent' drives the removal.
+#
+# vault_license_manage_state=false withholds ONLY the removal (operator ruling,
+# 28 Sep 2026 -- the NARROW reading, matching the variable's name):
+#
+#   present   => content supplied AND Enterprise   (manage_state IGNORED)
+#   absent    => manage_state AND NOT present
+#   unmanaged => NOT manage_state AND NOT present
+#
+# So 'unmanaged' can only ever displace 'absent', never 'present'. The rejected
+# BROAD reading -- the flag withholding all licence handling -- would have let a
+# consumer who set it defensively AND supplied a licence get no licence
+# deployed, silently: a new instance of the very failure class this arc exists
+# to close.
+#
+# The ordering is load-bearing. 'present' is tested FIRST and without reference
+# to manage_state, which is what makes the narrow reading true BY CONSTRUCTION
+# rather than by a reader's goodwill: there is no arm of this expression in
+# which manage_state can suppress a deploy.
+#
+# Emptiness is tested exactly as the deploy task tested it before this became a
+# derived value, so a whitespace-only survey answer is still not a licence, and
+# default('', true) still survives a bare `vault_license_content:` null.
+#
+# Measured, not reasoned about (tests/license-state-table-test.sh): ten cases on
+# ansible-core 2.19.13/Python 3.11 -- what CI runs -- and identical on 2.21.4,
+# the core #91 targets for the mpe-ee-rhel9 runtime.
+__vault_license_desired_state: >-
+  {{ 'present'
+     if (vault_license_content | default('', true) | trim | length > 0
+         and (__vault_is_enterprise | bool))
+     else ('absent' if (vault_license_manage_state | bool) else 'unmanaged') }}

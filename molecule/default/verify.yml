@@ -227,6 +227,23 @@
           - __verify_vault_hcl.stat.gr_name == 'vault'
         fail_msg: "vault.hcl has incorrect permissions or ownership (expect root:vault 0640, #38)"
 
+    - name: Stat the licence file after a default converge
+      ansible.builtin.stat:
+        path: /etc/vault.d/vault.hclic
+      register: __verify_licence
+
+    - name: "ABSENT - no licence file without vault_license_content"
+      # Community edition is the fixture here deliberately. An
+      # Enterprise-plus-empty-content case would bind more tightly to the
+      # copy task's when:, but there is no test licence available, so an
+      # Enterprise scenario cannot be converged end to end (operator ruling,
+      # 2026-09-22). The weaker binding is accepted and recorded rather than
+      # left for a reviewer to rediscover.
+      ansible.builtin.assert:
+        that:
+          - not __verify_licence.stat.exists
+        fail_msg: "vault.hclic was written with no licence content supplied (#42)"
+
     - name: Verify vault.env exists with correct permissions
       ansible.builtin.stat:
         path: /etc/vault.d/vault.env

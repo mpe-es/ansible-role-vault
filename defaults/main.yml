@@ -4,7 +4,7 @@
 # Role: ansible-role-vault
 # Summary: Default variables for HashiCorp Vault installation and STIG
 #   compliance. Override these in playbooks or inventory to customize behavior.
-# Last Updated: 13 Aug 2026
+# Last Updated: 28 Sep 2026
 # Classification: UNCLASSIFIED
 ###############################################################################
 
@@ -47,9 +47,15 @@ vault_repo_gpgcheck: true
 # Vault Package Configuration
 ###############################################################################
 # Vault package version to install. Use 'latest' for newest available or
-# pin to a specific version (e.g., '1.18.3-1') for reproducibility.
+# pin to a specific version (e.g., '2.1.1') for reproducibility.
+# PINNED BY DEFAULT. 'latest' means NEWEST AT FIRST INSTALL, not kept current:
+# combined with vault_package_state 'present' below, dnf installs the newest
+# available when Vault is absent and does not upgrade it afterwards, so hosts
+# built at different times run different versions and none of them ever move.
+# For Enterprise editions the role appends the '+ent' NEVRA suffix itself, so
+# the same value works on any edition.
 # In airgap environments, this must match what is available in the local repo.
-vault_package_version: "latest"
+vault_package_version: "2.1.1"
 
 # Vault package state for ansible.builtin.dnf
 # Options: 'present' (install if missing), 'latest' (upgrade to newest)
@@ -230,10 +236,64 @@ vault_rsyslog_port: 514
 ###############################################################################
 # Vault Edition
 # Controls the RPM package name installed.
-# 'vault' = Community (OSS), 'vault-enterprise' = Enterprise,
-# 'vault-enterprise-fips1403' = Enterprise with FIPS 140-3 crypto
+# Three choices, deliberately narrower than the seven the repository carries:
+#   vault                          Community (OSS) -- development and test
+#   vault-enterprise-fips1403      Enterprise, FIPS 140-3
+#   vault-enterprise-hsm-fips1403  Enterprise + HSM, opt-in
+# General Enterprise and both FIPS 140-2 builds are EXCLUDED: preflight requires
+# FIPS mode and cites FIPS 140-3, so offering them would contradict the gate.
+# vault_hsm_enabled requires the -hsm build (tasks/preflight/edition.yml).
 ###############################################################################
 vault_edition: "vault"
+
+###############################################################################
+# Vault Enterprise License
+# NIST 800-53: SC-28 (Protection of Information at Rest), IA-5 (Authenticator
+#   Management). NOT SC-12 -- a .hclic is a signed entitlement blob, not key
+#   material, and citing a control this does not implement is an audit finding.
+###############################################################################
+# Plain text -- the contents of a .hclic file. Supply from an AAP credential or
+# Ansible Vault; NEVER commit it. Rendered to {{ vault_config_dir }}/vault.hclic
+# as root:vault 0640 and referenced by license_path in vault.hcl.
+#
+# Empty supplies no license, and the role also REMOVES any vault.hclic already
+# on disk -- see vault_license_manage_state below.
+#
+# What VAULT does when no license is present is deliberately NOT claimed here.
+# An EXPIRED license does not block start: Vault comes up and loses Enterprise
+# features until a valid license is added (operator, 28 Sep 2026). Whether an
+# ABSENT license blocks start has never been measured against a real Enterprise
+# binary -- CI cannot, having no entitlement and no access to the paywalled
+# RPMs. The role therefore does NOT delegate the alarm to Vault; the removal
+# task in tasks/configure.yml reports the transition itself.
+#
+# This supersedes the reasoning recorded on 22 Sep 2026, which justified having
+# no preflight license gate on the ground that service start "fails loudly" when
+# the license is missing. That property was assumed, never measured, and is
+# false for the expiry case. The gate remains absent -- an operator ruling, now
+# resting on the cost of the extra code path and test axis rather than on an
+# unverified claim about the binary.
+vault_license_content: ""
+
+###############################################################################
+# Vault Enterprise License -- Manage the ABSENT State
+# NIST 800-53: CM-2 (Baseline Configuration), SC-28, IA-5
+###############################################################################
+# Whether the role owns the ABSENCE of vault.hclic, not only its presence.
+#
+# true (default) converges: clearing vault_license_content, or moving
+# vault_edition to a Community build, removes {{ vault_config_dir }}/vault.hclic.
+# Without this, a withdrawn or expired entitlement stays on disk AND stays
+# referenced by license_path -- so an Enterprise node keeps running on a license
+# the desired state explicitly retired, and the role reports success.
+#
+# Set false when the license is delivered OUT OF BAND -- baked into a golden
+# image, written by a separate playbook, or supplied through VAULT_LICENSE /
+# VAULT_LICENSE_PATH. vault_license_content is EMPTY BY DEFAULT, so with
+# management on, a role run that simply never sets it would delete a file the
+# role did not write. On an Enterprise node that means losing Enterprise
+# features -- including the PKCS#11 seal -- at the next restart.
+vault_license_manage_state: true
 
 ###############################################################################
 # TLS Maximum Version

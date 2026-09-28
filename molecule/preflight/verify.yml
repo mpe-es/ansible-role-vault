@@ -1246,3 +1246,300 @@
             argv: [systemctl, stop, checkmode-squatter.service]
           failed_when: false
           changed_when: true
+
+    ###########################################################################
+    # The edition gate - the PKCS#11 seal requires an HSM-capable build
+    ###########################################################################
+    - name: "FIRES - HSM enabled on the Community edition"
+      block:
+        - name: Run edition with HSM enabled on a Community build
+          ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/edition.yml
+          vars:
+            vault_edition: vault
+            vault_hsm_enabled: true
+        - name: Community plus HSM should not have passed
+          ansible.builtin.fail:
+            msg: "edition gate did not fire for HSM on a Community build"
+      rescue:
+        - name: Assert the message names the cause and the remedy
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg is search('not an HSM-capable build')
+              - ansible_failed_result.msg is search('vault-enterprise-hsm-fips1403')
+            fail_msg: "wrong cause: {{ ansible_failed_result.msg | default('') }}"
+
+    - name: "FIRES - HSM enabled on the non-HSM Enterprise edition"
+      # Block vars reach the rescue; an include_role param does NOT -- it is
+      # scoped to that task. The rescue below concatenates vault_edition into
+      # its pattern, so without this the rescue itself dies on
+      # "'vault_edition' is undefined" and, being IN the rescue, nothing catches
+      # it: the play aborts and the remaining edition cases never run.
+      vars:
+        vault_edition: vault-enterprise-fips1403
+      block:
+        - name: Run edition with HSM enabled on Enterprise FIPS without HSM
+          ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/edition.yml
+          vars:
+            vault_hsm_enabled: true
+        - name: Enterprise-without-HSM plus HSM should not have passed
+          # The scaffold msg MUST NOT contain the edition string: the rescue
+          # asserts on it, and tests/assert-verify-rescues-discriminate.sh fails
+          # any rescue whose pattern also matches its own scaffold.
+          ansible.builtin.fail:
+            msg: "edition gate did not fire for the non-HSM Enterprise build"
+      rescue:
+        - name: Assert Enterprise alone is not treated as HSM-capable
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg is search('not an HSM-capable build')
+              # Concatenated, NOT a bare literal: preflight/edition.yml emits the
+              # edition only via {{ vault_edition }}, so this literal appears
+              # nowhere in the gate's source and
+              # assert-rescue-patterns-are-emittable.sh:142 rejects it. That
+              # guard skips patterns containing ` ~ `.
+              - ansible_failed_result.msg is search("is '" ~ vault_edition ~ "'")
+            fail_msg: "wrong cause: {{ ansible_failed_result.msg | default('') }}"
+
+    - name: "EXECUTES - the gate runs and passes on an HSM-capable edition"
+      ansible.builtin.include_role:
+        name: ansible-role-vault
+        tasks_from: preflight/edition.yml
+      vars:
+        vault_edition: vault-enterprise-hsm-fips1403
+        vault_hsm_enabled: true
+
+    - name: Assert the edition marker executed rather than skipping
+      ansible.builtin.assert:
+        that:
+          - __vault_edition_marker is defined
+          - not (__vault_edition_marker.skipped | default(false))
+          # REQUIRED, and the reason this case is not vacuous. The marker is a
+          # registered HOST var and the FIRES cases above already set it --
+          # register captures even on a failed assert. Without the failed check,
+          # deleting this include_role leaves the assert reading the leftover
+          # marker and passing.
+          - not (__vault_edition_marker.failed | default(false))
+        fail_msg: >-
+          the edition gate did not execute on an HSM-capable edition; a gate
+          that never runs is indistinguishable from a deleted one.
+
+    - name: "DID NOT FIRE - HSM disabled suppresses the edition gate entirely"
+      ansible.builtin.include_role:
+        name: ansible-role-vault
+        tasks_from: preflight/edition.yml
+      vars:
+        vault_edition: vault
+        vault_hsm_enabled: false
+
+    - name: Assert the edition marker was skipped, not merely non-failing
+      ansible.builtin.assert:
+        that:
+          - __vault_edition_marker is defined
+          - __vault_edition_marker.skipped | default(false)
+        fail_msg: >-
+          edition ran with vault_hsm_enabled false. A suppressed gate must
+          register skipped; "nothing failed" is also what a deleted gate looks
+          like.
+
+    ###########################################################################
+    # Enterprise NEVRA resolution - the +ent suffix
+    ###########################################################################
+    # TWO MECHANISMS, both required, and they are not the same one.
+    #
+    # 1. `public: true` on ONE include brings the role's defaults/main.yml and
+    #    vars/main.yml into play scope. molecule/preflight/molecule.yml:67-69
+    #    states verify.yml is a plain playbook that loads neither, so without
+    #    this every assertion dies on an undefined variable -- which looks
+    #    identical to the test failing for its real reason.
+    #
+    # 2. The FIXTURE goes in the `vars:` of the ASSERTING task, not on the
+    #    include. An include_role's `vars:` are role PARAMS, scoped to that task
+    #    and the tasks it includes; they are gone by the next task. Because
+    #    __vault_package_version_resolved is lazily templated, it re-resolves
+    #    against defaults at the assert and silently reports the default answer.
+    #
+    # Measured on ansible-core 2.19.6:
+    #    inside the role            -> 2.1.1+ent   (param applies)
+    #    after the include, no vars -> 2.1.1       (param gone: WRONG, and green
+    #                                               for the Community case, so it
+    #                                               would pass vacuously)
+    #    fixture on the assert task -> 2.1.1+ent   (correct)
+    - name: Bring role defaults and vars into play scope (scope only, no fixture)
+      ansible.builtin.include_role:
+        name: ansible-role-vault
+        tasks_from: preflight/edition.yml
+        public: true
+      vars:
+        vault_hsm_enabled: false
+
+    - name: "RESOLVES - Community leaves the pin untouched"
+      ansible.builtin.assert:
+        that:
+          - __vault_package_version_resolved == '1.18.3-1'
+        fail_msg: "Community pin was rewritten to {{ __vault_package_version_resolved }}"
+      vars:
+        vault_edition: vault
+        # NON-DEFAULT on purpose. With 2.1.1 (the role default) this case passes
+        # whether or not the task-scoped fixture applies -- vacuous. 1.18.3-1
+        # also proves Community does NOT split the release field.
+        vault_package_version: "1.18.3-1"
+
+    - name: "RESOLVES - Enterprise gains the +ent suffix"
+      ansible.builtin.assert:
+        that:
+          - __vault_package_version_resolved == '2.1.1+ent'
+        fail_msg: "Enterprise pin resolved to {{ __vault_package_version_resolved }}"
+      vars:
+        vault_edition: vault-enterprise-fips1403
+        vault_package_version: "2.1.1"
+
+    - name: "RESOLVES - a release-suffixed pin keeps +ent in the VERSION field"
+      # dnf reads 1.18.3-1+ent as version 1.18.3 release 1+ent, which matches
+      # nothing -- the exact NEVRA defect #62 exists to remove. The suffix must
+      # land before the release: 1.18.3+ent-1.
+      ansible.builtin.assert:
+        that:
+          - __vault_package_version_resolved == '1.18.3+ent-1'
+        fail_msg: "release-suffixed pin resolved to {{ __vault_package_version_resolved }}"
+      vars:
+        vault_edition: vault-enterprise-fips1403
+        vault_package_version: "1.18.3-1"
+
+    - name: "RESOLVES - a dist-tagged release survives the split"
+      # Measured: the narrower '-[0-9]+$' does NOT match 1.18.3-1.el9, so that
+      # pin resolved to 1.18.3-1.el9+ent -- release '1.el9+ent', no match.
+      ansible.builtin.assert:
+        that:
+          - __vault_package_version_resolved == '1.18.3+ent-1.el9'
+        fail_msg: "dist-tagged pin resolved to {{ __vault_package_version_resolved }}"
+      vars:
+        vault_edition: vault-enterprise-fips1403
+        vault_package_version: "1.18.3-1.el9"
+
+    - name: "RESOLVES - an explicit +ent is not doubled"
+      ansible.builtin.assert:
+        that:
+          - __vault_package_version_resolved == '2.1.1+ent'
+        fail_msg: "idempotence broken: {{ __vault_package_version_resolved }}"
+      vars:
+        vault_edition: vault-enterprise-hsm-fips1403
+        vault_package_version: "2.1.1+ent"
+
+    - name: "RESOLVES - latest is never suffixed"
+      ansible.builtin.assert:
+        that:
+          - __vault_package_version_resolved == 'latest'
+        fail_msg: "latest was rewritten to {{ __vault_package_version_resolved }}"
+      vars:
+        vault_edition: vault-enterprise-fips1403
+        vault_package_version: "latest"
+
+    - name: "REPORTS - the suffix report fires for an Enterprise pin"
+      # MIRRORS tasks/install.yml's when: rather than driving it -- the install
+      # task cannot run here without a package transaction. Deleting the report
+      # from install.yml leaves this green; the binding is held instead by
+      # tests/assert-install-uses-resolved-version.sh.
+      ansible.builtin.debug:
+        msg: "resolved={{ __vault_package_version_resolved }}"
+      register: __ent_report
+      when:
+        - vault_package_version != 'latest'
+        - __vault_package_version_resolved != vault_package_version
+      vars:
+        vault_edition: vault-enterprise-fips1403
+        vault_package_version: "2.1.1"
+
+    - name: Assert the Enterprise report was not skipped
+      ansible.builtin.assert:
+        that:
+          - not (__ent_report.skipped | default(false))
+        fail_msg: "the +ent report did not fire for an Enterprise pin"
+
+    ###########################################################################
+    # Enterprise license - config reference
+    ###########################################################################
+    # The template needs ~22 variables for a non-HSM render and ~31 with the
+    # seal, none of which are in verify.yml's scope. include_role with
+    # public: true makes the role's defaults AND vars live for the rest of the
+    # play, so the lookup resolves and vault_config_dir is the ROLE's value --
+    # not a fixture copy that would make the path assertion prove nothing.
+    - name: Expose role scope for the Enterprise render
+      ansible.builtin.include_role:
+        name: ansible-role-vault
+        tasks_from: preflight/edition.yml
+        public: true
+      vars:
+        vault_hsm_enabled: false
+
+    - name: Render vault.hcl for an Enterprise edition
+      ansible.builtin.set_fact:
+        __rendered_ent: "{{ lookup('template', playbook_dir + '/../../templates/vault.hcl.j2') }}"
+      vars:
+        vault_edition: vault-enterprise-fips1403
+
+    - name: "RENDERS - Enterprise config references the license path"
+      ansible.builtin.assert:
+        that:
+          # NOT `is search(...)`: assert-rescue-patterns-are-emittable.sh:142
+          # collects those literals in molecule/preflight/verify.yml and scopes
+          # them to the preceding tasks_from:, which these renders inherit.
+          # `in` is not matched by that regex and reads the same.
+          - "'license_path' in __rendered_ent"
+          - "(vault_config_dir ~ '/vault.hclic') in __rendered_ent"
+        fail_msg: "license_path missing from the Enterprise render"
+
+    - name: Render vault.hcl for the Community edition
+      ansible.builtin.set_fact:
+        __rendered_oss: "{{ lookup('template', playbook_dir + '/../../templates/vault.hcl.j2') }}"
+      vars:
+        vault_edition: vault
+
+    - name: "RENDERS - Community config carries no license path"
+      ansible.builtin.assert:
+        that:
+          - "'license_path' not in __rendered_oss"
+        fail_msg: "license_path leaked into the Community render"
+
+    ###########################################################################
+    # The PKCS#11 seal - the combination the edition gate permits
+    ###########################################################################
+    # The template gates the seal on vault_hsm_enabled ALONE and is NOT changed
+    # by this arc. The edition contract is enforced at TWO surfaces instead:
+    # tasks/preflight/edition.yml at Phase 1, and the same file included from
+    # tasks/configure.yml before the render -- which is the only one a
+    # --tags configure or --skip-tags preflight run reaches. These cases pin
+    # the supported behaviour so a future template edit cannot drop the seal
+    # silently.
+    - name: Render vault.hcl for the HSM edition with the seal enabled
+      ansible.builtin.set_fact:
+        __rendered_hsm: "{{ lookup('template', playbook_dir + '/../../templates/vault.hcl.j2') }}"
+      vars:
+        vault_edition: vault-enterprise-hsm-fips1403
+        vault_hsm_enabled: true
+
+    - name: "RENDERS - the HSM edition emits the pkcs11 seal stanza"
+      ansible.builtin.assert:
+        that:
+          - "'seal \"pkcs11\"' in __rendered_hsm"
+          - "'license_path' in __rendered_hsm"
+        fail_msg: "pkcs11 seal or license_path missing from the HSM render"
+
+    - name: Render vault.hcl with the seal disabled
+      ansible.builtin.set_fact:
+        __rendered_noseal: "{{ lookup('template', playbook_dir + '/../../templates/vault.hcl.j2') }}"
+      vars:
+        vault_edition: vault-enterprise-hsm-fips1403
+        vault_hsm_enabled: false
+
+    - name: "RENDERS - no seal stanza when HSM is disabled"
+      # Weak on its own -- the role default is already false, so this would pass
+      # even if the task var never applied. It is non-vacuous only paired with
+      # the true-case above.
+      ansible.builtin.assert:
+        that:
+          - "'seal \"pkcs11\"' not in __rendered_noseal"
+        fail_msg: "pkcs11 seal rendered with vault_hsm_enabled false"
