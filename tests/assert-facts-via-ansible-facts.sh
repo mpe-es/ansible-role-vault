@@ -68,6 +68,11 @@ ALLOW = {
     'python_interpreter',
     'check_mode', 'diff_mode', 'verbosity',     # run-state magic vars
     'play_hosts', 'play_batch', 'playbook_python',
+    'play_hosts_all',                           # whole-play hosts (#44). NOT
+                                                # play_hosts, which is
+                                                # batch-scoped and cannot
+                                                # validate an init host under
+                                                # serial.
     'loop', 'loop_var', 'index_var',
     'parent_role_names', 'parent_role_paths', 'role_name', 'collection_name',
     'search_path', 'version', 'limit', 'run_tags', 'skip_tags',
