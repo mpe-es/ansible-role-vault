@@ -340,7 +340,8 @@ if not _res:
                 "failure path no longer tells an operator where the root token was captured.")
 for t in _res:
     d = str(t.get("ansible.builtin.fail", ""))
-    if "vault_init_capture_dir" in d and "__vault_init_host_effective" not in d:
+    if ("__vault_capture_host_dir" not in d
+            and "vault_init_capture_dir" in d and "__vault_init_host_effective" not in d):
         fail.append("the rescue cites the capture directory without "
                     "__vault_init_host_effective. Capture happens on the init host only, so on "
                     "a follower failure this names a directory that does not exist -- during an "

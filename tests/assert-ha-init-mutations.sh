@@ -149,8 +149,10 @@ run "the cluster-identity assert compares a node with itself" \
 run "the cluster-identity read becomes no_log" \
   "s = s.replace(\"      register: __vault_cluster_identity\", '      register: __vault_cluster_identity\n      no_log: true')"
 
-run "the rescue points at the failing host, not the capture host" \
-  "s = s.replace('}}/{{ __vault_init_host_effective }}', '}}/{{ inventory_hostname }}')"
+# Reverts the shared definition back to the inline per-host path every site used to
+# build, which is the drift that put the FOLLOWER's hostname in the rescue message.
+run "the capture path goes back to inline per-host construction" \
+  "s = s.replace('__vault_capture_host_dir', 'vault_init_capture_dir }}/{{ inventory_hostname')"
 
 # --- codex round 2 -----------------------------------------------------------
 

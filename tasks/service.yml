@@ -217,7 +217,7 @@
     # shell) so key material is not exposed in argv/execve.
     - name: Create controller capture directory (per host — avoids cross-host key clobber)
       ansible.builtin.file:
-        path: "{{ vault_init_capture_dir }}/{{ inventory_hostname }}"
+        path: "{{ __vault_capture_host_dir }}"
         state: directory
         mode: '0700'
       delegate_to: localhost
@@ -227,7 +227,7 @@
     - name: Capture root token to the controller (never on the node)
       ansible.builtin.copy:
         content: "{{ (__vault_init_output.stdout | from_json).root_token }}\n"
-        dest: "{{ vault_init_capture_dir }}/{{ inventory_hostname }}/root-token"
+        dest: "{{ __vault_capture_host_dir }}/root-token"
         mode: "{{ vault_init_capture_mode }}"
       delegate_to: localhost
       become: false
@@ -237,7 +237,7 @@
     - name: Capture Shamir unseal shares to the controller (one key per file)
       ansible.builtin.copy:
         content: "{{ item }}\n"
-        dest: "{{ vault_init_capture_dir }}/{{ inventory_hostname }}/unseal-key-{{ idx + 1 }}"
+        dest: "{{ __vault_capture_host_dir }}/unseal-key-{{ idx + 1 }}"
         mode: "{{ vault_init_capture_mode }}"
       delegate_to: localhost
       become: false
@@ -250,7 +250,7 @@
     - name: Capture HSM recovery keys to the controller (one key per file)
       ansible.builtin.copy:
         content: "{{ item }}\n"
-        dest: "{{ vault_init_capture_dir }}/{{ inventory_hostname }}/recovery-key-{{ idx + 1 }}"
+        dest: "{{ __vault_capture_host_dir }}/recovery-key-{{ idx + 1 }}"
         mode: "{{ vault_init_capture_mode }}"
       delegate_to: localhost
       become: false
@@ -517,7 +517,7 @@
           sealed={{ __status.sealed | default('unknown') }}
           (Vault may be down if 'unknown'). If init ran, the root token and
           unseal/recovery shares were captured to the controller directory
-          {{ vault_init_capture_dir | default('the configured vault_init_capture_dir') }}/{{ __vault_init_host_effective }}
+          {{ __vault_capture_host_dir | default('the configured vault_init_capture_dir') }}
           (and shares also to /etc/vault.d/tokens.env if vault_auto_unseal_enabled).
           Next: unseal manually and enable audit devices, or destroy the node and re-initialize.
 

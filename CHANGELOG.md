@@ -110,6 +110,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `pkcs11` seal stanza onto a node with no HSM. One `hcl_bool()` macro now normalizes all
   of them.
 
+  **Behaviour change for existing consumers of `vault_cluster_leader_addr`.** It is now
+  validated to the same bare host-or-IP shape as `vault_cluster_members`. That shape was
+  already the documented one — the README example on `main` is a bare hostname — but a
+  consumer who happened to pass `https://host` or `host:8200` previously got a silently
+  malformed `leader_api_addr` and a green play; they now get a loud preflight failure
+  naming the value. That is the intended trade: the previous behaviour was a broken
+  cluster reported as success.
+
   **`retry_join` has ONE definition.** The legacy `vault_cluster_leader_addr` scalar
   rendered its own copy of the stanza, so it silently missed **both** the IPv6 bracketing
   and the mTLS client credentials the peer loop had gained — `fd00::99` rendered as

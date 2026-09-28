@@ -59,7 +59,8 @@ else:
     captures = []
     for t in inner:
         cp = t.get("ansible.builtin.copy") or t.get("copy")
-        if cp and "vault_init_capture_dir" in str(cp.get("dest", "")):
+        dest = str(cp.get("dest", "")) if cp else ""
+        if cp and ("vault_init_capture_dir" in dest or "__vault_capture_host_dir" in dest):
             captures.append(t)
     if len(captures) < 3:
         fail.append(f"expected at least 3 capture copy tasks (root token, unseal shares, recovery "
