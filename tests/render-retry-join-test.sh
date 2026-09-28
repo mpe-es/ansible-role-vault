@@ -88,9 +88,12 @@ else
   echo "FAIL: $(ca_count) of 3 stanzas pin leader_ca_cert_file"; fail=1
 fi
 
-# ULA and link-local IPv6 must bracket too. These are the ranges an airgapped
-# enclave actually uses, and the FIRST version of the preflight gate REJECTED them
-# (urlsplit read fd00 as a scheme), so the render was never exercised on them.
+# ULA IPv6 must bracket too -- fd00::/8 is what an airgapped enclave numbers with, and
+# the FIRST version of the preflight gate REJECTED it (urlsplit read fd00 as a scheme),
+# so the render was never exercised on it. The fe80:: case pins the same BRACKETING
+# behaviour and nothing more: a bare link-local address cannot identify an interface and
+# a zone-indexed one is rejected by the preflight gate, so link-local peers are not
+# usable in practice (README says so).
 check "ULA IPv6 peer IS bracketed"               '{"vault_cluster_members": ["fd00::10"], "vault_cluster_leader_addr": ""}' 1 'https://\[fd00::10\]:8200'
 check "link-local IPv6 peer IS bracketed"        '{"vault_cluster_members": ["fe80::1"], "vault_cluster_leader_addr": ""}' 1 'https://\[fe80::1\]:8200'
 

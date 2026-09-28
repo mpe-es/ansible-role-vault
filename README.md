@@ -1309,10 +1309,12 @@ limited:
   `vault operator raft list-peers` as the manual confirmation. Failing closed was
   rejected deliberately: a sealed cluster is a stated desired state, and failing it
   would make `vault_init_unseal: false` unusable on a cluster.
-- **`--check` cannot confirm an HA bring-up, only that nothing is destructive.** The
-  read-only probes run under `--check`, but `operator init` does not, so no register
-  exists and every unseal, join and identity step is skipped. A dry run therefore
-  reports no cluster convergence either way.
+- **`--check` cannot confirm an HA bring-up, only that nothing is destructive.**
+  `operator init` does not run under `--check`, so no register exists and every unseal
+  and join step is skipped. The read-only probes — `vault status` and the cluster
+  identity read — *do* run, because they carry `check_mode: false`, so on an
+  **already-converged** cluster a dry run still reports identity truthfully. On a
+  greenfield one it reports nothing about convergence, because there is nothing yet.
 
 [`docs/runbooks/cluster-bringup.md`](docs/runbooks/cluster-bringup.md) carries the
 bring-up sequence, the custody step and the failure table.

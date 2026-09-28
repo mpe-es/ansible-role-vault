@@ -352,14 +352,19 @@ for t in _res:
 for t in inner + rescue:
     nm = str(t.get("name", ""))
     env = str(t.get("environment", ""))
-    if "VAULT_CACERT" in env and "VAULT_CLIENT_CERT" not in env:
-        fail.append(f"{nm!r} sets VAULT_CACERT without VAULT_CLIENT_CERT. On a listener with "
-                    f"tls_require_and_verify_client_cert the call fails TLS, so the whole init "
-                    f"flow is unreachable under the role's own mTLS setting.")
+    # BOTH halves: a certificate without its key is not a usable client identity, and
+    # requiring only the cert left "delete the key line" green.
+    if "VAULT_CACERT" in env:
+        for want in ("VAULT_CLIENT_CERT", "VAULT_CLIENT_KEY"):
+            if want not in env:
+                fail.append(f"{nm!r} sets VAULT_CACERT without {want}. On a listener with "
+                            f"tls_require_and_verify_client_cert the call fails TLS, so the "
+                            f"whole init flow is unreachable under the role's own mTLS setting.")
     uri = t.get("ansible.builtin.uri")
-    if isinstance(uri, dict) and "ca_path" in uri and "client_cert" not in uri:
-        fail.append(f"{nm!r} sets ca_path without client_cert. Same failure as above, on the "
-                    f"API path.")
+    if isinstance(uri, dict) and "ca_path" in uri:
+        for want in ("client_cert", "client_key"):
+            if want not in uri:
+                fail.append(f"{nm!r} sets ca_path without {want}. Same failure, on the API path.")
 
 if fail:
     print("FAIL: #44 HA init orchestration")

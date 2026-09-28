@@ -46,7 +46,7 @@ storage "raft" {
     them as what "the follower node uses to establish client authentication with
     the possible leader node". The node presents its OWN listener identity, which
     therefore needs clientAuth in its extended key usage. #}
-{% if (vault_tls_require_client_cert | default(false) | lower) == 'true' %}
+{% if (vault_tls_require_client_cert | default(false) | string | lower) in ['true', 'yes', '1', 'on', 't', 'y'] %}
     leader_client_cert_file = "{{ vault_tls_cert_file }}"
     leader_client_key_file  = "{{ vault_tls_key_file }}"
 {% endif %}

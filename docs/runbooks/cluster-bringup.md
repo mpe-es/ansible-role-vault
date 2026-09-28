@@ -84,7 +84,9 @@ Each node keeps its own `vault_raft_node_id`, `vault_api_addr` and
    seal). **There is one key set for the whole cluster, not one per node.** Distribute
    one share per custodian per local policy and remove them from the controller.
 
-4. **Verify membership.**
+4. **Verify membership.** On an mTLS listener (`vault_tls_require_client_cert: true`)
+   the CLI needs a client identity too; `source /etc/vault.d/vault.env` as root supplies
+   `VAULT_CLIENT_CERT` and `VAULT_CLIENT_KEY` along with the address and CA.
    ```
    vault operator raft list-peers
    ```
@@ -96,6 +98,7 @@ Each node keeps its own `vault_raft_node_id`, `vault_api_addr` and
 5. **Verify seal state per node**, against each node directly rather than the VIP:
    ```
    for h in vault-01 vault-02 vault-03; do
+     # On an mTLS listener add: --cert /opt/vault/tls/tls.crt --key /opt/vault/tls/tls.key
      curl -s --cacert /opt/vault/tls/ca.crt https://$h.mpe.mil:8200/v1/sys/health -o /dev/null -w "$h %{http_code}\n"
    done
    ```

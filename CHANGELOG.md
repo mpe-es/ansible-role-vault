@@ -83,6 +83,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   transcribing them, and that proves itself able to fail on six clause-level mutations. `ipaddr` is task-side only: the template stays
   filter-free because `tests/render-hsm-pin-test.sh` renders it under plain Jinja.
 
+  **mTLS reaches every Vault call, not just `retry_join`.** With
+  `vault_tls_require_client_cert: true` the listener demands a client certificate from
+  **every** caller. The role sent only `VAULT_CACERT` on the CLI and only `ca_path` on the
+  API, so the first `vault status` failed TLS **before initialization began** — and so did
+  unseal, the join wait, identity, verification, audit and the rescue. The boot auto-unseal
+  unit was the same: it runs `vault status` and `vault operator unseal`, so it would have
+  timed out at every reboot and left the cluster sealed, which is the precise failure that
+  service exists to prevent. `VAULT_CLIENT_CERT`/`VAULT_CLIENT_KEY` now go on all five CLI
+  environment blocks, `templates/vault-unseal.service.j2` and `templates/vault.env.j2`;
+  `client_cert`/`client_key` on all five `uri` calls. New
+  `tests/assert-vault-calls-carry-client-certs.sh` sweeps **every** surface rather than one
+  file — the omission above was missed precisely because the first guard was scoped to
+  `tasks/service.yml` — and requires **both** halves, because a certificate without its key
+  is not an identity. Its meta-gate `tests/assert-mtls-reachability-mutations.sh` kills
+  seven omissions; it caught that the guard was ignoring its root argument and silently
+  re-checking the real tree, which would have made every mutation claim false.
+
+  **The rendered condition matches Ansible's own boolean set.** `{% if x | default(false) %}`
+  rendered credentials for the **string** `"false"`; a first correction to
+  `| lower == 'true'` then read `1` and `"yes"` as false, although
+  `meta/argument_specs.yml` types the variable `bool` and every task-side `| bool` reads
+  them as true — so mTLS was on everywhere except the rendered files. It is now
+  `(… | default(false) | string | lower) in ['true', 'yes', '1', 'on', 't', 'y']`, which is
+  Jinja-builtin only, because these templates must render under plain Jinja with no
+  Ansible filters. `tests/render-mtls-env-test.sh` renders all three templates across ten
+  boolean forms each and checks each pattern is non-vacuous — its own first version matched
+  the listener's `tls_require_and_verify_client_cert` line instead of the `retry_join`
+  fields, so every case had been passing or failing for the wrong reason.
+
   **`retry_join` now carries client credentials when the listener demands them.** With
   `vault_tls_require_client_cert: true` the stanza sent only the CA, so a follower could
   not authenticate to the leader and never joined — HA was silently incompatible with the

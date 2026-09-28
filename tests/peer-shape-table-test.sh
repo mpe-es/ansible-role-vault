@@ -20,8 +20,11 @@
 #                 "", "   ", node1/path, node1?q=1 and 999.999.999.999.
 # Both directions are in the table so neither can come back.
 #
-# NON-STRING ELEMENTS ARE IN THE TABLE. meta/argument_specs.yml types the LIST,
-# not its elements, and the type_debug gate checks the CONTAINER. Measured: an
+# NON-STRING ELEMENTS ARE IN THE TABLE. meta/argument_specs.yml does declare
+# `elements: str`, so this is defence in depth rather than the only line: the gate must
+# not DEPEND on argument-spec coercion, because the spec validates an entry point and
+# these tasks are also reached through `tasks_from`, and the type_debug gate above
+# checks the CONTAINER, not the elements. Measured on the raw expressions: an
 # integer element raised "argument of type 'int' is not iterable", and a YAML null
 # was ACCEPTED as the hostname "None", rendering https://None:8200.
 #
