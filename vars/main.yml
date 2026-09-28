@@ -4,7 +4,7 @@
 # Role: ansible-role-vault
 # Summary: Internal variables for HashiCorp Vault role. These have higher
 #   precedence than defaults and should NOT be overridden by consumers.
-# Last Updated: 22 Sep 2026
+# Last Updated: 28 Sep 2026
 # Classification: UNCLASSIFIED
 ###############################################################################
 
@@ -164,3 +164,70 @@ __vault_package_version_resolved: >-
          or not (__vault_is_enterprise | bool)
          or '+ent' in vault_package_version)
      else __vault_ent_base ~ '+ent' ~ __vault_ent_release }}
+
+###############################################################################
+# License Desired State (derived -- never set this directly)
+# NIST 800-53: SC-28 (Protection of Information at Rest), IA-5 (Authenticator
+#   Management). Rationale for the control choice is in defaults/main.yml.
+###############################################################################
+# THREE states, not a boolean, because the role must distinguish "inventory
+# supplies no licence" from "inventory declines to manage the licence at all":
+#
+#   present    -- deploy vault.hclic from vault_license_content
+#   absent     -- REMOVE vault.hclic: the desired state supplies no licence, or
+#                 the selected edition renders no license_path that could read
+#                 one, so keeping it is residual entitlement material exposed
+#                 to the vault group for no operational reason
+#   unmanaged  -- touch NOTHING. The licence arrives out of band (golden image,
+#                 a separate playbook, VAULT_LICENSE / VAULT_LICENSE_PATH), and
+#                 vault_license_content is EMPTY BY DEFAULT -- so without this
+#                 state the very first routine role run would delete a file the
+#                 role never wrote and never had any claim to.
+#
+# Derived ONCE and consumed by BOTH licence tasks in tasks/configure.yml rather
+# than hand-negating the deploy task's `when:` into a second condition. Two
+# hand-written complements drift, and this repo has already paid for that: the
+# #41 PIN guard in molecule/hsm/verify.yml was a whole-file `diff: false`
+# substring check, and the moment #42 added a SECOND occurrence of that string
+# the guard stopped binding while still reporting green. A gap between two
+# negated conditions here means NEITHER licence task fires -- which is exactly
+# the defect this review found, reintroduced silently.
+#
+# Inputs:
+#   vault_license_manage_state  bool   defaults/main.yml -- false => unmanaged
+#   vault_license_content       string may be '', whitespace-only, or YAML null
+#   __vault_is_enterprise       bool   derived above
+#
+# Contract the two tasks rely on -- the value is always exactly one of the
+# three, and 'present' drives the copy while 'absent' drives the removal.
+#
+# vault_license_manage_state=false withholds ONLY the removal (operator ruling,
+# 28 Sep 2026 -- the NARROW reading, matching the variable's name):
+#
+#   present   => content supplied AND Enterprise   (manage_state IGNORED)
+#   absent    => manage_state AND NOT present
+#   unmanaged => NOT manage_state AND NOT present
+#
+# So 'unmanaged' can only ever displace 'absent', never 'present'. The rejected
+# BROAD reading -- the flag withholding all licence handling -- would have let a
+# consumer who set it defensively AND supplied a licence get no licence
+# deployed, silently: a new instance of the very failure class this arc exists
+# to close.
+#
+# The ordering is load-bearing. 'present' is tested FIRST and without reference
+# to manage_state, which is what makes the narrow reading true BY CONSTRUCTION
+# rather than by a reader's goodwill: there is no arm of this expression in
+# which manage_state can suppress a deploy.
+#
+# Emptiness is tested exactly as the deploy task tested it before this became a
+# derived value, so a whitespace-only survey answer is still not a licence, and
+# default('', true) still survives a bare `vault_license_content:` null.
+#
+# Measured, not reasoned about (tests/license-state-table-test.sh): ten cases on
+# ansible-core 2.19.13/Python 3.11 -- what CI runs -- and identical on 2.21.4,
+# the core #91 targets for the mpe-ee-rhel9 runtime.
+__vault_license_desired_state: >-
+  {{ 'present'
+     if (vault_license_content | default('', true) | trim | length > 0
+         and (__vault_is_enterprise | bool))
+     else ('absent' if (vault_license_manage_state | bool) else 'unmanaged') }}

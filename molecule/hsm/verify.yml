@@ -9,6 +9,11 @@
 #   Test 2 - systemd EnvironmentFile preserves a double-quoted value verbatim
 #            (leading/trailing whitespace) on the target systemd.
 #   Test 3 - the §2a charset assert fails CLOSED on an unsafe PIN.
+#   Test 4 - the licence is a STATE (#42, review of #95): clearing
+#            vault_license_content removes vault.hclic, moving to a Community
+#            edition removes it, and vault_license_manage_state=false leaves an
+#            out-of-band licence alone. Runs LAST -- each case re-runs
+#            configure.yml and re-renders vault.hcl/vault.env.
 # Classification: UNCLASSIFIED
 ###############################################################################
 - name: "Verify (HSM PIN handling, issue #41)"
@@ -163,3 +168,122 @@
         - "unicode-café-ok"
       loop_control:
         label: "accept {{ item | to_json }}"
+
+    # --- Test 4: the licence is a STATE, not a one-way deploy --------------
+    #     (#42, review of #95)
+    #
+    # LAST in this file deliberately. Each case re-runs tasks/configure.yml,
+    # which re-renders vault.hcl and vault.env as a side effect. Test 1 slurped
+    # both long before this point, and nothing below reads them.
+    #
+    # Driven with include_role + tasks_from and per-case vars -- the idiom
+    # tests/local-preflight-harness/run.yml uses for its eighteen DNS cases. A
+    # second converge cannot express these: molecule fixes each scenario's
+    # licence posture ONCE in molecule.yml, so no container run ever transitions
+    # between postures. That is precisely why the missing absent state survived
+    # a green 18-job matrix.
+    #
+    # The restores between cases are plain copies, not role runs. They are SETUP,
+    # and routing them through the role would make each case depend on the
+    # correctness of the thing the next case is trying to measure.
+
+    # 4a: present -> empty. THE defect this review found.
+    - name: "4a present -> empty | re-run configure with no licence supplied"
+      ansible.builtin.include_role:
+        name: ansible-role-vault
+        tasks_from: configure.yml
+      vars:
+        vault_license_content: ""
+
+    - name: 4a | stat vault.hclic after the licence was withdrawn
+      ansible.builtin.stat:
+        path: /etc/vault.d/vault.hclic
+      register: __lic_4a
+
+    - name: 4a | assert the withdrawn licence is GONE
+      ansible.builtin.assert:
+        that:
+          - not __lic_4a.stat.exists
+        fail_msg: >-
+          vault.hclic STILL EXISTS after vault_license_content was cleared.
+          license_path references it unconditionally on Enterprise, so the node
+          keeps running on an entitlement the desired state retired -- and the
+          role reports success (review of #95).
+        success_msg: "4a ok: clearing vault_license_content removes vault.hclic"
+
+    - name: 4a | restore the sentinel licence (SETUP, not via the role)
+      ansible.builtin.copy:
+        content: "SENTINEL-NOT-A-REAL-LICENCE-#42"
+        dest: /etc/vault.d/vault.hclic
+        owner: root
+        group: vault
+        mode: '0640'
+      no_log: true
+      diff: false
+
+    # 4b: Enterprise -> Community. vault_hsm_enabled MUST drop with the edition:
+    # configure.yml includes preflight/edition.yml, and a PKCS#11 seal on a
+    # Community build is exactly what that gate exists to refuse (#62). Flipping
+    # the edition alone would fail this case for the RIGHT reason at the WRONG
+    # assert, and would prove nothing about the licence.
+    - name: "4b Enterprise -> Community | re-run configure on the Community build"
+      ansible.builtin.include_role:
+        name: ansible-role-vault
+        tasks_from: configure.yml
+      vars:
+        vault_edition: "vault"
+        vault_hsm_enabled: false
+
+    - name: 4b | stat vault.hclic after moving to Community
+      ansible.builtin.stat:
+        path: /etc/vault.d/vault.hclic
+      register: __lic_4b
+
+    - name: 4b | assert Community does not keep entitlement material
+      ansible.builtin.assert:
+        that:
+          - not __lic_4b.stat.exists
+        fail_msg: >-
+          vault.hclic survived the move to a Community edition. Community renders
+          no license_path, so the file is unreferenced entitlement material left
+          readable by the vault group for no operational reason (review of #95).
+        success_msg: "4b ok: Enterprise -> Community removes vault.hclic"
+
+    - name: 4b | restore the sentinel licence (SETUP, not via the role)
+      ansible.builtin.copy:
+        content: "SENTINEL-NOT-A-REAL-LICENCE-#42"
+        dest: /etc/vault.d/vault.hclic
+        owner: root
+        group: vault
+        mode: '0640'
+      no_log: true
+      diff: false
+
+    # 4c: the escape hatch. vault_license_content is EMPTY BY DEFAULT, so without
+    # this opt-out the role would delete an out-of-band licence -- a golden image,
+    # a separate playbook, VAULT_LICENSE_PATH -- on the first routine run that
+    # simply never set the variable. This case proves the hatch actually holds.
+    - name: "4c unmanaged | re-run configure with no licence AND management off"
+      ansible.builtin.include_role:
+        name: ansible-role-vault
+        tasks_from: configure.yml
+      vars:
+        vault_license_content: ""
+        vault_license_manage_state: false
+
+    - name: 4c | stat vault.hclic with management disabled
+      ansible.builtin.stat:
+        path: /etc/vault.d/vault.hclic
+      register: __lic_4c
+
+    - name: 4c | assert an out-of-band licence was left ALONE
+      ansible.builtin.assert:
+        that:
+          - __lic_4c.stat.exists
+          - __lic_4c.stat.mode == '0640'
+        fail_msg: >-
+          vault.hclic was removed although vault_license_manage_state is false.
+          The role deleted a file it did not write; on an Enterprise node that
+          costs Enterprise features -- including the PKCS#11 seal -- at the next
+          restart.
+        success_msg: "4c ok: vault_license_manage_state=false leaves vault.hclic alone"

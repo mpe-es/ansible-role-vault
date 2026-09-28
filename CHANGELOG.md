@@ -12,9 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Vault Enterprise license deployment.** `vault_edition` accepted Enterprise
   builds and `tasks/install.yml` installed the RPM, but the role had no license
   handling at all — no `vault.hclic`, no `license_path`, and no acknowledgement
-  anywhere that Vault Enterprise **cannot start unlicensed**. Selecting an
-  Enterprise edition produced a service that failed at Phase 9 with nothing in
-  the role explaining why. New `vault_license_content` takes the licence as
+  anywhere that an Enterprise build needs a licence to deliver Enterprise
+  features. Selecting an Enterprise edition produced a node with no entitlement
+  and nothing in the role explaining why. New `vault_license_content` takes the licence as
   **plain text** (confirmed against a real `.hclic`), rendered to
   `{{ vault_config_dir }}/vault.hclic` as `root:vault 0640` with `no_log` and
   `diff: false` — the ownership model #77 established for TLS material, where
@@ -26,9 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   8 → 9, because `'vault_config_file' in dest` is false for `vault.hclic` and
   the licence would otherwise have sat outside the one lock that keeps
   secret-bearing deploys root-owned. **There is deliberately no preflight gate
-  for a missing licence** (operator ruling): the service-start failure is loud,
-  immediate and attributable, and a gate would add a code path and a test axis
-  to prevent a failure that already reports itself. Note the config now
+  for a missing licence** (operator ruling) — but see the licence-state entry
+  under **Fixed**: the original justification for that ruling rested on an
+  unverified claim about the binary, and the ruling now rests on the cost of the
+  extra code path instead. Note the config now
   references `license_path` unconditionally for Enterprise; `VAULT_LICENSE` and
   `VAULT_LICENSE_PATH` still take precedence, so existing env-var deployments
   are unaffected. (#42)
@@ -348,6 +349,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Install `iproute` on minimal images. (#36)
 
 ### Fixed
+
+- **The Enterprise licence had no absent state, so a withdrawn entitlement stayed
+  in force.** `tasks/configure.yml` deployed `vault.hclic` when
+  `vault_license_content` was non-empty **and** the edition was Enterprise, and
+  nothing covered the complement of that condition. Clearing the variable — a
+  credential withdrawal, an expiry response — left the old file on disk while
+  `templates/vault.hcl.j2` went on referencing `license_path` unconditionally for
+  Enterprise, so the node kept running on a licence the desired state had
+  explicitly retired and the role reported success. Moving `vault_edition` to a
+  Community build left the same file as unreferenced entitlement material,
+  readable by the `vault` group on a host with no use for it. Both contradicted
+  the documented behaviour that an empty value "deploys no license."
+
+  The licence is now a **state**. New derived `__vault_license_desired_state`
+  resolves to `present` / `absent` / `unmanaged`, and **both** licence tasks key
+  off that one value rather than one condition and its hand-written negation —
+  two complements drift, and the gap between them is a silent no-op, which is how
+  the #41 `diff: false` guard stopped binding when #42 added a second occurrence
+  of that string. New `vault_license_manage_state` (default `true`) owns the
+  absent state; set it `false` when the licence is delivered out of band, since
+  `vault_license_content` is empty by default and the role would otherwise delete
+  a file it never wrote. Removal notifies `Restart vault` so a withdrawal lands on
+  the run that caused it rather than at some unrelated future reboot (operator
+  ruling, 28 Sep 2026), and the removal task deliberately carries **neither**
+  `no_log` nor `diff: false` — those protect the deploy task's `content:`, while
+  the removal carries only a path and is the sole attributable record that an
+  entitlement was withdrawn.
+
+  **A documentation claim was corrected in the same change.** Four places —
+  `defaults/main.yml`, `templates/vault.hcl.j2`, `README.md` and this file — stated
+  that Vault Enterprise **cannot start unlicensed**, and that claim was the entire
+  stated justification for having no preflight licence gate. It is false for the
+  expiry case: an expired licence does not block start, Vault comes up and loses
+  Enterprise features until a valid one is supplied. Whether an **absent** licence
+  blocks start has never been measured against a real Enterprise binary, and CI
+  cannot measure it — no entitlement, no access to the paywalled RPMs. The role no
+  longer delegates the alarm to the service. On an HSM build the stakes are higher
+  still: the PKCS#11 seal is an Enterprise feature, so an unlicensed HSM node may
+  come up running but unable to auto-unseal.
+
+  Covered by `tests/license-state-table-test.sh` (a ten-case truth table that
+  loads `vars/main.yml` and evaluates the **real** expression rather than a
+  transcription of it, verified identical on ansible-core 2.19.13/Python 3.11 —
+  what CI runs — and 2.21.4, the core #91 targets), by seven new assertions in
+  `tests/assert-configure-gates-the-render.sh`, and by three transition cases in
+  `molecule/hsm/verify.yml`. No molecule scenario could have caught this: each
+  scenario fixes one licence posture in `molecule.yml`, so no container run ever
+  transitions between them, which is how the defect survived a green 18-job
+  matrix.
 
 - **The PKCS#11 seal could be rendered for a binary that cannot provide it.**
   `templates/vault.hcl.j2` gated the `seal "pkcs11"` stanza on

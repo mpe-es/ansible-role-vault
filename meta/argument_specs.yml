@@ -4,7 +4,7 @@
 # Role: ansible-role-vault
 # Summary: Role argument specifications for AAP survey generation, input
 #   validation, and ansible-doc rendering. Maps 1:1 with defaults/main.yml.
-# Last Updated: 22 Sep 2026
+# Last Updated: 28 Sep 2026
 # Classification: UNCLASSIFIED
 ###############################################################################
 argument_specs:
@@ -426,8 +426,8 @@ argument_specs:
             fail_msg cites FIPS 140-3, so offering a non-FIPS or 140-2 build
             would contradict the gate.
           - >-
-            Enterprise editions require a license to start; see
-            vault_license_content. vault_hsm_enabled requires the -hsm build
+            Enterprise editions need a license to deliver Enterprise features;
+            see vault_license_content. vault_hsm_enabled requires the -hsm build
             and is asserted by tasks/preflight/edition.yml.
         type: str
         default: "vault"
@@ -446,11 +446,39 @@ argument_specs:
             Supply from an AAP credential or Ansible Vault. Never commit it.
             The deploy task sets no_log and diff false.
           - >-
-            Empty deploys no license. An Enterprise edition without one fails at
-            service start; that failure is loud and attributable, so it is
-            deliberately NOT gated in preflight.
+            Empty deploys no license AND removes any vault.hclic already on
+            disk. See vault_license_manage_state to opt out of that.
+          - >-
+            What Vault does with no license is deliberately not claimed here. An
+            EXPIRED license does not block start: Vault comes up and loses
+            Enterprise features until a valid one is supplied. Whether an ABSENT
+            license blocks start has never been measured against a real
+            Enterprise binary. There is still no preflight gate, by operator
+            ruling, but the role reports a license removal itself rather than
+            relying on the service to raise the alarm.
         type: str
         default: ""
+
+      vault_license_manage_state:
+        description:
+          - >-
+            Whether the role owns the ABSENCE of vault.hclic, not only its
+            presence. True converges: clearing vault_license_content, or moving
+            vault_edition to a Community build, removes the file and notifies a
+            vault restart.
+          - >-
+            Set false when the license is delivered OUT OF BAND - baked into a
+            golden image, written by a separate playbook, or supplied through
+            VAULT_LICENSE or VAULT_LICENSE_PATH. vault_license_content is empty
+            by default, so with management on, a run that simply never sets it
+            would delete a file the role did not write. On an Enterprise node
+            that costs Enterprise features, including the PKCS#11 seal, at the
+            next restart.
+          - >-
+            False withholds only the REMOVAL. A supplied license is still
+            deployed.
+        type: bool
+        default: true
         # Matches vault_hsm_pin below.
         #
         # Honest scope: an attempt to observe the value leaking through the

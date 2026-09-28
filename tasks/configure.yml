@@ -74,6 +74,11 @@
   ansible.builtin.include_tasks:
     file: preflight/edition.yml
 
+# --- issue #42: the licence is a STATE, not a one-way deploy -----------------
+# Both tasks key off the single derived __vault_license_desired_state rather
+# than one condition and its hand-written negation. vars/main.yml carries the
+# reasoning; the short version is that two complements drift and the gap is
+# invisible.
 - name: Deploy Vault Enterprise license
   ansible.builtin.copy:
     content: "{{ vault_license_content }}"
@@ -86,17 +91,35 @@
   no_log: true
   diff: false
   notify: Restart vault
-  when:
-    # trim, matching the #41 PIN check 70 lines above: a whitespace-only survey
-    # answer would otherwise write a junk vault.hclic and Vault would fail with
-    # a PARSE error rather than the loud, attributable missing-licence error the
-    # design promises. default('', true) also survives a bare `key:` (YAML null).
-    - vault_license_content | default('', true) | trim | length > 0
-    # Edition-gated: Community renders no license_path, so writing secret
-    # material the config never references is pure exposure. Migrating
-    # Enterprise -> Community leaves the old file on disk; removing it is
-    # licence-lifecycle work and is deferred with #42's renewal scope.
-    - __vault_is_enterprise | bool
+  when: __vault_license_desired_state == 'present'
+
+- name: Remove a Vault Enterprise license the desired state no longer supplies
+  ansible.builtin.file:
+    path: "{{ vault_config_dir }}/vault.hclic"
+    state: absent
+  # DELIBERATELY NOT no_log / diff: false, unlike the deploy task above. Those
+  # exist there because `content:` carries the entitlement blob. A removal
+  # carries a PATH and nothing else, and this is the one licence event the role
+  # cannot rely on Vault to announce -- an expired licence starts degraded, and
+  # the absent case has never been measured. Suppressing the log here would hide
+  # the only attributable record that the entitlement was withdrawn.
+  notify: Restart vault
+  register: __vault_license_removed
+  when: __vault_license_desired_state == 'absent'
+
+- name: Report that a deployed Vault Enterprise license was withdrawn
+  ansible.builtin.debug:
+    msg: >-
+      REMOVED {{ vault_config_dir }}/vault.hclic -- the desired state supplies no
+      Vault Enterprise licence
+      {{ 'and vault_edition is the Community build ' ~ vault_edition
+         if not (__vault_is_enterprise | bool)
+         else '(vault_license_content is empty)' }}.
+      vault will restart. Enterprise features are lost until a valid licence is
+      supplied, and on an HSM build that includes the PKCS#11 seal -- this node
+      may be unable to auto-unseal. Set vault_license_manage_state=false if the
+      licence is delivered out of band.
+  when: __vault_license_removed.changed | default(false) | bool
 
 - name: Deploy Vault server configuration
   ansible.builtin.template:

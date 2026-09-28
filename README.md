@@ -520,7 +520,8 @@ See the initialization warning at the top of this section before enabling
 | `vault_package_version` | `2.1.1` | Version to install. **Pinned by default.** Enterprise editions get the `+ent` NEVRA suffix appended automatically, so one value works on any edition. `latest` means *newest at first install*, not kept current — see below |
 | `vault_package_state` | `present` | DNF state: `present` or `latest` |
 | `vault_edition` | `vault` | Package/edition — three choices: `vault` (Community), `vault-enterprise-fips1403` (Enterprise FIPS 140-3), `vault-enterprise-hsm-fips1403` (Enterprise + HSM). General Enterprise and both FIPS 140-2 builds are **excluded**: preflight requires FIPS mode and cites FIPS 140-3. `vault_hsm_enabled` requires the `-hsm` build |
-| `vault_license_content` | `""` | Vault Enterprise license, the **plain text** contents of a `.hclic`. Supply from an AAP credential or Ansible Vault — never commit it. Rendered to `/etc/vault.d/vault.hclic` as `root:vault 0640`, `no_log`. Empty deploys nothing; an Enterprise edition without one fails at service start, deliberately ungated |
+| `vault_license_content` | `""` | Vault Enterprise license, the **plain text** contents of a `.hclic`. Supply from an AAP credential or Ansible Vault — never commit it. Rendered to `/etc/vault.d/vault.hclic` as `root:vault 0640`, `no_log`. Empty deploys nothing **and removes any `vault.hclic` already on disk** — see `vault_license_manage_state` |
+| `vault_license_manage_state` | `true` | Whether the role owns the **absence** of `vault.hclic`, not only its presence. `true` converges: clearing `vault_license_content`, or moving to a Community edition, removes the file and restarts vault. Set `false` when the licence is delivered **out of band** — a golden image, a separate playbook, or `VAULT_LICENSE` / `VAULT_LICENSE_PATH` — since `vault_license_content` is empty by default and the role would otherwise delete a file it never wrote |
 
 > **`latest` does not mean "kept current".** `vault_package_version: latest`
 > omits the version from the dnf transaction, so dnf resolves whatever is newest
@@ -673,9 +674,10 @@ for Python library dependencies. No other Ansible role dependencies.
 
 > **Enterprise editions need a license.** Satellite deployments are usually
 > Enterprise, and `vault_edition: vault-enterprise-fips1403` selects that
-> package — but Vault Enterprise **cannot start unlicensed**. The example above
-> uses the Community default, which starts without one. Licence delivery is
-> covered in the Enterprise licensing section below.
+> package — but an unlicensed Enterprise build gives you **no Enterprise
+> features**, including the PKCS#11 seal. The example above uses the Community
+> default, which needs no licence. Licence delivery is covered in the Enterprise
+> licensing section below.
 
 #### Enterprise licensing
 
@@ -691,10 +693,30 @@ The role writes it to `/etc/vault.d/vault.hclic` as `root:vault 0640` — vault
 reads it through the group but does not own it, the same posture as the TLS
 material (#38, #77) — with `no_log` and `diff: false` on the task.
 
-**There is no preflight gate for a missing licence, deliberately.** An
-Enterprise edition selected without one fails at service start, which is loud,
-immediate and attributable. A gate would add a code path and a test axis to
-prevent a failure that already reports itself clearly.
+The licence is a **state**, not a one-way deploy. Clearing
+`vault_license_content` — a credential withdrawal, an expiry response — removes
+`/etc/vault.d/vault.hclic` and restarts vault, and so does moving `vault_edition`
+to a Community build, which renders no `license_path` to read it. Set
+`vault_license_manage_state: false` to opt out when the licence arrives out of
+band.
+
+**There is no preflight gate for a missing licence, deliberately** (operator
+ruling). Be aware of what that does and does not buy you:
+
+> **What Vault actually does without a licence is not fully established.** An
+> **expired** licence does **not** block start — Vault comes up and loses
+> Enterprise features until a valid one is supplied. Whether an **absent**
+> licence blocks start has never been measured against a real Enterprise binary,
+> and CI cannot measure it: no entitlement, no access to the paywalled RPMs.
+> Earlier revisions of this role stated that Enterprise "cannot start
+> unlicensed" and justified the missing gate on that basis. **Do not rely on
+> it.** The role reports a licence removal itself rather than delegating the
+> alarm to the service, and the gate stays absent on the cost of the extra code
+> path and test axis — not on an unverified claim about the binary.
+
+On an HSM build this matters twice over: the PKCS#11 seal is an Enterprise
+feature, so an unlicensed HSM node may come up **running but unable to
+auto-unseal**.
 
 > **Enterprise configs now reference `license_path` unconditionally.** Before
 > this, an Enterprise render carried no `license_path` and operators licensed
@@ -703,8 +725,9 @@ prevent a failure that already reports itself clearly.
 > precedence is `VAULT_LICENSE` > `VAULT_LICENSE_PATH` > `license_path`, so
 > existing environment-variable deployments keep working unchanged — but if you
 > stage a `.hclic` at a non-default path with no environment variable set, set
-> `vault_license_content` as well or the start failure will point at the new
-> `license_path`.
+> `vault_license_content` as well — or set `vault_license_manage_state: false`,
+> which is the supported way to say "the licence is not mine to manage." Without
+> one of the two, a routine role run removes the `.hclic` you staged.
 
 Satellite mode writes no `.repo` file: `subscription-manager` owns
 `/etc/yum.repos.d/redhat.repo` and generates it from the host's content-view

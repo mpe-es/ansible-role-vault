@@ -85,10 +85,69 @@ else:
         fail.append("the vault.hclic deploy has no `diff: false`; the licence would "
                     "appear under --diff")
 
+# --- the licence ABSENT state (review of #95) --------------------------------
+# The defect: the deploy task's `when` was (content AND enterprise) and NOTHING
+# covered its complement, so a withdrawn entitlement stayed on disk and stayed
+# referenced by license_path. An Enterprise node kept running on a licence the
+# desired state had retired and the role reported success.
+#
+# Both licence tasks now key off the single derived __vault_license_desired_state.
+# That is what this locks. Re-expressing either condition as a hand-written
+# negation of the other reopens the gap, and no molecule scenario can catch it:
+# every scenario runs exactly ONE licence posture, so no container run ever
+# transitions between them.
+removal = None
+for i, t in enumerate(tasks):
+    fm = t.get("ansible.builtin.file") or t.get("file")
+    if fm and isinstance(fm, dict) and "vault.hclic" in str(fm.get("path", "")):
+        removal = (i, t, fm)
+
+if removal is None:
+    fail.append("no file task removing vault.hclic found in tasks/configure.yml. "
+                "Without it, clearing vault_license_content or moving to a "
+                "Community edition leaves a withdrawn entitlement on disk, still "
+                "referenced by license_path on Enterprise.")
+else:
+    i, t, fm = removal
+    if fm.get("state") != "absent":
+        fail.append(f"the vault.hclic file task has state={fm.get('state')!r}, expected 'absent'")
+    if "Restart vault" not in str(t.get("notify", "")):
+        fail.append("the vault.hclic removal does not notify 'Restart vault'; the "
+                    "withdrawal would not take effect until some unrelated future "
+                    "restart, decoupling the failure from the run that caused it "
+                    "(operator ruling, 28 Sep 2026)")
+    # The ASYMMETRY is deliberate and must stay. no_log/diff:false belong on the
+    # DEPLOY task, whose `content:` carries the entitlement blob. A removal
+    # carries a path. Vault cannot be relied on to raise the alarm -- an expired
+    # licence starts DEGRADED rather than failing, and the absent case has never
+    # been measured against a real Enterprise binary -- so this task's log entry
+    # is the only attributable record that an entitlement was withdrawn.
+    if t.get("no_log") is True:
+        fail.append("the vault.hclic REMOVAL sets no_log: true. It carries a path, "
+                    "not a licence, and suppressing it erases the only attributable "
+                    "record of an entitlement withdrawal.")
+    if t.get("diff") is False:
+        fail.append("the vault.hclic REMOVAL sets diff: false. Same reason as no_log: "
+                    "the removal must stay visible.")
+
+# Both tasks must read the derived state, not a hand-rolled condition.
+STATE_VAR = "__vault_license_desired_state"
+if licence is not None:
+    when_deploy = str(licence[1].get("when", ""))
+    if STATE_VAR not in when_deploy or "'present'" not in when_deploy:
+        fail.append(f"the vault.hclic deploy does not gate on {STATE_VAR} == 'present' "
+                    f"(found when={when_deploy!r}). Hand-rolled conditions on the two "
+                    f"licence tasks drift apart, and the gap is a silent no-op.")
+if removal is not None:
+    when_remove = str(removal[1].get("when", ""))
+    if STATE_VAR not in when_remove or "'absent'" not in when_remove:
+        fail.append(f"the vault.hclic removal does not gate on {STATE_VAR} == 'absent' "
+                    f"(found when={when_remove!r}).")
+
 if fail:
     print("FAIL: configure.yml render gating / licence posture")
     for f in fail:
         print(f"  - {f}")
     sys.exit(1)
-print("ok: edition gate precedes the render; vault.hclic is root:vault 0640, no_log, no diff")
+print("ok: edition gate precedes the render; vault.hclic is root:vault 0640, no_log, no diff;\n    both licence tasks gate on __vault_license_desired_state; the removal notifies and stays visible")
 PYEOF
