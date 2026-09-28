@@ -187,6 +187,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **CI tested a Python / ansible-core pair nothing ran.** CI verified Python 3.11 /
+  ansible-core 2.19.13; `mpe-ee-rhel9` — the EE this role executes in under AAP —
+  runs 3.12.13 / 2.21.4. Zero of the 23 CI jobs exercised the combination in the
+  execution path, so every verified claim in the repository was measured on a pair
+  nothing used. That is #78's defect one layer out: #78 ended the divergence between
+  a developer's machine and CI, and never asked about CI versus the runtime.
+
+  Both values now move to the EE's pair. `requirements-dev.in` pins
+  `ansible-core==2.21.4` and `ci.yml` sets `PYTHON_VERSION: "3.12"`; the pin and the
+  interpreter are coupled, because core 2.20+ requires Python >= 3.12. Also moved:
+  `release.yml`, `.pre-commit-config.yaml` (`language_version` **and** the
+  `additional_dependencies` core pin — `pre-commit` resolves those itself and cannot
+  read the manifest), `meta/main.yml`, `meta/argument_specs.yml`, `bindep.txt`,
+  `requirements.yml`, `README.md` and `CONTRIBUTING.md`. Both lockfiles were
+  regenerated on `python:3.12-slim`.
+
+  **The porting risk was smaller than the issue predicted, measured rather than
+  assumed.** The issue warned that 2.16 → 2.21 crosses the 2.19 templating overhaul;
+  CI was already at 2.19.13, so that boundary was behind us. Across 2.19 → 2.21 only
+  two changes touch a role like this one, and both are inert here: 2.20 renames
+  `result.exception` to `failed_when_suppressed_exception` under `failed_when`
+  suppression — this role uses `failed_when: false` in thirteen places and consumes
+  `.exception` in none — and 2.20 makes argument-spec validation coerce `None` to `''`
+  for `type: str`, which matches what the role's twelve empty-defaulted string
+  variables already assume via `default('', true)`. Recompiling the dev lock changed
+  exactly one package: `ansible-core`. Nothing else moved.
+
+  **EL8 controller support is retained, not dropped.** `python3.12` is in EL8
+  AppStream — measured `3.12.14-1.el8_10` — so all three claimed platforms can host a
+  controller at the new floor. `CONTRIBUTING.md` no longer routes contributors
+  through EPEL for it.
+
+  `min_ansible_version` moves 2.17 → 2.21 but is **advisory** — ansible-core does not
+  enforce it, verified with a probe role declaring `99.0` that ran normally — and both
+  it and the README now say so where they state it. (#91)
+
+- **The documented lockfile regeneration command failed on an SELinux-enforcing
+  host**, which is this role's own target platform. `requirements.in` and
+  `requirements-dev.in` both documented a bind mount without `:z`; without it the
+  container starts and `pip-compile` reports `Path 'requirements.in' does not exist`,
+  which reads as a typo rather than a denial. Measured on RHEL 9 with `getenforce`
+  Enforcing. Both commands now carry `:z`, and `requirements.in` uses `podman` to
+  match `requirements-dev.in`. (#91)
+
 - **Enterprise version pins now resolve, and the default is pinned rather than
   floating.** `tasks/install.yml` built its dnf spec as
   `{{ vault_package_name }}-{{ vault_package_version }}`, but Enterprise NEVRA

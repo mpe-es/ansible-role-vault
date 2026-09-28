@@ -19,8 +19,9 @@ argument_specs:
         Supports single-node and HA (3/5-node) Raft clusters in airgap
         or internet-connected environments.
       - >-
-        Requires ansible-core >= 2.17.0 (for community.hashi_vault),
-        Python >= 3.10, and the hvac Python library.
+        Requires ansible-core >= 2.21.0, Python >= 3.12 on the controller, and
+        the hvac Python library. That is the mpe-ee-rhel9 runtime and the pair CI
+        tests. min_ansible_version in meta/main.yml is advisory, not enforced.
     author:
       - Alex Ackerman (@darkhonor)
 

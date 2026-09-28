@@ -165,21 +165,24 @@ no manual step is required.
 
 ### Ansible
 
-- ansible-core >= **2.17.0** (required by `community.hashi_vault` collection)
-- Python >= **3.11** on the CONTROLLER — the version CI installs and tests.
-  ansible-core 2.17 itself permits 3.10, but nothing verifies that floor, so
-  3.11 is what this role claims. Note that ansible-core **2.20+ requires Python
-  3.12+**; the role works on either, but the controller's Python and core
-  version move together. The MANAGED HOST's Python is a separate matter — the
-  role runs against EL8/9/10 platform Python (3.9 on RHEL/Rocky 9).
+- ansible-core >= **2.21.0** — CI pins **2.21.4**, the version `mpe-ee-rhel9`
+  runs. `community.hashi_vault` requires only 2.17, so this floor is CI's, not
+  the collection's.
+- Python >= **3.12** on the CONTROLLER — the version CI installs and tests, and
+  the one `mpe-ee-rhel9` runs. ansible-core **2.20+ requires Python 3.12+**, so
+  the controller's Python and core version move together (#91). `python3.12` is
+  in AppStream on EL8, EL9 and EL10 — measured `3.12.14-1.el8_10` on EL8, so an
+  EL8 controller is supported. The MANAGED HOST's Python is a separate matter —
+  the role runs against EL8/9/10 platform Python (3.9 on RHEL/Rocky 9).
 - **`min_ansible_version` in `meta/main.yml` is advisory.** ansible-core does not
   enforce it — verified with a probe role declaring `99.0`, which executed
   normally — so the floor above is a statement of intent, not a gate. A run below
   it produces no error, no warning and no failed job.
 - **Under AAP the controller is the execution environment**, so these are
   properties of the EE rather than of any host. `mpe-ee-rhel9` provides
-  ansible-core 2.21.4 on Python 3.12.13; the stock supported EE provides 2.16.19,
-  which is *below* the floor above. See the AAP section.
+  ansible-core 2.21.4 on Python 3.12.13 — **the pair CI now tests**. The stock
+  supported EE provides 2.16.19, which is *below* the floor above. See the AAP
+  section.
 - **Pipelining must be enabled** on any target where fapolicyd is enforcing —
   see immediately below. This is a hard requirement on this role's primary
   target platform, not a performance tuning knob.
@@ -275,7 +278,7 @@ job** — `.github/dependabot.yml` sets a 7-day release cooldown and maintains
 
 `requirements.in` is edited only to **add or remove** a dependency, which
 Dependabot does not do. The regeneration command and the two constraints that
-make it safe (run it on `linux/amd64` Python 3.11 to match CI; run it against
+make it safe (run it on `linux/amd64` Python 3.12 to match CI; run it against
 the existing `requirements.txt`, never a fresh path) are documented in
 `requirements.in` itself.
 
@@ -297,8 +300,8 @@ on a built AAP 2.6 image:
 
 | Requirement | Role declares | MPE EE provides |
 |---|---|---|
-| `ansible-core` | >= 2.17.0 | **2.21.4** |
-| Python (controller) | >= 3.11 | **3.12.13** |
+| `ansible-core` | >= 2.21.0 | **2.21.4** |
+| Python (controller) | >= 3.12 | **3.12.13** |
 | `ansible.posix` | >= 1.6.0 | 2.1.0 |
 | `ansible.utils` | >= 6.0.0 | 6.0.3 |
 | `community.general` | >= 9.0.0 | **13.2.0** |
@@ -313,14 +316,14 @@ Two things that follow from it, neither of which the table conveys:
 still an ephemeral job container, so `vault_initialize: true` still loses the
 root token and every unseal share without an explicit mount.
 
-**The role is not tested on what the EE runs.** CI verifies Python 3.11 /
-ansible-core **2.19.13**; the MPE EE runs 3.12.13 / **2.21.4**. Every "verified"
-claim in this repository — the preflight gates, the SAN contract, the full
-molecule matrix — is measured on a pair the execution path does not use. Closing
-that is tracked in [#87](https://github.com/mpe-es/ansible-role-vault/issues/87)
-(matrix) and [#91](https://github.com/mpe-es/ansible-role-vault/issues/91)
-(floor). Treat a green AAP job and a green CI run as evidence about different
-runtimes until then.
+**CI now tests the core the EE runs.** Since
+[#91](https://github.com/mpe-es/ansible-role-vault/issues/91), CI verifies Python
+3.12 / ansible-core **2.21.4** — the MPE EE's core exactly, on 3.12 against its
+3.12.13. Every "verified" claim in this repository is measured on that pair.
+
+**One gap remains:** CI tests a single pair, so a *different* EE — the stock
+supported one at 2.16.19, below this role's floor — is still unverified. Widening
+to a matrix is [#87](https://github.com/mpe-es/ansible-role-vault/issues/87).
 
 #### STOP — read this before running with `vault_initialize: true` on AAP
 
@@ -445,22 +448,23 @@ across the airgap to solve a two-collection problem.
 
 #### Version alignment — read this before trusting a green job
 
-The default EE and this role's CI do **not** run the same toolchain:
+CI now matches `mpe-ee-rhel9` (#91). The **default supported EE** still does not:
 
-| | Default supported EE (2.7) | What CI verifies |
-|---|---|---|
-| Python | **3.12.14** | 3.11 |
-| ansible-core | **2.16.19** | 2.19.13 |
+| | Default supported EE (2.7) | `mpe-ee-rhel9` | What CI verifies |
+|---|---|---|---|
+| Python | **3.12.14** | 3.12.13 | 3.12 |
+| ansible-core | **2.16.19** | 2.21.4 | **2.21.4** |
 
-`meta/main.yml` declares `min_ansible_version: '2.17'` and this README's Ansible
-section states `>= 2.17.0`. The EE is **below** that floor. **`min_ansible_version`
+`meta/main.yml` declares `min_ansible_version: '2.21'` and this README's Ansible
+section states `>= 2.21.0`. The default EE is **below** that floor. **`min_ansible_version`
 is advisory galaxy metadata — ansible-core does not enforce it**, verified with a
 probe role declaring `min_ansible_version: '99.0'` that executed normally. So the
 shortfall produces no error, no warning, and no failed job. It is silent.
 
-Treat a green AAP job as evidence about `3.12.14 / 2.16.19`, and a green CI run as
-evidence about `3.11 / 2.19.13`. Neither is evidence about the other until the CI
-matrix covers the pair AAP actually runs.
+A green CI run is now evidence about the pair `mpe-ee-rhel9` runs. It is still not
+evidence about the **default** EE at `3.12.14 / 2.16.19`, which is two minor
+versions below the tested core. Run this role from `mpe-ee-rhel9`, or cover the
+other pair in the matrix (#87).
 
 #### Verify your own EE
 

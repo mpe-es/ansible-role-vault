@@ -3,7 +3,7 @@
 # Filename: .pre-commit-config.yaml
 # Role: ansible-role-vault
 # Summary: Pre-commit hooks for local linting before push
-# Last Updated: 03 Apr 2026
+# Last Updated: 28 Sep 2026
 # Classification: UNCLASSIFIED
 ###############################################################################
 # See https://pre-commit.com for more information
@@ -19,7 +19,7 @@ repos:
         types: [yaml]
 
   # Ansible Linting
-  # Note: ansible-core 2.17+ requires Python 3.10+, so we specify python3.11.
+  # Note: ansible-core 2.20+ requires Python 3.12+, so we specify python3.12.
   #
   # ansible-core is pinned to the SAME version as requirements-dev.in, which is
   # the single source of the pin -- CI installs it from requirements-dev.txt and
@@ -33,16 +33,16 @@ repos:
   # manifest -- it is the one place the version is necessarily duplicated. Keep
   # it equal to requirements-dev.in's pin.
   #
-  # ansible-core 2.20+ requires Python >= 3.12, so 2.19.13 is the ceiling while
-  # language_version is python3.11. Both move together, tracked in #91.
+  # ansible-core 2.20+ requires Python >= 3.12, so this pin and language_version
+  # move together (#91). Both now match the mpe-ee-rhel9 runtime.
   - repo: https://github.com/ansible/ansible-lint
     rev: v25.1.0
     hooks:
       - id: ansible-lint
         args: []
-        language_version: python3.11
+        language_version: python3.12
         additional_dependencies:
-          - ansible-core==2.19.13
+          - ansible-core==2.21.4
 
   # General file hygiene
   - repo: https://github.com/pre-commit/pre-commit-hooks

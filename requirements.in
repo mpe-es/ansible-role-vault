@@ -8,7 +8,7 @@
 # This file is edited only to ADD or REMOVE a dependency, which Dependabot does
 # not do. After editing, regenerate the lock on the platform CI installs it on:
 #
-#   docker run --rm --platform linux/amd64 -v "$PWD:/w" -w /w python:3.11-slim \
+#   podman run --rm --platform linux/amd64 -v "$PWD:/w:z" -w /w python:3.12-slim \
 #     sh -c 'pip install -q pip-tools && \
 #            pip-compile --generate-hashes --output-file=requirements.txt requirements.in'
 #
@@ -16,8 +16,13 @@
 #
 #   * Run it in that container. --generate-hashes enumerates the wheels the
 #     resolver can SEE, which depends on OS, architecture and Python version.
-#     CI is ubuntu-latest x86_64 / Python 3.11; regenerating on macOS rewrote
-#     ~184 lines for no semantic reason.
+#     CI is ubuntu-latest x86_64 / Python 3.12 (#91); regenerating on macOS
+#     rewrote ~184 lines for no semantic reason.
+#
+#   * The `:z` on the volume mount is REQUIRED on an SELinux-enforcing host --
+#     this role's own target platform. Without it the container starts and
+#     pip-compile reports "Path 'requirements.in' does not exist", which reads
+#     as a typo rather than a denial. Measured on RHEL 9, getenforce Enforcing.
 #
 #   * Run it against the EXISTING requirements.txt, never a fresh path.
 #     pip-compile honours the pins already in its output file, so nothing is
