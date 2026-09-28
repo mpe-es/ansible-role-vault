@@ -189,6 +189,11 @@ __vault_init_host_effective: >-
   {{ vault_init_host if (vault_init_host | default('') | length > 0)
      else inventory_hostname }}
 
+# Peer-name syntax for tasks/preflight/cluster.yml: DNS labels of 1-63 chars,
+# no leading or trailing hyphen, optional trailing root dot. Deliberately rejects
+# underscores, a colon (a port), a slash (a prefix) and any whitespace.
+__vault_peer_name_re: '^(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))*\.?$'
+
 # The init register, readable from followers. `operator init` runs on one host,
 # so every follower-side consumer reads it through hostvars. Tasks that
 # dereference .stdout carry their own no_log.

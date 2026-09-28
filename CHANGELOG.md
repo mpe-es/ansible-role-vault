@@ -51,7 +51,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   **New preflight gate `tasks/preflight/cluster.yml`**, placed beside `edition` because
   both validate inputs and probe nothing. It rejects two simultaneous join sources, a
-  peer carrying a scheme or a port, a member list with no named init host, and an init
+  malformed peer, a member list with no named init host, and an init
   host absent from the play — that last one **fails closed**, because an absent init
   host yields an empty register on every host and the capture, the unseal and the
   init-capture durability gate would all skip while the play reported success.
@@ -70,13 +70,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Limitations), `meta/main.yml` and `meta/argument_specs.yml`, which feeds `ansible-doc`
   and AAP surveys.
 
+  **Peer validation is `ansible.utils.ipaddr` plus a DNS-label pattern, not
+  `urlsplit('scheme')`.** The first version was measured wrong in **both** directions on
+  core 2.21.4. A URI scheme may begin with any letter, so `fd00::10` — the ULA range an
+  airgapped enclave actually numbers with — parsed as `scheme=fd00` and every
+  letter-leading IPv6 (`fe80::1`, `abcd::1`) was **rejected**; while `10.0.0.1:8200`
+  begins with a digit, yielded no scheme, **passed**, and rendered
+  `https://[10.0.0.1:8200]:8200` into `vault.hcl`. Empty strings, whitespace, paths,
+  queries, CIDR prefixes and `999.999.999.999` passed too. The replacement is verified
+  against 26 cases with zero mismatches. `ipaddr` is task-side only: the template stays
+  filter-free because `tests/render-hsm-pin-test.sh` renders it under plain Jinja.
+
+  **`retry_join` now carries client credentials when the listener demands them.** With
+  `vault_tls_require_client_cert: true` the stanza sent only the CA, so a follower could
+  not authenticate to the leader and never joined — HA was silently incompatible with the
+  role's own mTLS setting. `leader_client_cert_file` and `leader_client_key_file` are
+  rendered from the node's own listener identity, which therefore needs `clientAuth` in
+  its extended key usage.
+
+  **The join wait covers an HSM cluster.** Those nodes unseal themselves, but they still
+  have to **join**; excluding them meant a follower with broken `retry_join` TLS or
+  unreachable peers stayed uninitialized under a green play, so "HSM support" meant
+  configuration only, not a cluster that stood up.
+
+  **New cross-node cluster-identity assert.** Every other gate keys on a node's **own**
+  `initialized` flag, so N nodes each initialized separately — N independent Vaults with
+  N key sets — all report initialized, every gate skips, and the play is green over a
+  split cluster. That is the precise failure this work exists to prevent. Each node's
+  `cluster_id` is now compared with the init host's. Limit: `seal-status` carries
+  `cluster_id` only while a node is **unsealed**, so a cluster deliberately left sealed
+  is not checked.
+
+  **`strategy: free` now fails loudly instead of skipping silently.** Under the default
+  `linear` strategy the task barrier guarantees a follower reads a populated register;
+  `free` removes it, so a follower could run ahead of the init host, read an empty
+  register, skip the unseal, the join wait and every verification, and leave a sealed
+  unjoined node under a green play.
+
+  **`--check` no longer reports a false initialization failure.** `vault status` lacked
+  `check_mode: false`; measured on core 2.21.4, a skipped command still carries `rc=0`
+  with an **empty** `stdout`, so the parse passed its rc gate, `from_json('')` raised, and
+  the rescue reported an initialization failure that never happened.
+
   Covered by `tests/render-retry-join-test.sh`, which renders the **real**
-  `templates/vault.hcl.j2` across eight cases (deleting the `retry_join` loop fails
+  `templates/vault.hcl.j2` across thirteen cases (deleting the `retry_join` loop fails
   six of them), by `tests/assert-ha-init-orchestration.sh`, which locks the gates
   **and** the data expressions, and by its meta-gate
-  `tests/assert-ha-init-mutations.sh` — **14 mutations, all killed, every one
-  asserting it applied** so a stale anchor cannot fake a pass. Plus seven behavioural
-  cases in `molecule/preflight/verify.yml`. Three parallel guard surfaces moved with the new
+  `tests/assert-ha-init-mutations.sh` — **31 mutations, all killed, every one
+  asserting it applied** so a stale anchor cannot fake a pass. The `no_log` sweep is
+  **positive and data-keyed**: it stringifies the whole task, covers the `rescue`, and
+  names the register variables as well as the JSON field names, because
+  `debug: var=__vault_init_source` dumps the root token while naming no field at all.
+  Plus fourteen behavioural cases in `molecule/preflight/verify.yml`. Three parallel guard surfaces moved with the new
   gate: both preflight locks' gate lists and the `ALLOW` set in
   `assert-facts-via-ansible-facts.sh`. (#44)
 

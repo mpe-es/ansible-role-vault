@@ -117,6 +117,41 @@ run "capture root token loses no_log" \
 run "audit enable loses no_log" \
   "i = s.index('name: Enable file audit device'); j = s.index('name: Enable syslog audit device'); seg = s[i:j].replace('      no_log: true\n', ''); s = s[:i] + seg + s[j:]"
 
+# --- codex round 1: the lock's own blind spots, and the new gates -------------
+
+run "operator init gains run_once" \
+  "i = s.index('name: Run vault operator init'); j = s.index('name: Fail when the init host'); seg = s[i:j].replace('      register: __vault_init_output', '      register: __vault_init_output\n      run_once: true'); s = s[:i] + seg + s[j:]"
+
+run "operator init changed_when goes constant-false" \
+  "s = s.replace('changed_when: __vault_init_output.rc == 0', 'changed_when: false')"
+
+run "a debug dumps the shared register" \
+  "s = s.replace('    - name: Enable file audit device', '    - name: Show init output\n      ansible.builtin.debug:\n        var: __vault_init_source\n\n    - name: Enable file audit device')"
+
+run "the status probe loses check_mode false" \
+  "s = s.replace('      check_mode: false\n      environment:', '      environment:', 1)"
+
+run "the join wait excludes HSM again" \
+  "s = s.replace('        - (vault_hsm_enabled | bool) or (vault_init_unseal | bool)\n        - __vault_initialized is defined', '        - vault_init_unseal | bool\n        - not (vault_hsm_enabled | bool)\n        - __vault_initialized is defined')"
+
+run "the strategy:free guard is deleted" \
+  "i = s.index('    - name: Fail when the init host has produced no key material'); j = s.index('    # root:root 0600 in /etc/vault.d'); s = s[:i] + s[j:]"
+
+run "the strategy:free guard stops testing for an empty register" \
+  "s = s.replace(\"        - __vault_init_source.stdout | default('') | length == 0\", '')"
+
+run "the cluster-identity assert is deleted" \
+  "i = s.index(\"    - name: Assert every cluster node reports the same Raft cluster\"); j = s.index('    - name: Enable file audit device'); s = s[:i] + s[j:]"
+
+run "the cluster-identity assert compares a node with itself" \
+  "s = s.replace(\"{{ hostvars[__vault_init_host_effective]['__vault_cluster_identity'].json.cluster_id\", '{{ __vault_cluster_identity.json.cluster_id')"
+
+run "the cluster-identity read becomes no_log" \
+  "s = s.replace(\"      register: __vault_cluster_identity\", '      register: __vault_cluster_identity\n      no_log: true')"
+
+run "the rescue points at the failing host, not the capture host" \
+  "s = s.replace('}}/{{ __vault_init_host_effective }}', '}}/{{ inventory_hostname }}')"
+
 cp "$WORK/service.yml.orig" "$SRC"
 if ! bash "$LOCK" "$ROOT" >/dev/null 2>&1; then
   echo "FAIL: the lock does not pass on the real tree"; exit 1

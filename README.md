@@ -690,7 +690,7 @@ See the initialization warning at the top of this section before enabling
 | `vault_raft_node_id` | `{{ inventory_hostname_short }}` | Raft node identifier |
 | `vault_api_addr` | `https://{{ ansible_facts['fqdn'] }}:8200` | Advertised API address |
 | `vault_cluster_addr` | `https://{{ ansible_facts['fqdn'] }}:8201` | Cluster replication address |
-| `vault_cluster_members` | `[]` | Raft peers, one `retry_join` stanza each. **Bare host or IP** — no scheme, no port; the template adds both and brackets IPv6. Every entry must be a SAN on that peer's listener certificate. Empty means single-node |
+| `vault_cluster_members` | `[]` | Raft peers, one `retry_join` stanza each. **Bare host or IP** — no scheme, no port, no CIDR prefix; the template adds both and brackets IPv6, including ULA (`fd00::/8`) and link-local. Validated with `ansible.utils.ipaddr` plus a DNS-label pattern. Every entry must be a SAN on that peer's listener certificate. Empty means single-node |
 | `vault_init_host` | `""` | The one node that runs `operator init`. **Required** when `vault_cluster_members` is set. Empty means this host (single-node). Must be in the play |
 | `vault_cluster_leader_addr` | `""` | **Deprecated for HA** — renders a single `retry_join` stanza, which is not the Raft join contract. Mutually exclusive with `vault_cluster_members`. The HA VIP belongs on client traffic, not here |
 
@@ -1288,6 +1288,20 @@ limited:
 - **Peer names are a TLS contract the role cannot check.** Every entry in
   `vault_cluster_members` must be a SAN on that peer's listener certificate; a mismatch
   fails the join after the host is already configured.
+- **`strategy: free` is not supported for an HA bring-up.** The default `linear`
+  strategy's task barrier is what guarantees a follower reads a populated init register.
+  Under `free` a follower can run ahead of the initialization host; the role detects the
+  empty register and **fails the play** rather than skipping to a green result, but it
+  cannot make `free` work.
+- **mTLS peers present the node's own listener identity.** When
+  `vault_tls_require_client_cert` is `true`, `retry_join` sends
+  `leader_client_cert_file` and `leader_client_key_file` from `vault_tls_cert_file` and
+  `vault_tls_key_file`. That certificate therefore needs **`clientAuth` in its extended
+  key usage**; a server-only certificate fails the join. The role cannot inspect the EKU.
+- **A cluster left sealed is not identity-checked.** The cross-node `cluster_id`
+  comparison that catches N-independent-clusters reads `seal-status`, which carries
+  `cluster_id` only while a node is **unsealed**. With `vault_init_unseal: false` the
+  check is skipped, so a split cluster left sealed is not detected until it is unsealed.
 
 [`docs/runbooks/cluster-bringup.md`](docs/runbooks/cluster-bringup.md) carries the
 bring-up sequence, the custody step and the failure table.

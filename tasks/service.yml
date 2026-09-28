@@ -108,6 +108,11 @@
       register: __vault_status
       failed_when: false
       changed_when: false
+      # `vault status` only reads. Without this, --check SKIPS it, and a skipped
+      # command still carries rc=0 with an EMPTY stdout (measured, core 2.21.4),
+      # so the parse below passes its rc gate and then from_json('') raises --
+      # the rescue fires and reports an initialization failure that did not occur.
+      check_mode: false
       environment:
         VAULT_ADDR: "https://127.0.0.1:{{ vault_listener_port }}"
         VAULT_CACERT: "{{ vault_tls_ca_file }}"
@@ -150,6 +155,30 @@
         VAULT_CACERT: "{{ vault_tls_ca_file }}"
       no_log: true
       changed_when: __vault_init_output.rc == 0
+
+    # Under the default `linear` strategy every host reaches this point only after
+    # the init host has finished `operator init`, so the shared register is
+    # populated. `strategy: free` removes that barrier: a follower can arrive
+    # first, read an empty register, and SKIP the unseal, the join wait and every
+    # verification below -- init then succeeds on the other host and the play
+    # reports success over a sealed, unjoined node. The condition lives entirely
+    # in `when:` so the task renders no register content.
+    - name: Fail when the init host has produced no key material for this node
+      ansible.builtin.fail:
+        msg: >-
+          This node is not initialized, but the initialization host
+          {{ __vault_init_host_effective }} has produced no init output for it to
+          read. Either this play runs with `strategy: free`, which is unsupported
+          for an HA bring-up because nothing orders the follower after the init
+          host, or the cluster was already initialized and this node is a NEW
+          peer -- adding a peer to a live cluster is day-2 and out of scope, and
+          the existing unseal shares are not available to this run.
+      when:
+        - vault_cluster_members | default([]) | length > 0
+        - inventory_hostname != __vault_init_host_effective
+        - __vault_initialized is defined
+        - not __vault_initialized | bool
+        - __vault_init_source.stdout | default('') | length == 0
 
     # root:root 0600 in /etc/vault.d, which Phase 4 owns root:vault 0750:
     # the file is source'd by root (vault-unseal.service), and a root-owned
@@ -249,8 +278,12 @@
       changed_when: true
 
     # A Shamir joiner reports initialized only once the leader is unsealed and the
-    # join completes, so this sits between the two unseals. Skipped under an HSM
-    # seal, where every node unseals itself and nothing here depends on the join.
+    # join completes, so this sits between the two unseals. It runs under an HSM
+    # seal as well: those nodes unseal THEMSELVES but they still have to JOIN, and
+    # excluding them meant a follower with broken retry_join TLS or unreachable
+    # peers stayed uninitialized while the play reported success. Under HSM the
+    # gate is the seal type, not vault_init_unseal, which is the same pairing the
+    # audit-enable tasks use.
     - name: Wait for this node to join the cluster
       ansible.builtin.uri:
         url: "https://127.0.0.1:{{ vault_listener_port }}/v1/sys/seal-status"
@@ -266,8 +299,7 @@
         - vault_cluster_members | default([]) | length > 0
         - inventory_hostname != __vault_init_host_effective
         - __vault_init_source.stdout | default('') | length > 0
-        - vault_init_unseal | bool
-        - not (vault_hsm_enabled | bool)
+        - (vault_hsm_enabled | bool) or (vault_init_unseal | bool)
         - __vault_initialized is defined
         - not __vault_initialized | bool
 
@@ -317,6 +349,51 @@
         - vault_init_unseal | bool
         - not (vault_hsm_enabled | bool)
 
+    # Every task above keys on a node's OWN `initialized` flag. N nodes each
+    # initialized separately -- N independent Vaults with N unseal key sets -- all
+    # report initialized, so every task above skips and the play reports success
+    # over a split cluster. That is the precise failure #44 exists to prevent and
+    # nothing above detects it. cluster_id is the cheap cross-node identity.
+    # LIMIT: seal-status carries cluster_id only while the node is UNSEALED, so a
+    # cluster deliberately left sealed (vault_init_unseal=false) is not checked.
+    - name: Read this node's cluster identity (seal status — no key material)
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:{{ vault_listener_port }}/v1/sys/seal-status"
+        method: GET
+        ca_path: "{{ vault_tls_ca_file }}"
+        status_code: [200]
+      register: __vault_cluster_identity
+      when: vault_cluster_members | default([]) | length > 0
+      changed_when: false
+      check_mode: false
+
+    - name: Assert every cluster node reports the same Raft cluster
+      ansible.builtin.assert:
+        that:
+          - __vault_this_cluster_id | length > 0
+          - __vault_this_cluster_id == __vault_peer_cluster_id
+        fail_msg: >-
+          This node reports Raft cluster
+          '{{ __vault_this_cluster_id | default('<none>') }}' while the
+          initialization host {{ __vault_init_host_effective }} reports
+          '{{ __vault_peer_cluster_id | default('<none>') }}'. Those are separate
+          Vault clusters with separate unseal key sets, not one HA cluster:
+          either retry_join never took effect, or these nodes were initialized
+          independently before vault_cluster_members was set. An
+          already-initialized node cannot be joined to another cluster -- destroy
+          the Raft data directory on every node except the initialization host
+          and re-run.
+        success_msg: "Cluster identity matches the initialization host"
+      vars:
+        __vault_this_cluster_id: >-
+          {{ __vault_cluster_identity.json.cluster_id | default('') }}
+        __vault_peer_cluster_id: >-
+          {{ hostvars[__vault_init_host_effective]['__vault_cluster_identity'].json.cluster_id
+             | default('') }}
+      when:
+        - vault_cluster_members | default([]) | length > 0
+        - not (__vault_cluster_identity.json.sealed | default(true) | bool)
+
     - name: Enable file audit device
       ansible.builtin.command:
         cmd: >-
@@ -355,6 +432,12 @@
           WARNING: Vault initialized but left SEALED (vault_init_unseal=false).
           Audit devices were NOT enabled. Run 'vault operator unseal' with the
           threshold shares, then enable file and syslog audit devices manually.
+          {{ "This is an HA cluster, so the FOLLOWERS ARE ALSO NOT JOINED: a
+          sealed leader cannot serve the Raft bootstrap challenge, so retry_join
+          keeps retrying until the leader is unsealed by hand. Unseal the
+          initialization host FIRST, then the rest."
+          if (vault_cluster_members | default([]) | length > 0)
+          else "" }}
       when:
         - __vault_init_source.stdout | default('') | length > 0
         - not (vault_init_unseal | bool)
@@ -385,7 +468,7 @@
           sealed={{ __status.sealed | default('unknown') }}
           (Vault may be down if 'unknown'). If init ran, the root token and
           unseal/recovery shares were captured to the controller directory
-          {{ vault_init_capture_dir | default('the configured vault_init_capture_dir') }}/{{ inventory_hostname }}
+          {{ vault_init_capture_dir | default('the configured vault_init_capture_dir') }}/{{ __vault_init_host_effective }}
           (and shares also to /etc/vault.d/tokens.env if vault_auto_unseal_enabled).
           Next: unseal manually and enable audit devices, or destroy the node and re-initialize.
 

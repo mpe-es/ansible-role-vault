@@ -184,10 +184,18 @@ for m, label in ((lead, "leader"), (foll, "follower")):
 # GATES on the register (Warn left sealed) names no key at all.
 # datastr() is left alone: lock 4 asserts the ABSENCE of a register name, where
 # widening the haystack would weaken it.
+# `when` is excluded with `name`. A gate that merely TESTS the register renders
+# nothing -- `Warn left sealed`, the capture directory, and the strategy:free guard
+# all reference it only there -- so including `when` would demand no_log on tasks
+# that print no key material and would hide the seal-status diagnostics.
 def wholetask(t):
-    return str({k: v for k, v in t.items() if k != "name"})
+    return str({k: v for k, v in t.items() if k not in ("name", "when")})
 
-KEY_MATERIAL = ("root_token", "unseal_keys_b64", "recovery_keys_b64", "__vault_init_data")
+# The REGISTER NAMES are in the list, not only the JSON field names. `debug: var=
+# __vault_init_source` names no field and dumps the entire init output, root token
+# included; keying on field names alone let that through.
+KEY_MATERIAL = ("root_token", "unseal_keys_b64", "recovery_keys_b64",
+                "__vault_init_data", "__vault_init_source", "__vault_init_output")
 for t in inner + rescue:
     name = str(t.get("name", ""))
     renders_material = any(k in wholetask(t) for k in KEY_MATERIAL)
@@ -211,13 +219,103 @@ for t in inner + rescue:
 # cluster, which is why they are not pinned statically here.
 
 # 8b. seal status carries no key material and must NOT be no_log
-for frag in ("Verify Vault is unsealed", "Assert the unseal succeeded"):
+for frag in ("Verify Vault is unsealed", "Assert the unseal succeeded",
+             "Read this node's cluster identity", "Assert every cluster node reports"):
     t = one(frag)
     if t is None:
         continue
     if t.get("no_log") is True:
         fail.append(f"{frag!r} sets no_log: true. Seal status carries no key material, and "
                     f"silencing it removes the fail-fast diagnostic.")
+
+# 9. `operator init` must stay host-scoped by `when`, never by run_once, and its
+# changed_when must stay the rc test.
+init = one("Run vault operator init")
+if init is not None:
+    if "run_once" in init:
+        fail.append("`operator init` carries run_once. run_once picks the FIRST host of the "
+                    "play, not the init host, and it propagates the registered root token and "
+                    "shares to EVERY host -- which widens the controller capture to N "
+                    "directories. Host scoping is the `when`, never run_once.")
+    cw = str(init.get("changed_when", ""))
+    if "__vault_init_output.rc" not in cw:
+        fail.append(f"`operator init` changed_when is {cw!r}, not the rc test. Every capture "
+                    f"task is gated on `__vault_init_output is changed`, so a constant-false "
+                    f"changed_when silently skips the root-token and share capture after a "
+                    f"SUCCESSFUL init -- the keys are then held nowhere.")
+
+# 10. The status probe must run under --check. A skipped command still reports
+# rc=0 with empty stdout, so the parse below it raises inside from_json and the
+# rescue reports an initialization failure that never happened.
+st = one("Check Vault initialization status")
+if st is not None and st.get("check_mode") is not False:
+    fail.append("`Check Vault initialization status` has no `check_mode: false`. Measured on "
+                "core 2.21.4: under --check the command is skipped but still carries rc=0 with "
+                "an EMPTY stdout, the rc gate passes, from_json('') raises, and the rescue "
+                "reports a false initialization failure.")
+
+# 11. The join wait must cover an HSM cluster. HSM nodes unseal themselves but
+# still have to JOIN; excluding them let a follower with broken retry_join stay
+# uninitialized under a green play.
+jw = one("Wait for this node to join the cluster")
+if jw is not None:
+    w = whenstr(jw)
+    if "not (vault_hsm_enabled" in w or "not vault_hsm_enabled" in w:
+        fail.append("the join wait excludes HSM. Those nodes auto-unseal but still have to "
+                    "JOIN the Raft cluster; excluding them means a follower that never joins "
+                    "passes. Gate the seal TYPE like the audit tasks do: "
+                    "`(vault_hsm_enabled | bool) or (vault_init_unseal | bool)`.")
+
+# 12. A follower with no key material must FAIL, not skip. Without this,
+# `strategy: free` lets a follower run ahead of the init host, read an empty
+# register, skip every task below, and leave a sealed unjoined node under a green
+# play. The condition must stay in `when:` so the task renders no register.
+fr = one("Fail when the init host has produced no key material")
+if fr is None:
+    fail.append("the strategy:free guard is gone. Without it a follower that reaches this "
+                "block before the init host reads an empty register and SKIPS the unseal, the "
+                "join wait and every verification -- a sealed, unjoined node under a green play.")
+else:
+    w = whenstr(fr)
+    if "length == 0" not in w or SHARED not in w:
+        fail.append(f"the strategy:free guard no longer tests {SHARED} for emptiness in its "
+                    f"`when`, so it cannot fire on the case it exists for.")
+    if "ansible.builtin.fail" not in fr:
+        fail.append("the strategy:free guard is not a `fail` task, so it cannot stop the play.")
+
+# 13. Cross-node cluster identity. N independently initialized nodes each report
+# initialized=true, so every gate above skips and the play is green over N
+# separate Vaults with N key sets -- the exact failure #44 exists to prevent.
+ci = one("Assert every cluster node reports the same Raft cluster")
+if ci is None:
+    fail.append("the cluster-identity assert is gone. Nothing else compares nodes: each keys "
+                "on its OWN initialized flag, so N independent Vaults pass as one HA cluster.")
+else:
+    d = wholetask(ci)
+    if "cluster_id" not in d:
+        fail.append("the cluster-identity assert no longer reads cluster_id, which is the only "
+                    "cross-node identity in seal-status.")
+    if "hostvars[__vault_init_host_effective]" not in d:
+        fail.append("the cluster-identity assert no longer compares against the INIT HOST, so "
+                    "it compares a node with itself and always passes.")
+
+# 14. The rescue must name the host that actually holds the capture. Capture runs
+# on the init host alone, so a follower failure that cites inventory_hostname
+# sends an operator to a directory that was never created.
+# Searched across block AND rescue: this task lives in the rescue, where `one()`
+# does not look.
+_res = [t for t in (inner + rescue)
+        if "Surface Vault initialization failure state" in str(t.get("name", ""))]
+if not _res:
+    fail.append("the rescue's 'Surface Vault initialization failure state' task is gone; the "
+                "failure path no longer tells an operator where the root token was captured.")
+for t in _res:
+    d = str(t.get("ansible.builtin.fail", ""))
+    if "vault_init_capture_dir" in d and "__vault_init_host_effective" not in d:
+        fail.append("the rescue cites the capture directory without "
+                    "__vault_init_host_effective. Capture happens on the init host only, so on "
+                    "a follower failure this names a directory that does not exist -- during an "
+                    "incident, for the root token.")
 
 if fail:
     print("FAIL: #44 HA init orchestration")

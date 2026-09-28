@@ -40,6 +40,16 @@ storage "raft" {
   retry_join {
     leader_api_addr     = "https://{{ '[' ~ peer ~ ']' if ':' in peer else peer }}:{{ vault_listener_port }}"
     leader_ca_cert_file = "{{ vault_tls_ca_file }}"
+{#- The listener below may REQUIRE a client certificate. A retry_join that sends
+    only the CA then cannot authenticate to the leader and the follower never
+    joins, so these two fields are not optional decoration -- HashiCorp documents
+    them as what "the follower node uses to establish client authentication with
+    the possible leader node". The node presents its OWN listener identity, which
+    therefore needs clientAuth in its extended key usage. #}
+{% if vault_tls_require_client_cert | default(false) %}
+    leader_client_cert_file = "{{ vault_tls_cert_file }}"
+    leader_client_key_file  = "{{ vault_tls_key_file }}"
+{% endif %}
   }
 {% endfor %}
 {% if vault_cluster_leader_addr | default('') | length > 0 %}

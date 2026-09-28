@@ -1565,6 +1565,103 @@
         vault_cluster_members: ["{{ inventory_hostname }}", vault-02.mpe.mil, "2001:db8::10"]
         vault_init_host: "{{ inventory_hostname }}"
 
+    # The ULA range is what an airgapped enclave actually numbers with, and the
+    # first version of this gate REJECTED it: urlsplit read fd00 as a scheme, so
+    # every letter-leading IPv6 was a false rejection. Locked as a PASSES case.
+    - name: "PASSES - ULA and link-local IPv6 peers"
+      ansible.builtin.include_role:
+        name: ansible-role-vault
+        tasks_from: preflight/cluster.yml
+      vars:
+        vault_cluster_members: ["fd00::10", "fe80::1", "abcd::1"]
+        vault_init_host: "{{ inventory_hostname }}"
+
+    # Every case below PASSED the first version of this gate. The IPv4-with-port
+    # one rendered https://[10.0.0.1:8200]:8200 into vault.hcl.
+    - name: "FIRES - an IPv4 peer carrying a port"
+      block:
+        - name: Run cluster with an IPv4 host:port peer
+          ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/cluster.yml
+          vars:
+            vault_cluster_members: ["10.0.0.1:8200"]
+            vault_init_host: "{{ inventory_hostname }}"
+        - name: A ported IPv4 peer should not have passed
+          ansible.builtin.fail:
+            msg: "the gate accepted a numeric peer with an explicit listener port"
+      rescue:
+        - name: Assert the message names the bare-host rejection
+          vars:
+            __looped_msgs: "{{ ansible_failed_result.results | default([]) | map(attribute='msg') | join(' ') }}"
+          ansible.builtin.assert:
+            that:
+              - __looped_msgs is search('not a bare host or IP')
+            fail_msg: "wrong cause: {{ ansible_failed_result.msg | default('') }}"
+
+    - name: "FIRES - an empty string as a peer"
+      block:
+        - name: Run cluster with an empty peer
+          ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/cluster.yml
+          vars:
+            vault_cluster_members: ["vault-02.mpe.mil", ""]
+            vault_init_host: "{{ inventory_hostname }}"
+        - name: An empty peer should not have passed
+          ansible.builtin.fail:
+            msg: "the gate accepted a peer with no value at all"
+      rescue:
+        - name: Assert the message names the bare-host rejection
+          vars:
+            __looped_msgs: "{{ ansible_failed_result.results | default([]) | map(attribute='msg') | join(' ') }}"
+          ansible.builtin.assert:
+            that:
+              - __looped_msgs is search('not a bare host or IP')
+            fail_msg: "wrong cause: {{ ansible_failed_result.msg | default('') }}"
+
+    - name: "FIRES - a CIDR prefix as a peer"
+      block:
+        - name: Run cluster with a prefix where a host belongs
+          ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/cluster.yml
+          vars:
+            vault_cluster_members: ["10.0.0.0/24"]
+            vault_init_host: "{{ inventory_hostname }}"
+        - name: A prefix should not have passed
+          ansible.builtin.fail:
+            msg: "the gate accepted a network range in place of a single peer"
+      rescue:
+        - name: Assert the message names the bare-host rejection
+          vars:
+            __looped_msgs: "{{ ansible_failed_result.results | default([]) | map(attribute='msg') | join(' ') }}"
+          ansible.builtin.assert:
+            that:
+              - __looped_msgs is search('not a bare host or IP')
+            fail_msg: "wrong cause: {{ ansible_failed_result.msg | default('') }}"
+
+    - name: "FIRES - an all-numeric peer that is not a valid IPv4"
+      block:
+        - name: Run cluster with an out-of-range dotted quad
+          ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/cluster.yml
+          vars:
+            vault_cluster_members: ["999.999.999.999"]
+            vault_init_host: "{{ inventory_hostname }}"
+        - name: An invalid dotted quad should not have passed
+          ansible.builtin.fail:
+            msg: "the gate accepted a numeric peer outside the IPv4 range"
+      rescue:
+        - name: Assert the message names the bare-host rejection
+          vars:
+            __looped_msgs: "{{ ansible_failed_result.results | default([]) | map(attribute='msg') | join(' ') }}"
+          ansible.builtin.assert:
+            that:
+              - __looped_msgs is search('not a bare host or IP')
+            fail_msg: "wrong cause: {{ ansible_failed_result.msg | default('') }}"
+
     - name: "FIRES - a peer list given as a string"
       block:
         - name: Run cluster with a string where a list belongs
@@ -1647,7 +1744,7 @@
             __looped_msgs: "{{ ansible_failed_result.results | default([]) | map(attribute='msg') | join(' ') }}"
           ansible.builtin.assert:
             that:
-              - __looped_msgs is search('scheme or a port')
+              - __looped_msgs is search('not a bare host or IP')
               - __looped_msgs is search('https://https://')
             fail_msg: "wrong cause: {{ ansible_failed_result.msg | default('') }}"
 
@@ -1669,7 +1766,7 @@
             __looped_msgs: "{{ ansible_failed_result.results | default([]) | map(attribute='msg') | join(' ') }}"
           ansible.builtin.assert:
             that:
-              - __looped_msgs is search('scheme or a port')
+              - __looped_msgs is search('not a bare host or IP')
             fail_msg: "wrong cause: {{ ansible_failed_result.msg | default('') }}"
 
     - name: "FIRES - a cluster with no init host named"

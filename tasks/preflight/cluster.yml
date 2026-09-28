@@ -37,21 +37,35 @@
 - name: "Preflight | cluster | peers are bare host or IP, no scheme and no port"
   ansible.builtin.assert:
     that:
-      # urlsplit reads a bare host:port as scheme=host, so scheme alone catches
-      # both https://host and host:8200. A scheme cannot start with a digit, so a
-      # bare IPv6 literal parses as scheme-less and is accepted.
-      - (item | urlsplit('scheme')) | length == 0
-      - "'[' not in item"
+      - __vault_peer_is_ip or __vault_peer_is_name
     fail_msg: >-
-      vault_cluster_members entry '{{ item }}' is not a bare host or IP:
-      {{ "it is already bracketed, and the template brackets IPv6 itself"
-         if '[' in item
-         else "it carries a scheme or a port" }}.
-      The template adds https:// and vault_listener_port. The sibling variables
-      vault_api_addr and vault_cluster_addr ARE full URLs, so copying their form
-      here renders https://https://host:8200:8200.
+      vault_cluster_members entry '{{ item }}' is not a bare host or IP. The
+      template adds https:// and vault_listener_port and brackets IPv6 itself, so
+      a peer carries neither. The sibling variables vault_api_addr and
+      vault_cluster_addr ARE full URLs, so copying their form here renders
+      https://https://host:8200:8200.
     success_msg: "Peer '{{ item }}' is a bare host or IP"
     quiet: true
+  vars:
+    # NOT urlsplit('scheme'). That test was measured wrong in BOTH directions on
+    # core 2.21.4: a scheme may begin with any letter, so the DoD ULA range
+    # fd00::10 parses as scheme=fd00 and every letter-leading IPv6 (fe80::1,
+    # abcd::1) was REJECTED; and 10.0.0.1:8200 begins with a digit, yields no
+    # scheme, PASSED, and rendered https://[10.0.0.1:8200]:8200. Empty strings,
+    # whitespace, paths, queries and 999.999.999.999 passed too.
+    #
+    # ipaddr needs netaddr on the CONTROLLER. That is a task-side filter only --
+    # templates/vault.hcl.j2 must stay filter-free because
+    # tests/render-hsm-pin-test.sh renders it under plain Jinja with no Ansible
+    # scope. tasks/preflight/dns.yml already depends on this same filter.
+    __vault_peer_is_ip: >-
+      {{ (item | ansible.utils.ipaddr | ternary(true, false)) and '/' not in item }}
+    # A prefix is not a peer, hence the '/' test above. And an all-digits-and-dots
+    # label sequence is a SYNTACTICALLY legal hostname, so 999.999.999.999 passes
+    # the name test on its own -- it has to be an IP or nothing.
+    __vault_peer_is_name: >-
+      {{ (item is match(__vault_peer_name_re))
+         and not (item is match('^[0-9.]+$')) }}
   loop: "{{ vault_cluster_members | default([]) }}"
 
 - name: "Preflight | cluster | an HA cluster names its init host"

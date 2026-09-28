@@ -88,6 +88,28 @@ else
   echo "FAIL: $(ca_count) of 3 stanzas pin leader_ca_cert_file"; fail=1
 fi
 
+# ULA and link-local IPv6 must bracket too. These are the ranges an airgapped
+# enclave actually uses, and the FIRST version of the preflight gate REJECTED them
+# (urlsplit read fd00 as a scheme), so the render was never exercised on them.
+check "ULA IPv6 peer IS bracketed"               '{"vault_cluster_members": ["fd00::10"], "vault_cluster_leader_addr": ""}' 1 'https://\[fd00::10\]:8200'
+check "link-local IPv6 peer IS bracketed"        '{"vault_cluster_members": ["fe80::1"], "vault_cluster_leader_addr": ""}' 1 'https://\[fe80::1\]:8200'
+
+# mTLS. With a client-cert-requiring listener, a retry_join that sends only the CA
+# cannot authenticate and the follower never joins.
+mtls () { grep -c "$1" "$WORK/out.hcl" || true; }
+render '{"vault_cluster_members": ["v1.mpe.mil","v2.mpe.mil"], "vault_cluster_leader_addr": "", "vault_tls_require_client_cert": true}' >/dev/null
+if [ "$(mtls leader_client_cert_file)" = "2" ] && [ "$(mtls leader_client_key_file)" = "2" ]; then
+  echo "ok: mTLS renders client cert and key in every stanza"
+else
+  echo "FAIL: mTLS client credentials missing ($(mtls leader_client_cert_file) cert, $(mtls leader_client_key_file) key of 2)"; fail=1
+fi
+render '{"vault_cluster_members": ["v1.mpe.mil","v2.mpe.mil"], "vault_cluster_leader_addr": "", "vault_tls_require_client_cert": false}' >/dev/null
+if [ "$(mtls leader_client_cert_file)" = "0" ]; then
+  echo "ok: no client credentials when the listener does not require them"
+else
+  echo "FAIL: client credentials rendered although require_client_cert is false"; fail=1
+fi
+
 check "five peers -> five stanzas"               '{"vault_cluster_members": ["v1","v2","v3","v4","v5"], "vault_cluster_leader_addr": ""}' 5
 
 exit "$fail"
