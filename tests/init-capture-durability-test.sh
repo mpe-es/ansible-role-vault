@@ -24,7 +24,7 @@ premise () {
   local p="$1" want="$2" got
   mkdir -p "$p" 2>/dev/null
   got="$(findmnt -n -o FSTYPE --target "$p" 2>/dev/null | tr -d ' ')"
-  if [ "$2" = "ephemeral" ]; then
+  if [ "$want" = "ephemeral" ]; then
     case "$got" in tmpfs|ramfs|overlay|overlayfs) return 0 ;; esac
     echo "PREMISE FAILED: $p is '$got', expected an ephemeral fs — test is meaningless here"; return 1
   else
