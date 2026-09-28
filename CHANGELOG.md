@@ -449,6 +449,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   losing `check_mode: false`). No molecule scenario reaches this code — every
   scenario sets `vault_initialize: false` or skips `service_start`. (#94)
 
+- **The AAP mount procedure was one sentence, and an operator could not act on it.**
+  The #93 mitigation list said only *"Container group — a custom pod spec declaring a
+  volume mounted at `vault_init_capture_dir`"*. Rewritten against the **AAP 2.6**
+  documentation with the parts that decide whether the mount works: the UI path
+  (Automation Execution → Infrastructure → Instance Groups → *Customize pod
+  specification* → *Pod Spec Override*), AAP's default container-group pod spec, and
+  the fact that the job container is named **`worker`** and runs
+  `ansible-runner worker --private-data-dir=/runner` — a `volumeMounts` entry on any
+  other container mounts storage into the pod but **not where the playbook writes**,
+  and the material is still lost.
+
+  Three further traps are now stated: `image:` in the override is **inert**, because
+  per the 2.6 docs the EE associated with the job always overrides it; `mountPath`
+  must equal `vault_init_capture_dir` exactly, since that is the path the durability
+  gate resolves; and `emptyDir` is deleted with the pod while `hostPath` ties custody
+  to whichever node the pod lands on. For the execution-node option, the 2.6 docs'
+  requirement to run `automation-controller-service restart` after editing the
+  settings file was missing entirely — without it the controller does not know about
+  the new path and the job still writes into the EE.
+
+  Also records what the gate does **not** prove: a PVC holding the root token and
+  every unseal share is itself key-custody material on shared cluster storage. The
+  gate proves the material survives, not that it is well guarded. (#94, #93)
+
 - **`bindep.txt` was missing two hard prerequisites.** `openssl`, which
   `tasks/preflight/san.yml` has shelled out to since #85/PR #90 — so an EE built by
   `ansible-builder` from this manifest failed the SAN gate on a valid certificate —
