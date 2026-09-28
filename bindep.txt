@@ -8,3 +8,13 @@
 python3 [platform:centos-8 platform:rhel-8 platform:centos-9 platform:rhel-9 platform:centos-10 platform:rhel-10]
 python3-devel [platform:centos-8 platform:rhel-8 platform:centos-9 platform:rhel-9 platform:centos-10 platform:rhel-10]
 python3-pip [platform:centos-8 platform:rhel-8 platform:centos-9 platform:rhel-9 platform:centos-10 platform:rhel-10]
+
+# openssl -- tasks/preflight/san.yml shells out to it on both the controller and
+# the target. Introduced by #85/PR #90 and missing here until now, so an EE built
+# by ansible-builder from this manifest failed the SAN gate on a valid cert.
+openssl [platform:centos-8 platform:rhel-8 platform:centos-9 platform:rhel-9 platform:centos-10 platform:rhel-10]
+
+# util-linux -- provides findmnt, which tasks/init-capture-durability.yml uses on
+# the CONTROLLER to prove the init capture destination survives it (#94). No
+# findmnt, no proof, no initialization: the gate fails closed.
+util-linux [platform:centos-8 platform:rhel-8 platform:centos-9 platform:rhel-9 platform:centos-10 platform:rhel-10]

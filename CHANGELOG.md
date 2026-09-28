@@ -405,6 +405,122 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`vault_initialize: true` under AAP destroyed the root token and every unseal
+  share, and reported success.** `tasks/service.yml` captures all initialization
+  secrets to the controller with `delegate_to: localhost` — by design, so the root
+  token never rests on the Vault node. Under AAP the controller **is** the ephemeral
+  EE job container, so on a default configuration Vault was initialized and
+  unsealed, the material was written inside the pod, the job went green, and the pod
+  exited. Nobody held a root token or a single unseal key, and a Vault with no
+  unseal shares cannot be unsealed. The loss was unrecoverable and silent. PR #93
+  documented it and three mitigations; a warning in a README is not a guard.
+
+  The existing check asserted `vault_init_capture_dir` was set and absolute — a path
+  inside the EE satisfies both, so **it passed exactly when the failure occurred**.
+  It checked the string's shape, not the destination's durability. Same class as the
+  `failed_when: false` port gate (#36), `restorecon` without `-F` (#83), and the
+  licence gate closed in #95.
+
+  New `tasks/init-capture-durability.yml`, included from `tasks/service.yml` inside
+  the `vault_initialize` block and **before** `operator init`, resolves the backing
+  filesystem with `findmnt -n -o SOURCE,FSTYPE --target` and refuses `overlay`,
+  `tmpfs` and `ramfs` — or any case where `findmnt` cannot answer. Failing after
+  initialization would leave a Vault initialized with keys nobody holds, which is
+  the outcome being prevented, so the ordering is locked by a static guard rather
+  than by task order alone.
+
+  **The gate keys on the filesystem, not on container detection.** The issue proposed
+  "containerized **and** not on a mount", but `/run/.containerenv` is podman-only and
+  `/.dockerenv` is docker-only, and an AAP container group runs the EE as a **CRI-O
+  pod where neither exists** — so that gate could have failed to fire in the one
+  environment it was built for. The markers now only word the message. Measured
+  inside a real container: an unmounted path reports `overlay` and is refused, a
+  bind-mounted path reports the backing device and `xfs` and passes.
+
+  **Accepted limit** (operator ruling, 28 Sep 2026): the fstype list catches a
+  container whose root filesystem is `overlay` or `tmpfs`. A runtime using the
+  **btrfs, zfs or devicemapper** storage driver presents its *ephemeral* rootfs as a
+  durable fstype, and the gate passes there. Those cannot simply be added to the
+  list — btrfs and zfs are legitimate durable filesystems on a real host.
+
+  STIG coverage was **inspected**, not assumed. **V-260926 / CNTR-MK-000600**
+  (CAT II, Mirantis Kubernetes Engine STIG V2R1) checks
+  `docker info | grep "Storage Driver:"` and makes `*aufs` or `*btrfs` a finding — so
+  the baseline forbids this case on **docker**. It does not elsewhere: podman has no
+  published STIG, RGS-RKE2-STIG V2R7 has no storage-driver or snapshotter rule, the
+  RHEL 8/9/10 STIGs prohibit only `cramfs` mounting and the `usb-storage` module, and
+  the Container Platform SRG V2R4 has no storage-driver rule. Acceptance therefore
+  rests on **measurement rather than prohibition**: podman and containerd default to
+  overlay on RHEL, and overlay was measured as `mpe-ee-rhel9`'s root filesystem.
+  Accepted, no follow-up filed.
+
+  `findmnt`'s `rc` is tested explicitly, because `failed_when: false` **defines**
+  `.failed` as False (#66) — without the `rc` test the gate would pass whenever
+  `findmnt` was missing, which is precisely when durability is unproven.
+
+  Covered by `tests/init-capture-durability-test.sh` (three runtime branches:
+  ephemeral refused, durable accepted, `findmnt` unusable refused) and
+  `tests/assert-init-capture-gate.sh` (six mutants killed: the include removed, the
+  gate moved after `operator init`, the root-token capture losing `no_log`, the
+  assert dropping the `rc` test, the assert dropping the fstype list, and the probe
+  losing `check_mode: false`). No molecule scenario reaches this code — every
+  scenario sets `vault_initialize: false` or skips `service_start`. (#94)
+
+- **Three behavioral tests had never been run by CI.** `ci.yml` globbed
+  `tests/assert-*.sh` — deliberately, with a comment recording that naming guards
+  individually had already caused a new guard to go unrun — but the behavioral tests
+  kept the very pattern that comment describes as the defect. Only
+  `vault-unseal-test.sh` and `vault-audit-backup-test.sh` were named, so
+  `render-hsm-pin-test.sh` (#41 — proves the HSM PIN never reaches `vault.hcl`, and
+  therefore security-relevant), `license-state-table-test.sh` (#42/#95 — the licence
+  desired-state truth table, **cited as evidence in #95 while CI never executed it**)
+  and this PR's `init-capture-durability-test.sh` ran only on developer machines.
+
+  Now globbed as `tests/*-test.sh` with the same vacuous-pass guard the static
+  lineage uses: the step fails if the glob matches nothing. All five pass. Found by
+  checking whether CI actually ran the new test rather than reading 23/23 as an
+  answer to that question. (#94, #41, #95)
+
+- **The AAP mount procedure was one sentence, and an operator could not act on it.**
+  The #93 mitigation list said only *"Container group — a custom pod spec declaring a
+  volume mounted at `vault_init_capture_dir`"*. Rewritten against the **AAP 2.6**
+  documentation with the parts that decide whether the mount works: the UI path
+  (Automation Execution → Infrastructure → Instance Groups → *Customize pod
+  specification* → *Pod Spec Override*), AAP's default container-group pod spec, and
+  the fact that the job container is named **`worker`** and runs
+  `ansible-runner worker --private-data-dir=/runner` — a `volumeMounts` entry on any
+  other container mounts storage into the pod but **not where the playbook writes**,
+  and the material is still lost.
+
+  Three further traps are now stated: `image:` in the override is **inert**, because
+  per the 2.6 docs the EE associated with the job always overrides it; `mountPath`
+  must equal `vault_init_capture_dir` exactly, since that is the path the durability
+  gate resolves; and `emptyDir` is deleted with the pod while `hostPath` ties custody
+  to whichever node the pod lands on. For the execution-node option, the 2.6 docs'
+  requirement to run `automation-controller-service restart` after editing the
+  settings file was missing entirely — without it the controller does not know about
+  the new path and the job still writes into the EE.
+
+  **Adds the encryption requirement the mount guidance was missing, which is CAT I.**
+  Telling an operator to mount *a* volume without saying it must be encrypted trades
+  an unrecoverable-loss defect for a data-at-rest finding on the most sensitive
+  material in the system. **V-256898 / APAS-AT-000012 (CAT I)**, Ansible Automation
+  Controller App Server STIG, requires the Automation Controller filesystem
+  (`/var/lib/awx`) to reside on a **LUKS-encrypted volume** with FIPS-compliant
+  ciphers, verified by `cryptsetup status`; **V-263600 /
+  SRG-APP-000915-CTR-000310 (CAT II)**, Container Platform SRG, requires protected
+  storage for cryptographic keys. Both are now cited at the mount step.
+
+  Also records what the gate does **not** prove: the volume holding the root token
+  and every unseal share is itself key-custody material. The gate proves the
+  material survives, not that it is well guarded. (#94, #93)
+
+- **`bindep.txt` was missing two hard prerequisites.** `openssl`, which
+  `tasks/preflight/san.yml` has shelled out to since #85/PR #90 — so an EE built by
+  `ansible-builder` from this manifest failed the SAN gate on a valid certificate —
+  and `util-linux`, which provides the `findmnt` the durability gate above needs on
+  the controller. (#94, #85)
+
 - **The Enterprise licence had no absent state, so a withdrawn entitlement stayed
   in force.** `tasks/configure.yml` deployed `vault.hclic` when
   `vault_license_content` was non-empty **and** the edition was Enterprise, and

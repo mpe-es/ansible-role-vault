@@ -335,12 +335,12 @@ the job still reports success.**
 `tasks/service.yml` writes all initialization secrets with
 `delegate_to: localhost`:
 
-| Line | Task | Destination |
-|---|---|---|
-| 141 | Create controller capture directory | `{{ vault_init_capture_dir }}/{{ inventory_hostname }}/` |
-| 150 | Capture **root token** | `…/root-token` |
-| 160 | Capture **Shamir unseal shares** | `…/unseal-key-N` (one per share) |
-| 173 | Capture **HSM recovery keys** | `…/recovery-key-N` (one per key) |
+| Task | Destination |
+|---|---|
+| Create controller capture directory | `{{ vault_init_capture_dir }}/{{ inventory_hostname }}/` |
+| Capture **root token** | `…/root-token` |
+| Capture **Shamir unseal shares** | `…/unseal-key-N` (one per share) |
+| Capture **HSM recovery keys** | `…/recovery-key-N` (one per key) |
 
 This is deliberate and correct on a persistent control node — the design
 guarantees the root token never rests on the Vault node (see *Security Model*
@@ -348,9 +348,24 @@ below). On AAP it inverts: Vault is initialized and unsealed, the job goes
 green, and **nobody holds the root token or a single unseal key.** Recovery is
 not possible.
 
-The preflight check at `tasks/service.yml:46` does not catch this. It asserts
-`vault_init_capture_dir` is set and absolute; a path inside the EE satisfies
-both.
+**The role now refuses this configuration rather than only documenting it (#94).**
+Before `operator init` runs, `tasks/init-capture-durability.yml` resolves the
+backing filesystem of `vault_init_capture_dir` with
+`findmnt -n -o SOURCE,FSTYPE --target`, and fails when it is `overlay`, `tmpfs` or
+`ramfs` — or when `findmnt` cannot answer at all. No proof of durability, no
+initialization.
+
+The gate keys on the **filesystem**, not on container detection:
+`/run/.containerenv` is podman-only and `/.dockerenv` is docker-only, and an AAP
+container group runs the EE as a CRI-O pod where neither exists. Those markers only
+word the failure message. Measured inside a container: an unmounted path reports
+`overlay` and is refused; a bind-mounted path reports the backing device and `xfs`
+and passes.
+
+The older check at `tasks/service.yml:46` does **not** catch this and never could —
+it asserts `vault_init_capture_dir` is set and absolute, and a path inside the EE
+satisfies both. It checks the string's shape; the durability gate checks the
+destination.
 
 > **Choosing an execution node does not fix this.** Mesh execution nodes run
 > jobs through `ansible-runner` under Podman isolation exactly as container
@@ -359,26 +374,114 @@ both.
 > disk is not visible to the container unless a path is explicitly exposed.
 
 **Required mitigation — one of. Options 1 and 2 keep initialization in AAP and
-therefore depend on an explicit host-to-container mount; verify that mount
-exists before the first initializing run, not after. Option 3 avoids the
-mount entirely by moving initialization out of AAP.**
+therefore depend on an explicit host-to-container mount. The durability gate now
+verifies that mount for you and fails the job before `operator init` if it is
+absent, so a missing mount is a refused run rather than a silent loss. Option 3
+avoids the mount entirely by moving initialization out of AAP.**
 
-1. **Container group** — a custom pod spec declaring a volume mounted at
-   `vault_init_capture_dir`.
-2. **Execution node** — expose the host directory through **Paths to expose to
-   isolated jobs** (Settings → Automation Execution → Job, or
-   `AWX_ISOLATION_SHOW_PATHS` at `/api/v2/settings/jobs`):
+##### Option 1 — Container group, with a Pod Spec Override
 
-   ```
-   AWX_ISOLATION_SHOW_PATHS = ['/srv/vault-init-capture']
-   ```
+Verified against the **AAP 2.6** documentation. In the controller UI:
 
-   Note that naming a *file* mounts its containing directory. Without this entry
-   an execution node loses the material exactly as a container group does.
-3. **Neither** — leave `vault_initialize: false` in AAP and perform
-   initialization as a separate, deliberate operation with custody arranged in
-   advance. This is the only option that does not depend on a mount being
-   configured correctly, and is the safest default.
+**Automation Execution → Infrastructure → Instance Groups →** *(your container
+group)* **→ check `Customize pod specification` → `Pod Spec Override`**, then
+**Save**.
+
+AAP's default container-group pod spec is:
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  namespace: ansible-automation-platform
+spec:
+  serviceAccountName: default
+  automountServiceAccountToken: false
+  nodeSelector:
+    aap_node_type: execution
+  containers:
+    - image: <overridden by the job's execution environment>
+      name: worker
+      args: [ansible-runner, worker, '--private-data-dir=/runner']
+      resources:
+        requests: {cpu: 250m, memory: 100Mi}
+```
+
+Add a volume and mount it **on the `worker` container** — the one that runs
+`ansible-runner`. Attaching `volumeMounts` to any other container mounts storage
+into the pod but **not where the playbook writes**, and the material is still
+lost:
+
+```yaml
+spec:
+  containers:
+    - name: worker                      # must be this container
+      args: [ansible-runner, worker, '--private-data-dir=/runner']
+      volumeMounts:
+        - name: vault-init-capture
+          mountPath: /srv/vault-init-capture   # == vault_init_capture_dir
+  volumes:
+    - name: vault-init-capture
+      persistentVolumeClaim:
+        claimName: vault-init-capture
+```
+
+Three things that bite here:
+
+- **Do not pin the EE in `image:`.** Per the 2.6 docs, *"the image used by a job
+  running in a container group is always overridden by the Execution Environment
+  associated with the job"* — so an `image:` in the override is inert. Select the
+  EE on the job template instead.
+- **`mountPath` must equal `vault_init_capture_dir` exactly.** The durability gate
+  resolves that path, so a mount one directory above it does not satisfy it.
+- **Use a `PersistentVolumeClaim`, not `emptyDir`.** `emptyDir` is deleted with the
+  pod, which is the defect this whole section exists for. A `hostPath` volume ties
+  custody to whichever node the pod is scheduled on; on a multi-node cluster that
+  is not custody.
+
+> **⚠️ The volume must be ENCRYPTED AT REST, and this is a CAT I requirement —
+> not advice.** Satisfying the durability gate with an *unencrypted* volume trades
+> an unrecoverable-loss defect for a data-at-rest finding on the most sensitive
+> material in the system.
+>
+> - **V-256898 / APAS-AT-000012 (CAT I)** — Ansible Automation Controller App
+>   Server STIG: the Automation Controller filesystem (`/var/lib/awx`) must reside
+>   on a **LUKS-encrypted volume**, using FIPS-compliant ciphers
+>   (`aes-(256|384|512)`), verified with
+>   `cryptsetup status $(df -T /var/lib/awx | tail -1 | cut -d' ' -f1)`.
+> - **V-263600 / SRG-APP-000915-CTR-000310 (CAT II)** — Container Platform SRG: the
+>   platform must provide **protected storage for cryptographic keys** with
+>   organization-defined safeguards and/or a hardware-protected key store.
+>
+> The root token and every unseal share land on this volume. Scope its namespace
+> and access mode deliberately, and treat it as offline key escrow. **The gate
+> proves the material *survives*; it proves nothing about how well it is guarded.**
+
+##### Option 2 — Execution node, with an exposed path
+
+Expose the host directory through **Settings → Automation Execution → Job →
+`Paths to expose to isolated Jobs`**, or `AWX_ISOLATION_SHOW_PATHS` at
+`/api/v2/settings/jobs`:
+
+```
+AWX_ISOLATION_SHOW_PATHS = ['/srv/vault-init-capture']
+```
+
+- Naming a **file** mounts its containing **directory** (2.6 docs).
+- **If you edit the settings file rather than using the UI, restart services
+  afterwards** — `automation-controller-service restart`. The 2.6 docs call this
+  out, and a settings-file change without it leaves the running controller
+  unaware of the new path, so the job still writes into the EE.
+- Without this entry an execution node loses the material exactly as a container
+  group does. Mesh execution nodes run jobs under Podman isolation, so
+  `delegate_to: localhost` is still inside the EE.
+
+##### Option 3 — Do not initialize from AAP
+
+Leave `vault_initialize: false` in AAP and perform initialization as a separate,
+deliberate operation with custody arranged in advance. **This is the only option
+that does not depend on a mount being configured correctly, and is the safest
+default.**
 
 **Verify, do not assume.** After configuring a mount, run one initializing job
 against a throwaway target and confirm the files exist on the host afterwards.
