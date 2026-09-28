@@ -1662,6 +1662,46 @@
               - __looped_msgs is search('not a bare host or IP')
             fail_msg: "wrong cause: {{ ansible_failed_result.msg | default('') }}"
 
+    # HOBI REVIEW, PR #102. The scalar renders a retry_join but names no initializer,
+    # and every orchestration gate keyed on vault_cluster_members -- so this pairing ran
+    # `operator init` on EVERY host: one independent Vault per node, each with its own
+    # root token and key set, under a green play. The render-only scalar test could not
+    # see it, because the defect was in the ORCHESTRATION, not the render.
+    - name: "FIRES - the legacy join scalar with initialization enabled"
+      block:
+        - name: Run cluster with the legacy scalar driving initialization
+          ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/cluster.yml
+          vars:
+            vault_cluster_members: []
+            vault_cluster_leader_addr: leader.mpe.mil
+            vault_init_host: ""
+            vault_initialize: true
+        - name: The scalar should not be able to drive initialization
+          ansible.builtin.fail:
+            msg: "the gate allowed a deprecated join scalar to trigger a local initialization"
+      rescue:
+        - name: Assert the message names the independent-Vault outcome
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg is search('one independent Vault per node')
+              - ansible_failed_result.msg is search('vault_cluster_members with vault_init_host')
+            fail_msg: "wrong cause: {{ ansible_failed_result.msg | default('') }}"
+
+    # The scalar's LEGITIMATE back-compat use survives: configuring a node to join a
+    # cluster that was initialized elsewhere. That is vault_initialize false, and it must
+    # keep working or this becomes a breaking change for every pre-#44 consumer.
+    - name: "PASSES - the legacy join scalar without initialization"
+      ansible.builtin.include_role:
+        name: ansible-role-vault
+        tasks_from: preflight/cluster.yml
+      vars:
+        vault_cluster_members: []
+        vault_cluster_leader_addr: leader.mpe.mil
+        vault_init_host: ""
+        vault_initialize: false
+
     # The LEGACY scalar goes through the identical leader_api_addr expression in the
     # template, so it is validated by the same gate -- it previously had none at all.
     - name: "FIRES - a legacy leader address carrying a scheme"

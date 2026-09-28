@@ -20,6 +20,23 @@
       not for joining (operator ruling). Use vault_cluster_members alone.
     success_msg: "Exactly one retry_join source is configured"
 
+- name: "Preflight | cluster | the legacy join scalar never drives initialization"
+  ansible.builtin.assert:
+    that:
+      - not ((vault_cluster_leader_addr | default('') | length > 0)
+             and (vault_initialize | default(false) | bool))
+    fail_msg: >-
+      vault_cluster_leader_addr is set with vault_initialize true. The scalar
+      renders a retry_join but is NOT an HA orchestration source: it names no
+      initializer, so every host would run `vault operator init` locally and you
+      would get one independent Vault per node, each with its own root token and
+      key shares, while the play reported success -- the precise failure this role
+      now exists to prevent. The scalar remains supported for its back-compat use,
+      configuring a node to JOIN a cluster initialized elsewhere, which is
+      vault_initialize false. To have the role stand a cluster up, use
+      vault_cluster_members with vault_init_host.
+    success_msg: "Legacy join scalar is not driving initialization"
+
 - name: "Preflight | cluster | the peer list is a list"
   ansible.builtin.assert:
     that:

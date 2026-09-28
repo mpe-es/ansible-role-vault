@@ -261,6 +261,10 @@ argument_specs:
         description:
           - DEPRECATED for HA. Renders a single retry_join stanza from one scalar,
           - Same bare host or IP shape as vault_cluster_members, validated by the same
+          - Rejected together with vault_initialize true. It names no initializer, so
+            that pairing would run `vault operator init` on every host and produce one
+            independent Vault per node. Use it only with vault_initialize false, to
+            configure a node that joins a cluster initialized elsewhere.
             preflight gate - no scheme, no port, no CIDR prefix, and IPv6 written bare.
             An all-numeric name such as 123 is rejected as a mistyped address.
             which is not the Raft join contract - Raft expects one stanza per peer.

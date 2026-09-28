@@ -110,6 +110,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `pkcs11` seal stanza onto a node with no HSM. One `hcl_bool()` macro now normalizes all
   of them.
 
+  **`vault_cluster_leader_addr` can no longer drive initialization.** The scalar renders a
+  `retry_join` but names no initializer, and all six orchestration gates scoped on
+  `vault_cluster_members` — so a host configured with only the scalar and
+  `vault_initialize: true` ran `vault operator init` **locally**, creating a second Raft
+  cluster with a different root token and key set, while every HA identity check sat behind
+  a member-list gate and never ran. That is the precise independent-cluster green-success
+  failure this work exists to eliminate, surviving on the deprecated path. Preflight now
+  rejects the pairing; the scalar's supported use — `vault_initialize: false`, configuring a
+  node to join a cluster initialized elsewhere — is unchanged. The HA predicate itself is now
+  **one** `__vault_ha_cluster` definition rather than six inline copies, because six copies
+  are how a join source stayed invisible to all six gates simultaneously.
+
   **Behaviour change for existing consumers of `vault_cluster_leader_addr`.** It is now
   validated to the same bare host-or-IP shape as `vault_cluster_members`. That shape was
   already the documented one — the README example on `main` is a bare hostname — but a

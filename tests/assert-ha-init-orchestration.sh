@@ -367,6 +367,59 @@ for t in inner + rescue:
             if want not in uri:
                 fail.append(f"{nm!r} sets ca_path without {want}. Same failure, on the API path.")
 
+# 16. WHICH DEPLOYMENTS THE HA GATES APPLY TO. Six gates each carried their own
+# inline `vault_cluster_members | length > 0`, and nothing here checked any of them --
+# so the legacy join scalar, which renders a retry_join but names no initializer, was
+# invisible to all six AT ONCE and `vault_initialize` ran `operator init` on every host.
+# One shared predicate means a future join source is added in one place, not six.
+inline_ha = [str(t.get("name", "")) for t in (inner + rescue)
+             if "vault_cluster_members" in whenstr(t) and "length > 0" in whenstr(t)]
+if inline_ha:
+    fail.append(f"{len(inline_ha)} gate(s) scope HA behaviour with an inline "
+                f"vault_cluster_members test instead of __vault_ha_cluster: "
+                f"{inline_ha[:3]}. Six such copies are how a join source that renders "
+                f"retry_join but names no initializer stayed invisible to every one of "
+                f"them simultaneously.")
+shared_ha = sum(1 for t in (inner + rescue) if "__vault_ha_cluster" in whenstr(t))
+if shared_ha < 4:
+    fail.append(f"only {shared_ha} gate(s) use __vault_ha_cluster; the HA scoping has "
+                f"stopped going through the shared predicate, so this lock is watching "
+                f"almost nothing.")
+
+# 17. The legacy join scalar must never drive initialization. This one lives in
+# tasks/preflight/cluster.yml rather than service.yml -- it is an INPUT rejection, and it
+# has to fail before anything mutates -- but the property it protects is this file's, so
+# it is locked here where a reader of the orchestration looks.
+cluster_gate = f"{root}/tasks/preflight/cluster.yml"
+try:
+    with open(cluster_gate) as fh:
+        pf = yaml.safe_load(fh) or []
+except FileNotFoundError:
+    pf = []
+    fail.append("tasks/preflight/cluster.yml is gone; the join-source rejections with it.")
+guard = [t for t in pf
+         if "vault_cluster_leader_addr" in str(t.get("ansible.builtin.assert", ""))
+         and "vault_initialize" in str(t.get("ansible.builtin.assert", ""))]
+if not guard:
+    fail.append("nothing in tasks/preflight/cluster.yml rejects vault_cluster_leader_addr "
+                "together with vault_initialize. The scalar renders a retry_join but names "
+                "no initializer, so that pairing runs `operator init` on EVERY host: one "
+                "independent Vault per node, each with its own root token and key set, "
+                "under a green play.")
+
+# BOTH sites, on purpose. preflight carries a `preflight` tag, so --skip-tags preflight
+# bypasses the gate above entirely -- which is exactly why the init-host check is also
+# duplicated into service.yml. A rejection that only one of the two enforces is a
+# rejection an operator can turn off with a command-line flag.
+validate = one("Validate the initialization host")
+_vthat = " ".join(str(c) for c in
+                  ((validate or {}).get("ansible.builtin.assert", {}) or {}).get("that", []))
+if validate is not None and "vault_cluster_leader_addr" not in _vthat:
+    fail.append("`Validate the initialization host` does not reject "
+                "vault_cluster_leader_addr. preflight is tag-skippable, so without this "
+                "second enforcement `--skip-tags preflight` re-opens the independent-Vault "
+                "path that the preflight gate closes.")
+
 if fail:
     print("FAIL: #44 HA init orchestration")
     for f in fail:

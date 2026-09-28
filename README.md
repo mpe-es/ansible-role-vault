@@ -692,7 +692,7 @@ See the initialization warning at the top of this section before enabling
 | `vault_cluster_addr` | `https://{{ ansible_facts['fqdn'] }}:8201` | Cluster replication address |
 | `vault_cluster_members` | `[]` | Raft peers, one `retry_join` stanza each. **Bare host or IP** — no scheme, no port, no CIDR prefix; the template adds both and brackets IPv6, including ULA (`fd00::/8`). Validated with `ansible.utils.ipaddr` plus a DNS-label pattern; a **zone-indexed** link-local such as `fe80::1%eth0` is rejected, so link-local peers are not usable in practice. An all-numeric name such as `123` is rejected too — legal DNS syntax, but here it is a mistyped address. Every entry must be a SAN on that peer's listener certificate. Empty means single-node |
 | `vault_init_host` | `""` | The one node that runs `operator init`. **Required** when `vault_cluster_members` is set. Empty means this host (single-node). Must be in the play |
-| `vault_cluster_leader_addr` | `""` | **Deprecated for HA** — renders a single `retry_join` stanza, which is not the Raft join contract. Mutually exclusive with `vault_cluster_members`. The HA VIP belongs on client traffic, not here. Same **bare host or IP** shape as `vault_cluster_members`, validated by the same gate, and its stanza carries the same IPv6 bracketing and mTLS client identity |
+| `vault_cluster_leader_addr` | `""` | **Deprecated for HA** — renders a single `retry_join` stanza, which is not the Raft join contract. Mutually exclusive with `vault_cluster_members`, and **rejected outright with `vault_initialize: true`** (see Known Limitations). Its supported use is configuring a node to **join** a cluster initialized elsewhere. The HA VIP belongs on client traffic, not here. Same **bare host or IP** shape as `vault_cluster_members`, validated by the same gate, and its stanza carries the same IPv6 bracketing and mTLS client identity |
 
 ### TLS Certificate Deployment
 
@@ -1288,6 +1288,14 @@ limited:
 - **Peer names are a TLS contract the role cannot check.** Every entry in
   `vault_cluster_members` must be a SAN on that peer's listener certificate; a mismatch
   fails the join after the host is already configured.
+- **`vault_cluster_leader_addr` cannot drive an HA bring-up.** It renders a `retry_join`
+  but names no initializer, and every orchestration gate scopes on `vault_cluster_members`
+  — so pairing it with `vault_initialize: true` ran `vault operator init` on **every**
+  host, producing one independent Vault per node, each with its own root token and key
+  shares, under a green play. Preflight now **rejects that pairing**. Its supported use is
+  unchanged: `vault_initialize: false`, configuring a node to join a cluster that was
+  initialized elsewhere. To have the role stand a cluster up, use `vault_cluster_members`
+  with `vault_init_host`.
 - **`strategy: free` is not supported for an HA bring-up.** The default `linear`
   strategy's task barrier is what guarantees a follower reads a populated init register.
   Under `free` a follower can run ahead of the initialization host; the role detects the

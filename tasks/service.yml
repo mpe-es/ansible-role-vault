@@ -66,13 +66,28 @@
             or (vault_init_host | default('') | length > 0)
           - (vault_init_host | default('') | length == 0)
             or (vault_init_host in ansible_play_hosts_all)
+          # Reaching this task means vault_initialize is true -- the block is gated on
+          # it -- so the legacy scalar simply must not be set. Duplicated from
+          # tasks/preflight/cluster.yml ON PURPOSE, for the same reason the init-host
+          # check above is: preflight carries a `preflight` tag, so --skip-tags preflight
+          # bypasses it, and this is the failure that produces N independent Vaults under
+          # a green play. The two are locked together by
+          # tests/assert-ha-init-orchestration.sh.
+          - vault_cluster_leader_addr | default('') | length == 0
         fail_msg: >-
-          vault_init_host is '{{ vault_init_host | default('') }}' with
-          {{ vault_cluster_members | default([]) | length }} cluster member(s).
+          {{ "vault_cluster_leader_addr is set and initialization is enabled. That
+          scalar renders a retry_join but names no initializer, so every host would
+          run `vault operator init` locally: one independent Vault per node, each
+          with its own root token and key shares. Use vault_cluster_members with
+          vault_init_host, or set vault_initialize false to configure a node that
+          joins a cluster initialized elsewhere."
+          if (vault_cluster_leader_addr | default('') | length > 0)
+          else "vault_init_host is '" ~ (vault_init_host | default('')) ~ "' with " ~
+          (vault_cluster_members | default([]) | length) ~ " cluster member(s).
           A cluster must name its initializer, and that name must be in this play
-          ({{ ansible_play_hosts_all | join(', ') }}). Otherwise the init register
+          (" ~ (ansible_play_hosts_all | join(', ')) ~ "). Otherwise the init register
           is empty on every host: the capture, the unseal and the durability gate
-          all skip and the play reports success having initialized nothing.
+          all skip and the play reports success having initialized nothing." }}
         success_msg: "Initialization host resolves to {{ __vault_init_host_effective }}"
 
     - name: Assert the initialization capture destination is durable
@@ -182,7 +197,7 @@
         # state of a valid dry run. Without this the guard turns every greenfield
         # HA --check into a failure.
         - not ansible_check_mode
-        - vault_cluster_members | default([]) | length > 0
+        - __vault_ha_cluster | bool
         - inventory_hostname != __vault_init_host_effective
         - __vault_initialized is defined
         - not __vault_initialized | bool
@@ -308,7 +323,7 @@
       delay: 2
       changed_when: false
       when:
-        - vault_cluster_members | default([]) | length > 0
+        - __vault_ha_cluster | bool
         - inventory_hostname != __vault_init_host_effective
         - __vault_init_source.stdout | default('') | length > 0
         - (vault_hsm_enabled | bool) or (vault_init_unseal | bool)
@@ -381,7 +396,7 @@
         client_key: "{{ vault_tls_key_file if (vault_tls_require_client_cert | bool) else omit }}"
         status_code: [200]
       register: __vault_cluster_identity
-      when: vault_cluster_members | default([]) | length > 0
+      when: __vault_ha_cluster | bool
       changed_when: false
       check_mode: false
 
@@ -409,7 +424,7 @@
           {{ hostvars[__vault_init_host_effective]['__vault_cluster_identity'].json.cluster_id
              | default('') }}
       when:
-        - vault_cluster_members | default([]) | length > 0
+        - __vault_ha_cluster | bool
         # Under serial, a follower batch processed BEFORE the init host has no
         # identity in that host's hostvars, and the comparison would fail on a
         # healthy cluster. ansible_play_batch, not ansible_play_hosts: the latter
@@ -433,7 +448,7 @@
           initialization host once the cluster is unsealed: it must list every
           member of vault_cluster_members and nothing else.
       when:
-        - vault_cluster_members | default([]) | length > 0
+        - __vault_ha_cluster | bool
         - (__vault_cluster_identity.json.sealed | default(true) | bool)
           or (__vault_init_host_effective not in ansible_play_batch)
 
@@ -483,7 +498,7 @@
           sealed leader cannot serve the Raft bootstrap challenge, so retry_join
           keeps retrying until the leader is unsealed by hand. Unseal the
           initialization host FIRST, then the rest."
-          if (vault_cluster_members | default([]) | length > 0)
+          if (__vault_ha_cluster | bool)
           else "" }}
       when:
         - __vault_init_source.stdout | default('') | length > 0

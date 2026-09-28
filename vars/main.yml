@@ -189,6 +189,14 @@ __vault_init_host_effective: >-
   {{ vault_init_host if (vault_init_host | default('') | length > 0)
      else inventory_hostname }}
 
+# Is this an HA deployment? Defined ONCE. Six orchestration gates each carried their
+# own copy of this predicate, so the legacy join scalar -- which renders a retry_join but
+# names no initializer -- was invisible to all six at the same time, and `vault_initialize`
+# ran `operator init` on every host. tasks/preflight/cluster.yml now refuses that
+# combination outright, and this single definition is what a future join source has to be
+# added to, rather than six `when:` clauses nobody greps for.
+__vault_ha_cluster: "{{ vault_cluster_members | default([]) | length > 0 }}"
+
 # The per-host controller capture directory, defined ONCE. Five sites built this path
 # and one of them had drifted to inventory_hostname, which on a FOLLOWER failure named a
 # directory that was never created -- during an incident, for the root token. The capture

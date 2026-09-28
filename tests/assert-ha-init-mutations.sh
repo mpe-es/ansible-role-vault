@@ -174,6 +174,38 @@ run "the status probe loses its client certificate" \
 run "the leader unseal loses its client certificate" \
   "i = s.index('name: Unseal the initialization host'); j = s.index('name: Wait for this node'); seg = s[i:j].replace(\"        client_cert: \\\"{{ vault_tls_cert_file if (vault_tls_require_client_cert | bool) else omit }}\\\"\n\", ''); s = s[:i] + seg + s[j:]"
 
+# --- Hobi review: the legacy scalar could still drive a local init ------------
+
+run "service.yml stops rejecting the legacy scalar (--skip-tags preflight path)" \
+  "s = s.replace(\"          - vault_cluster_leader_addr | default('') | length == 0\\n\", '')"
+
+run "a gate reverts to an inline member predicate" \
+  "s = s.replace('        - __vault_ha_cluster | bool', '        - vault_cluster_members | default([]) | length > 0', 1)"
+
+# This one mutates the PREFLIGHT file, not service.yml, so it restores that file itself.
+cp "$SANDBOX/tasks/preflight/cluster.yml" "$WORK/cluster.yml.orig"
+if python3 - "$SANDBOX/tasks/preflight/cluster.yml" <<'PYEOF'
+import io, sys
+p = sys.argv[1]
+s = io.open(p, encoding='utf-8').read()
+i = s.index('- name: "Preflight | cluster | the legacy join scalar never drives initialization"')
+j = s.index('- name: "Preflight | cluster | the peer list is a list"')
+out = s[:i] + s[j:]
+if out == s:
+    sys.exit(3)
+io.open(p, 'w', encoding='utf-8').write(out)
+PYEOF
+then
+  if bash "$LOCK" "$SANDBOX" >/dev/null 2>&1; then
+    echo "SURVIVED: the legacy-scalar initialization rejection is deleted"; survived=$((survived + 1))
+  else
+    echo "killed:   the legacy-scalar initialization rejection is deleted"; killed=$((killed + 1))
+  fi
+else
+  echo "STALE ANCHOR: the legacy-scalar rejection -- mutated nothing"; stale=$((stale + 1))
+fi
+cp "$WORK/cluster.yml.orig" "$SANDBOX/tasks/preflight/cluster.yml"
+
 cp "$WORK/service.yml.orig" "$SRC"
 if ! bash "$LOCK" "$ROOT" >/dev/null 2>&1; then
   echo "FAIL: the lock does not pass on the real tree"; exit 1
