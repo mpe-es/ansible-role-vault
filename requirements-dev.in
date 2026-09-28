@@ -16,7 +16,7 @@
 # This file is edited only to ADD or REMOVE a dependency, which Dependabot does
 # not do. After editing, regenerate the lock on the platform CI installs it on:
 #
-#   podman run --rm --platform linux/amd64 -v "$PWD:/w" -w /w python:3.11-slim \
+#   podman run --rm --platform linux/amd64 -v "$PWD:/w:z" -w /w python:3.12-slim \
 #     sh -c 'pip install -q pip-tools && \
 #            pip-compile --generate-hashes --output-file=requirements-dev.txt requirements-dev.in'
 #
@@ -43,9 +43,9 @@
 #   .github/workflows/ci.yml PYTHON_VERSION (see below)
 #
 # Gotcha 3 from the #78 lessons: pinning a toolchain version pins TWO things.
-# ansible-core 2.20+ requires Python >= 3.12. CI runs Python 3.11, so 2.19.13 is the
-# CEILING -- raising it here without raising PYTHON_VERSION fails at install time with
-# "No matching distribution found", which is exactly how the first #78 pin attempt broke.
+# ansible-core 2.20+ requires Python >= 3.12, so this pin and ci.yml's PYTHON_VERSION
+# move together or neither moves. Raising one alone fails at install time with "No
+# matching distribution found", which is how the first #78 pin attempt broke.
 #
 # Before this file existed, three versions were live and no two agreed: ci.yml at
 # 2.19.13, .pre-commit-config.yaml at 2.17.8, and whatever a contributor's machine
@@ -54,9 +54,9 @@
 # failed in CI. The #78 close-out pinned ci.yml's five sites and never reached the hook
 # config; this file is where that is reconciled.
 #
-# DELIBERATE NEXT STEP, tracked separately: raise the floor to Python 3.12 +
-# ansible-core 2.21.x as one reviewed arc. Do not bump this line alone.
-ansible-core==2.19.13
+# This is the pair mpe-ee-rhel9 runs (#91): ansible-core 2.21.4 on Python 3.12.
+# Before #91 CI tested 3.11 / 2.19.13, which no execution path used.
+ansible-core==2.21.4
 
 # Ansible playbook/role linter. Gate: `ansible-lint` in the ci.yml lint job.
 ansible-lint

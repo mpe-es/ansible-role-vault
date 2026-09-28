@@ -5,7 +5,7 @@
 # Summary: Ansible collection dependencies for this role. Install with:
 #   ansible-galaxy collection install -r requirements.yml
 # For EE builds, ansible-builder reads this automatically.
-# Last Updated: 03 Apr 2026
+# Last Updated: 28 Sep 2026
 # Classification: UNCLASSIFIED
 ###############################################################################
 collections:
@@ -33,6 +33,6 @@ collections:
   # HashiCorp Vault modules and lookup plugins
   # Required for: post-install Vault initialization and configuration
   # (vault_init, vault_write, vault_read, hashi_vault lookup)
-  # Min ansible-core: 2.17.0 (binding constraint for this role)
+  # Min ansible-core: 2.21.0 (the pair CI tests and mpe-ee-rhel9 runs, #91)
   - name: community.hashi_vault
     version: ">=7.0.0"

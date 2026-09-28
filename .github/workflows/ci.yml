@@ -3,7 +3,7 @@
 # Filename: .github/workflows/ci.yml
 # Role: ansible-role-vault
 # Summary: Continuous Integration workflow for linting and testing
-# Last Updated: 20 Aug 2026
+# Last Updated: 28 Sep 2026
 # Classification: UNCLASSIFIED
 ###############################################################################
 name: CI
@@ -43,13 +43,15 @@ permissions:
 # against 2.17.8 while CI verified against 2.19.13.
 #
 # PYTHON_VERSION REMAINS COUPLED TO THAT PIN. ansible-core 2.20+ requires
-# Python >= 3.12, so the pinned 2.19.13 is the CEILING for Python 3.11. Raising
-# one without the other fails at install time with "No matching distribution
-# found" -- exactly how the first attempt at the #78 pin broke, because it was
-# set to the version a developer happened to run locally (2.21.4 on Python 3.14)
-# without checking what CI installs. Moving both deliberately is tracked in #91.
+# Python >= 3.12, so the two move together or neither moves. Raising one without
+# the other fails at install time with "No matching distribution found" -- how
+# the first attempt at the #78 pin broke.
+#
+# This pair is what mpe-ee-rhel9 runs (#91). Before #91, CI tested 3.11 /
+# 2.19.13, which no execution path used. The EE is 3.12.13; EL8/9/10 all provide
+# a python3.12 (EL8 via AppStream, measured 3.12.14-1.el8_10).
 env:
-  PYTHON_VERSION: "3.11"
+  PYTHON_VERSION: "3.12"
 
 # RUNNERS. These jobs ran on the org's private [self-hosted, rocky10] fleet
 # briefly and every job queued forever with runner=UNASSIGNED, while the fleet
