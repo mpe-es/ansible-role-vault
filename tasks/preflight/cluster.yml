@@ -1,0 +1,66 @@
+---
+###############################################################################
+# Filename: tasks/preflight/cluster.yml
+# Role: ansible-role-vault
+# Summary: Preflight gate - cluster inputs (peer shape, join source, init host)
+# Last Updated: 28 Sep 2026
+# Classification: UNCLASSIFIED
+###############################################################################
+# Placed adjacent to edition because both validate INPUTS and probe nothing.
+# Gate order is failure order (tests/assert-preflight-gate-order.sh).
+- name: "Preflight | cluster | peer list and leader address are mutually exclusive"
+  ansible.builtin.assert:
+    that:
+      - not ((vault_cluster_members | default([]) | length > 0)
+             and (vault_cluster_leader_addr | default('') | length > 0))
+    fail_msg: >-
+      vault_cluster_members and vault_cluster_leader_addr are both set. The
+      scalar renders one retry_join stanza, which is not the Raft join contract,
+      and it is where an HA VIP is usually put -- a VIP that health-checks for
+      the active node has no healthy backend during bootstrap, because every
+      node answers 501 uninitialized or 503 sealed until one is unsealed. Use
+      vault_cluster_members alone.
+    success_msg: "Exactly one retry_join source is configured"
+
+- name: "Preflight | cluster | peers are bare host or IP, no scheme and no port"
+  ansible.builtin.assert:
+    that:
+      # urlsplit reads a bare host:port as scheme=host, so scheme alone catches
+      # both https://host and host:8200. A scheme cannot start with a digit, so a
+      # bare IPv6 literal parses as scheme-less and is accepted.
+      - (item | urlsplit('scheme')) | length == 0
+      - "'[' not in item"
+    fail_msg: >-
+      vault_cluster_members entry '{{ item }}' carries a scheme or a port.
+      Entries are bare host or IP; the template adds https:// and
+      vault_listener_port, and brackets an IPv6 literal. The sibling variables
+      vault_api_addr and vault_cluster_addr ARE full URLs, so copying their form
+      here renders https://https://host:8200:8200.
+    success_msg: "Peer '{{ item }}' is a bare host or IP"
+    quiet: true
+  loop: "{{ vault_cluster_members | default([]) }}"
+
+- name: "Preflight | cluster | an HA cluster names its init host"
+  ansible.builtin.assert:
+    that:
+      - vault_init_host | default('') | length > 0
+    fail_msg: >-
+      vault_cluster_members is set but vault_init_host is empty. Exactly one
+      node runs `vault operator init`; with no init host every node initializes
+      itself, producing one independent Vault per node, each with its own root
+      token and unseal shares, and the play still reports success.
+    success_msg: "Init host is named: {{ vault_init_host }}"
+  when: vault_cluster_members | default([]) | length > 0
+
+- name: "Preflight | cluster | the init host is in the play"
+  ansible.builtin.assert:
+    that:
+      - vault_init_host in ansible_play_hosts_all
+    fail_msg: >-
+      vault_init_host is '{{ vault_init_host }}', which is not in this play
+      ({{ ansible_play_hosts_all | join(', ') }}). The init register would then
+      be empty on every host: the capture, the unseal and the init-capture
+      durability gate would all skip and the play would report success having
+      initialized nothing. A --limit that excludes the init host fails here.
+    success_msg: "Init host {{ vault_init_host }} is in the play"
+  when: vault_init_host | default('') | length > 0
