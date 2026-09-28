@@ -28,7 +28,7 @@ is_ephemeral () { case "$(fstype_of "$1")" in tmpfs|ramfs|overlay|overlayfs|"") 
 DURABLE_BASE=""
 probed=""
 for base in "${HOME:-}" /var/tmp "$ROOT" /tmp; do
-  [ -n "$base" ] && [ -d "$base" ] && [ -w "$base" ] || continue
+  if [ -z "$base" ] || [ ! -d "$base" ] || [ ! -w "$base" ]; then continue; fi
   probed="$probed $base=$(fstype_of "$base")"
   if ! is_ephemeral "$base"; then DURABLE_BASE="$base"; break; fi
 done
