@@ -127,7 +127,13 @@ certificate is not invalid — it is unusable by this role.
 
 This contract covers `vault_tls_source: file` (the default). The
 `vault_pki` source cannot satisfy it until [#63](https://github.com/mpe-es/ansible-role-vault/issues/63) lands, and multi-node
-HA adds the cluster-leader name — see [#44](https://github.com/mpe-es/ansible-role-vault/issues/44).
+HA adds **every peer name**: each entry in `vault_cluster_members` must be a SAN on
+that peer's listener certificate, and all peers must chain to the CA in
+`vault_tls_ca_file`. A name that is not a SAN fails the join with
+`x509: certificate is valid for …, not …` **after** the role has configured the host.
+`tasks/preflight/san.yml` deliberately checks only what the role itself depends on, so
+peer SANs are the operator's to verify — see
+[`docs/runbooks/cluster-bringup.md`](docs/runbooks/cluster-bringup.md).
 
 #### Migrating from `vault_manage_repo: false`
 
@@ -908,6 +914,9 @@ fix, only a full role run did.
           - vault-01.closednetwork.local
           - vault-02.closednetwork.local
           - vault-03.closednetwork.local
+        # members are peer ADDRESSES (certificate SANs); vault_init_host is an
+        # INVENTORY hostname checked against the play. They match here; with
+        # short-name inventory they would not.
         vault_init_host: vault-01.closednetwork.local
         vault_initialize: true
         vault_init_unseal: true

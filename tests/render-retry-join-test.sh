@@ -7,15 +7,19 @@
 # Usage: bash tests/render-retry-join-test.sh
 # Classification: UNCLASSIFIED
 ###############################################################################
-# Scope-free by design, like render-hsm-pin-test.sh: no role scope, no argument
-# spec. The string-coercion defence (type: list) therefore CANNOT be tested here
-# -- a string stays a string and renders per character. That case belongs where
-# the argument spec runs; see molecule/preflight and meta/argument_specs.yml.
+# Renders the REAL templates/vault.hcl.j2, like render-hsm-pin-test.sh. An earlier
+# revision rendered an inline copy of the loop expression, which meant deleting the
+# entire retry_join block from the template passed every test in the repository.
+#
+# Scope-free: no role scope, no argument spec. A string passed where a list is
+# expected therefore renders per character here, so that case is NOT tested in this
+# harness -- tasks/preflight/cluster.yml rejects it instead.
 set -uo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 fail=0
 
-render () {  # $1=json extra-vars
+render () {  # $1=json extra-vars -> stanza count, or a loud marker
   cat > "$WORK/r.yml" <<EOF
 - hosts: localhost
   connection: local
@@ -23,28 +27,37 @@ render () {  # $1=json extra-vars
   vars:
     vault_listener_port: 8200
     vault_tls_ca_file: /opt/vault/tls/ca.crt
+    vault_tls_cert_file: /opt/vault/tls/tls.crt
+    vault_tls_key_file: /opt/vault/tls/tls.key
+    vault_data_dir: /opt/vault/data
+    vault_config_dir: /etc/vault.d
+    vault_raft_node_id: t
+    vault_api_addr: https://127.0.0.1:8200
+    vault_cluster_addr: https://127.0.0.1:8201
+    vault_ui_enabled: true
+    vault_disable_mlock: false
+    vault_disable_performance_standby: true
+    vault_log_level: info
+    vault_listener_address: 0.0.0.0
+    vault_tls_min_version: tls12
+    vault_tls_max_version: tls13
+    vault_tls_cipher_suites: []
+    vault_tls_require_client_cert: false
+    vault_tls_disable_client_certs: false
+    vault_hsm_enabled: false
+    vault_edition: vault
   tasks:
-    - ansible.builtin.copy:
-        dest: $WORK/out.txt
-        content: |
-          # BEGIN -- an anchor line, because copy rejects empty content with
-          # "src (or content) is required" and an empty peer list renders nothing.
-          {% for peer in vault_cluster_members | default([]) %}
-          leader_api_addr = "https://{{ '[' ~ peer ~ ']' if ':' in peer else peer }}:{{ vault_listener_port }}"
-          {% endfor %}
-          {% if vault_cluster_leader_addr | default('') | length > 0 %}
-          leader_api_addr = "https://{{ vault_cluster_leader_addr }}:{{ vault_listener_port }}"
-          {% endif %}
+    - ansible.builtin.template:
+        src: $ROOT/templates/vault.hcl.j2
+        dest: $WORK/out.hcl
         mode: '0600'
 EOF
-  rm -f "$WORK/out.txt"
+  rm -f "$WORK/out.hcl"
   if ! ansible-playbook "$WORK/r.yml" -e "$1" >"$WORK/log" 2>&1; then
     echo "PLAYBOOK_FAILED"; return
   fi
-  # The render must have produced a file. Without this the empty case passes
-  # vacuously: grep -c over nothing also prints 0.
-  if [ ! -f "$WORK/out.txt" ]; then echo "NO_OUTPUT"; return; fi
-  tr -d ' ' < "$WORK/out.txt" | grep -c 'leader_api_addr' || true
+  if [ ! -f "$WORK/out.hcl" ]; then echo "NO_OUTPUT"; return; fi
+  grep -c 'leader_api_addr' "$WORK/out.hcl" || true
 }
 
 check () {  # $1=label $2=json $3=expected-count $4=optional grep
@@ -52,7 +65,7 @@ check () {  # $1=label $2=json $3=expected-count $4=optional grep
   if [ "$got" != "$3" ]; then
     echo "FAIL: $1 -- $got stanza(s), expected $3"; fail=1; return
   fi
-  if [ -n "${4:-}" ] && ! grep -q "$4" "$WORK/out.txt"; then
+  if [ -n "${4:-}" ] && ! grep -q "$4" "$WORK/out.hcl"; then
     echo "FAIL: $1 -- expected '$4' in the render"; fail=1; return
   fi
   echo "ok: $1"

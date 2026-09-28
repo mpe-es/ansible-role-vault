@@ -16,11 +16,20 @@
     fail_msg: >-
       vault_cluster_members and vault_cluster_leader_addr are both set. The
       scalar renders one retry_join stanza, which is not the Raft join contract,
-      and it is where an HA VIP is usually put -- a VIP that health-checks for
-      the active node has no healthy backend during bootstrap, because every
-      node answers 501 uninitialized or 503 sealed until one is unsealed. Use
-      vault_cluster_members alone.
+      and it is where an HA VIP is usually put. The VIP is for client traffic,
+      not for joining (operator ruling). Use vault_cluster_members alone.
     success_msg: "Exactly one retry_join source is configured"
+
+- name: "Preflight | cluster | the peer list is a list"
+  ansible.builtin.assert:
+    that:
+      - vault_cluster_members is not string
+      - vault_cluster_members is sequence
+    fail_msg: >-
+      vault_cluster_members is a {{ vault_cluster_members | type_debug }}, not a
+      list. A string would be iterated per character, rendering one retry_join
+      stanza per letter -- valid HCL that joins nothing. Use a YAML list.
+    success_msg: "Peer list is a list"
 
 - name: "Preflight | cluster | peers are bare host or IP, no scheme and no port"
   ansible.builtin.assert:
@@ -31,9 +40,11 @@
       - (item | urlsplit('scheme')) | length == 0
       - "'[' not in item"
     fail_msg: >-
-      vault_cluster_members entry '{{ item }}' carries a scheme or a port.
-      Entries are bare host or IP; the template adds https:// and
-      vault_listener_port, and brackets an IPv6 literal. The sibling variables
+      vault_cluster_members entry '{{ item }}' is not a bare host or IP:
+      {{ "it is already bracketed, and the template brackets IPv6 itself"
+         if '[' in item
+         else "it carries a scheme or a port" }}.
+      The template adds https:// and vault_listener_port. The sibling variables
       vault_api_addr and vault_cluster_addr ARE full URLs, so copying their form
       here renders https://https://host:8200:8200.
     success_msg: "Peer '{{ item }}' is a bare host or IP"

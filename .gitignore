@@ -21,7 +21,10 @@ CLAUDE.md
 stigs/
 
 # Local documentation drafts (not part of role)
-docs/
+# docs/* rather than docs/: git cannot descend into an excluded DIRECTORY, so a
+# negation inside one is unreachable. Shipped runbooks live under docs/runbooks/.
+docs/*
+!docs/runbooks/
 
 # Screenshots
 **/*.png

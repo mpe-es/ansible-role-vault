@@ -120,9 +120,11 @@
     - name: Assert the initialization host is in this batch
       ansible.builtin.assert:
         that:
-          - __vault_init_host_effective in ansible_play_hosts
+          # ansible_play_batch, NOT ansible_play_hosts: the latter is the whole
+          # play even under serial, so it cannot detect the split it guards.
+          - __vault_init_host_effective in ansible_play_batch
         fail_msg: >-
-          This batch ({{ ansible_play_hosts | join(', ') }}) does not contain the
+          This batch ({{ ansible_play_batch | join(', ') }}) does not contain the
           initialization host {{ __vault_init_host_effective }}, and Vault is not
           yet initialized. A serial or --limit run that separates them would
           initialize this batch's node into its own cluster.
@@ -225,10 +227,30 @@
     # <key>` — the CLI form records each share in auditd execve argv on a STIG
     # host (issue #31). ansible.builtin.uri runs ON THE NODE (no delegate_to), so
     # 127.0.0.1 is the node's loopback, identical locus to the former command.
-    # A follower's turn in the unseal below arrives milliseconds after the leader's,
-    # before retry_join has completed, and Vault answers 400 "server is not yet
-    # initialized". Unconditional across seal types: the membership check also races
-    # the joins (#44).
+    # Leader first: a Shamir operator init leaves the node SEALED, and a sealed
+    # node cannot serve the raft bootstrap challenge, so no follower can join
+    # until this runs (#44).
+    - name: Unseal the initialization host (Shamir — key in API body, never argv)
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:{{ vault_listener_port }}/v1/sys/unseal"
+        method: POST
+        body_format: json
+        body:
+          key: "{{ item }}"
+        ca_path: "{{ vault_tls_ca_file }}"
+        status_code: [200]
+      loop: "{{ (__vault_init_source.stdout | from_json).unseal_keys_b64[:vault_key_threshold] }}"
+      when:
+        - inventory_hostname == __vault_init_host_effective
+        - __vault_init_source.stdout | default('') | length > 0
+        - vault_init_unseal | bool
+        - not (vault_hsm_enabled | bool)
+      no_log: true          # body carries the key; response unusable for verify
+      changed_when: true
+
+    # A Shamir joiner reports initialized only once the leader is unsealed and the
+    # join completes, so this sits between the two unseals. Skipped under an HSM
+    # seal, where every node unseals itself and nothing here depends on the join.
     - name: Wait for this node to join the cluster
       ansible.builtin.uri:
         url: "https://127.0.0.1:{{ vault_listener_port }}/v1/sys/seal-status"
@@ -243,8 +265,13 @@
       when:
         - vault_cluster_members | default([]) | length > 0
         - inventory_hostname != __vault_init_host_effective
+        - __vault_init_source.stdout | default('') | length > 0
+        - vault_init_unseal | bool
+        - not (vault_hsm_enabled | bool)
+        - __vault_initialized is defined
+        - not __vault_initialized | bool
 
-    - name: Unseal Vault after initialization (Shamir — key in API body, never argv)
+    - name: Unseal the remaining cluster nodes (Shamir — key in API body, never argv)
       ansible.builtin.uri:
         url: "https://127.0.0.1:{{ vault_listener_port }}/v1/sys/unseal"
         method: POST
@@ -255,10 +282,11 @@
         status_code: [200]
       loop: "{{ (__vault_init_source.stdout | from_json).unseal_keys_b64[:vault_key_threshold] }}"
       when:
+        - inventory_hostname != __vault_init_host_effective
         - __vault_init_source.stdout | default('') | length > 0
         - vault_init_unseal | bool
         - not (vault_hsm_enabled | bool)
-      no_log: true          # body carries the key; response unusable for verify
+      no_log: true
       changed_when: true
 
     # Happy-path unseal verification (there is no such check elsewhere on the

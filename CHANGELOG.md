@@ -21,8 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `https://2001:db8::10:8200` does not parse. `vault_cluster_leader_addr` remains for
   back-compat, is deprecated for HA, and is now **mutually exclusive** with the peer
   list: it is where an HA VIP usually goes, and the VIP is client-only.
-  `/v1/sys/health` answers **501** uninitialized and **503** sealed, so a VIP
-  health-checking for the active node has **no healthy backend during bootstrap**.
+  The VIP is for client traffic, not for joining — an operator ruling, not a derived
+  impossibility: `/v1/sys/health`'s status codes are overridable.
 
   **New `vault_init_host`** names the one node that runs `operator init`. Empty means
   this host, which is the single-node case. `run_once` was rejected for this after
@@ -33,9 +33,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unseal possible: `operator init` runs on one node, and the shares live only in that
   node's register. One key set exists per **cluster**, applied to each node
   individually — *"When you use the Shamir seal with multiple nodes, you must unseal
-  each node with the required threshold of shares."* A **join wait** precedes the
-  unseal, unconditional across seal types, because a follower's turn arrives before
-  `retry_join` completes and Vault answers **400 "server is not yet initialized"**.
+  each node with the required threshold of shares."*
+
+  **The order is leader, wait, followers.** A Shamir `operator init` leaves the node
+  **sealed**, and a sealed node cannot serve the raft bootstrap challenge — so no
+  follower can join until the leader is unsealed, and a join wait placed before that
+  unseal deadlocks and fails every follower after its retries. The role unseals the
+  init host, waits for each other node to report `initialized`, then unseals them.
 
   **Follower unseal is gated on `vault_init_unseal`, not inferred from the seal type** —
   desired state is stated. Both `audit enable` tasks and all four capture tasks are
@@ -66,10 +70,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Limitations), `meta/main.yml` and `meta/argument_specs.yml`, which feeds `ansible-doc`
   and AAP surveys.
 
-  Covered by `tests/render-retry-join-test.sh` (eight render cases, IPv6 bracketing
-  mutation-verified) and `tests/assert-ha-init-orchestration.sh` (eight locked
-  properties, **nine mutants killed**), plus seven behavioural cases in
-  `molecule/preflight/verify.yml`. Three parallel guard surfaces moved with the new
+  Covered by `tests/render-retry-join-test.sh`, which renders the **real**
+  `templates/vault.hcl.j2` across eight cases (deleting the `retry_join` loop fails
+  six of them), by `tests/assert-ha-init-orchestration.sh`, which locks the gates
+  **and** the data expressions, and by its meta-gate
+  `tests/assert-ha-init-mutations.sh` — **14 mutations, all killed, every one
+  asserting it applied** so a stale anchor cannot fake a pass. Plus seven behavioural
+  cases in `molecule/preflight/verify.yml`. Three parallel guard surfaces moved with the new
   gate: both preflight locks' gate lists and the `ALLOW` set in
   `assert-facts-via-ansible-facts.sh`. (#44)
 

@@ -1562,8 +1562,8 @@
         name: ansible-role-vault
         tasks_from: preflight/cluster.yml
       vars:
-        vault_cluster_members: [vault-el, vault-02.mpe.mil, "2001:db8::10"]
-        vault_init_host: vault-el
+        vault_cluster_members: ["{{ inventory_hostname }}", vault-02.mpe.mil, "2001:db8::10"]
+        vault_init_host: "{{ inventory_hostname }}"
 
     - name: "FIRES - both a peer list and a leader address"
       block:
@@ -1574,7 +1574,7 @@
           vars:
             vault_cluster_members: [vault-el]
             vault_cluster_leader_addr: vault-vip.mpe.mil
-            vault_init_host: vault-el
+            vault_init_host: "{{ inventory_hostname }}"
         - name: Two join sources should not have passed
           ansible.builtin.fail:
             msg: "the gate accepted two simultaneous join configurations"
@@ -1582,8 +1582,8 @@
         - name: Assert the message names the conflict and the bootstrap reason
           ansible.builtin.assert:
             that:
-              - ansible_failed_result.msg is search('mutually exclusive|both set')
-              - ansible_failed_result.msg is search('501|503')
+              - ansible_failed_result.msg is search('both set')
+              - ansible_failed_result.msg is search('client traffic, not for joining')
             fail_msg: "wrong cause: {{ ansible_failed_result.msg | default('') }}"
 
     - name: "FIRES - a peer carrying a scheme"
@@ -1594,16 +1594,20 @@
             tasks_from: preflight/cluster.yml
           vars:
             vault_cluster_members: ["https://vault-el"]
-            vault_init_host: vault-el
+            vault_init_host: "{{ inventory_hostname }}"
         - name: A schemed peer should not have passed
           ansible.builtin.fail:
             msg: "the gate accepted a peer that was not a bare address"
       rescue:
         - name: Assert the message names the scheme and the double-render
+          # A LOOPED assert reports "One or more items failed" in
+          # ansible_failed_result.msg; the gate's message is in .results[].msg.
+          vars:
+            __looped_msgs: "{{ ansible_failed_result.results | default([]) | map(attribute='msg') | join(' ') }}"
           ansible.builtin.assert:
             that:
-              - ansible_failed_result.msg is search('scheme or a port')
-              - ansible_failed_result.msg is search('https://https://')
+              - __looped_msgs is search('scheme or a port')
+              - __looped_msgs is search('https://https://')
             fail_msg: "wrong cause: {{ ansible_failed_result.msg | default('') }}"
 
     - name: "FIRES - a peer carrying a port"
@@ -1614,15 +1618,17 @@
             tasks_from: preflight/cluster.yml
           vars:
             vault_cluster_members: ["vault-el:8200"]
-            vault_init_host: vault-el
+            vault_init_host: "{{ inventory_hostname }}"
         - name: A ported peer should not have passed
           ansible.builtin.fail:
             msg: "the gate accepted a peer with an explicit listener port"
       rescue:
         - name: Assert the message names the scheme-or-port rejection
+          vars:
+            __looped_msgs: "{{ ansible_failed_result.results | default([]) | map(attribute='msg') | join(' ') }}"
           ansible.builtin.assert:
             that:
-              - ansible_failed_result.msg is search('scheme or a port')
+              - __looped_msgs is search('scheme or a port')
             fail_msg: "wrong cause: {{ ansible_failed_result.msg | default('') }}"
 
     - name: "FIRES - a cluster with no init host named"
