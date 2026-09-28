@@ -193,6 +193,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **positive and data-keyed**: it stringifies the whole task, covers the `rescue`, and
   names the register variables as well as the JSON field names, because
   `debug: var=__vault_init_source` dumps the root token while naming no field at all.
+  The **lint job now installs `requirements.txt`** as well, because that is the job which
+  runs the behavioural suites and `peer-shape-table-test.sh` evaluates the role's real
+  `ansible.utils.ipaddr` expressions, which need `netaddr` on the controller;
+  `tests/assert-lint-job-can-run-the-tests.sh` keeps the two in step.
   Plus fourteen behavioural cases in `molecule/preflight/verify.yml`. Three parallel guard surfaces moved with the new
   gate: both preflight locks' gate lists and the `ALLOW` set in
   `assert-facts-via-ansible-facts.sh`. (#44)
