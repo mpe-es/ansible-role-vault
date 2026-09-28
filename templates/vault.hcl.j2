@@ -22,18 +22,8 @@ log_level     = "{{ vault_log_level }}"
 {% if vault_edition is match('vault-enterprise') %}
 # Enterprise-only parameters
 disable_performance_standby = {{ vault_disable_performance_standby | lower }}
-# Autoloaded license (#42). Written by tasks/configure.yml when
-# vault_license_content is supplied, and REMOVED by it when the desired state
-# supplies none -- see vault_license_manage_state. Referenced unconditionally
-# for Enterprise.
-#
-# What Vault does when this file is MISSING is deliberately not claimed here.
-# An expired licence does not block start: Vault comes up and loses Enterprise
-# features until a valid one is supplied (operator, 28 Sep 2026). The absent
-# case has never been measured against a real Enterprise binary. The role
-# therefore reports a licence removal itself rather than relying on Vault to
-# raise the alarm. VAULT_LICENSE and VAULT_LICENSE_PATH both take precedence
-# over this path if an operator already uses them.
+# Autoloaded license (#42), referenced unconditionally for Enterprise.
+# VAULT_LICENSE and VAULT_LICENSE_PATH take precedence over this path.
 license_path                = "{{ vault_config_dir }}/vault.hclic"
 {% endif %}
 

@@ -9,22 +9,9 @@
 # Usage: bash tests/license-state-table-test.sh
 # Classification: UNCLASSIFIED
 ###############################################################################
-# WHY THIS EXISTS. The review that produced this variable found that the licence
-# had no absent state at all: clearing vault_license_content left a withdrawn
-# entitlement on disk AND still referenced by license_path, so an Enterprise node
-# kept running on a licence the desired state had retired, and the role reported
-# success. The fix collapsed two hand-written complementary conditions into one
-# derived value, because two complements drift and the gap between them is
-# invisible -- exactly how the #41 diff:false guard silently stopped binding.
-#
-# This test loads vars/main.yml and evaluates the REAL expression. It does NOT
-# transcribe it: a copied expression is a verification that cannot fail, the
-# same class as the ANSIBLE_INJECT_FACT_VARS typo (#78) and the failed_when:false
-# port gate (#36).
-#
-# No molecule scenario covers this. Every scenario runs ONE licence posture, so
-# the transitions are unreachable from the container suite; molecule/hsm asserts
-# the on-disk result of a single state, not the mapping that chose it.
+# Loads vars/main.yml and evaluates the REAL expression rather than a copy -- a
+# transcribed expression is a verification that cannot fail. No molecule scenario
+# covers the mapping: each scenario runs one licence posture.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT

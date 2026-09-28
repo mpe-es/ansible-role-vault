@@ -449,13 +449,10 @@ argument_specs:
             Empty deploys no license AND removes any vault.hclic already on
             disk. See vault_license_manage_state to opt out of that.
           - >-
-            What Vault does with no license is deliberately not claimed here. An
-            EXPIRED license does not block start: Vault comes up and loses
+            An EXPIRED license does not block start: Vault comes up and loses
             Enterprise features until a valid one is supplied. Whether an ABSENT
-            license blocks start has never been measured against a real
-            Enterprise binary. There is still no preflight gate, by operator
-            ruling, but the role reports a license removal itself rather than
-            relying on the service to raise the alarm.
+            license blocks start is unmeasured. There is no preflight gate for a
+            missing license.
         type: str
         default: ""
 
@@ -467,13 +464,10 @@ argument_specs:
             vault_edition to a Community build, removes the file and notifies a
             vault restart.
           - >-
-            Set false when the license is delivered OUT OF BAND - baked into a
-            golden image, written by a separate playbook, or supplied through
-            VAULT_LICENSE or VAULT_LICENSE_PATH. vault_license_content is empty
-            by default, so with management on, a run that simply never sets it
-            would delete a file the role did not write. On an Enterprise node
-            that costs Enterprise features, including the PKCS#11 seal, at the
-            next restart.
+            Set false when the license is delivered OUT OF BAND (golden image,
+            separate playbook, VAULT_LICENSE or VAULT_LICENSE_PATH).
+            vault_license_content is empty by default, so with management on the
+            role would delete a file it never wrote.
           - >-
             False withholds only the REMOVAL. A supplied license is still
             deployed.

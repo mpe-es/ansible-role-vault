@@ -74,11 +74,6 @@
   ansible.builtin.include_tasks:
     file: preflight/edition.yml
 
-# --- issue #42: the licence is a STATE, not a one-way deploy -----------------
-# Both tasks key off the single derived __vault_license_desired_state rather
-# than one condition and its hand-written negation. vars/main.yml carries the
-# reasoning; the short version is that two complements drift and the gap is
-# invisible.
 - name: Deploy Vault Enterprise license
   ansible.builtin.copy:
     content: "{{ vault_license_content }}"
@@ -97,12 +92,9 @@
   ansible.builtin.file:
     path: "{{ vault_config_dir }}/vault.hclic"
     state: absent
-  # DELIBERATELY NOT no_log / diff: false, unlike the deploy task above. Those
-  # exist there because `content:` carries the entitlement blob. A removal
-  # carries a PATH and nothing else, and this is the one licence event the role
-  # cannot rely on Vault to announce -- an expired licence starts degraded, and
-  # the absent case has never been measured. Suppressing the log here would hide
-  # the only attributable record that the entitlement was withdrawn.
+  # no no_log / diff:false on purpose -- this is the only attributable record
+  # that an entitlement was withdrawn. Locked by
+  # tests/assert-configure-gates-the-render.sh
   notify: Restart vault
   register: __vault_license_removed
   when: __vault_license_desired_state == 'absent'
