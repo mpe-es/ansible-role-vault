@@ -9,29 +9,56 @@
 ###############################################################################
 # Exercises tasks/init-capture-durability.yml, not a copy of its logic.
 #
-# The gate keys on filesystem type, so both branches are reachable on any Linux
-# host: /dev/shm is tmpfs, $HOME is a real filesystem. The test asserts that
-# premise before trusting either result -- a passing run on a host where $HOME is
-# tmpfs would otherwise prove nothing.
+# The gate keys on filesystem type. /dev/shm is tmpfs on every Linux host, so the
+# ephemeral branch is always reachable. The durable branch is NOT: `mktemp -d`
+# lands in /tmp, which is tmpfs on many hosts, and an earlier revision of this test
+# used it and then aborted at its own premise check on exactly those hosts -- the
+# control test silently stopped being one.
+#
+# The durable base is therefore DISCOVERED, not assumed. Candidates are probed in
+# order and the first non-ephemeral one wins; if none is durable the test fails
+# loudly naming every candidate and its fstype, rather than exiting quietly.
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-WORK="$(mktemp -d)"; trap 'rm -rf "$WORK" "${EPHEMERAL:-}"' EXIT
-EPHEMERAL="/dev/shm/vault-i94-$$"
-DURABLE="$WORK/capture"
 fail=0
 
+fstype_of () { findmnt -n -o FSTYPE --target "$1" 2>/dev/null | tr -d ' '; }
+is_ephemeral () { case "$(fstype_of "$1")" in tmpfs|ramfs|overlay|overlayfs|"") return 0 ;; esac; return 1; }
+
+DURABLE_BASE=""
+probed=""
+for base in "${HOME:-}" /var/tmp "$ROOT" /tmp; do
+  [ -n "$base" ] && [ -d "$base" ] && [ -w "$base" ] || continue
+  probed="$probed $base=$(fstype_of "$base")"
+  if ! is_ephemeral "$base"; then DURABLE_BASE="$base"; break; fi
+done
+if [ -z "$DURABLE_BASE" ]; then
+  echo "FAIL: no durable writable base found, so the durable and fail-closed branches"
+  echo "      cannot be exercised. Probed:$probed"
+  exit 1
+fi
+
+WORK="$(mktemp -d -p "$DURABLE_BASE" vault-i94.XXXXXX)"
+# ansible resolves a role by DIRECTORY NAME, so pointing ANSIBLE_ROLES_PATH at the
+# checkout's parent only works when the checkout happens to be named
+# 'ansible-role-vault'. Mounted elsewhere -- a container, a worktree, a rename --
+# it is not. Link a correctly-named directory instead.
+mkdir -p "$WORK/roles"
+ln -sfn "$ROOT" "$WORK/roles/ansible-role-vault"
+EPHEMERAL="/dev/shm/vault-i94-$$"
+trap 'rm -rf "$WORK" "${EPHEMERAL:-}"' EXIT
+DURABLE="$WORK/capture"
+echo "durable base: $DURABLE_BASE ($(fstype_of "$DURABLE_BASE"))   ephemeral: /dev/shm ($(fstype_of /dev/shm))"
+
 premise () {
-  local p="$1" want="$2" got
+  local p="$1" want="$2"
   mkdir -p "$p" 2>/dev/null
-  got="$(findmnt -n -o FSTYPE --target "$p" 2>/dev/null | tr -d ' ')"
   if [ "$want" = "ephemeral" ]; then
-    case "$got" in tmpfs|ramfs|overlay|overlayfs) return 0 ;; esac
-    echo "PREMISE FAILED: $p is '$got', expected an ephemeral fs — test is meaningless here"; return 1
+    is_ephemeral "$p" && return 0
+    echo "PREMISE FAILED: $p is '$(fstype_of "$p")', expected an ephemeral fs"; return 1
   else
-    case "$got" in tmpfs|ramfs|overlay|overlayfs)
-      echo "PREMISE FAILED: $p is '$got', expected a durable fs — test is meaningless here"; return 1 ;;
-    esac
-    return 0
+    is_ephemeral "$p" || return 0
+    echo "PREMISE FAILED: $p is '$(fstype_of "$p")', expected a durable fs"; return 1
   fi
 }
 premise "$EPHEMERAL" ephemeral || exit 1
@@ -51,9 +78,9 @@ run_case () {  # $1=label  $2=capture_dir  $3=expect(pass|fail)  $4=optional PAT
         tasks_from: init-capture-durability.yml
 EOF
   if [ -n "${4:-}" ]; then
-    out="$(ANSIBLE_ROLES_PATH="$ROOT/.." PATH="$4" ansible-playbook "$WORK/case.yml" 2>&1)"; rc=$?
+    out="$(ANSIBLE_ROLES_PATH="$WORK/roles" PATH="$4" ansible-playbook "$WORK/case.yml" 2>&1)"; rc=$?
   else
-    out="$(ANSIBLE_ROLES_PATH="$ROOT/.." ansible-playbook "$WORK/case.yml" 2>&1)"; rc=$?
+    out="$(ANSIBLE_ROLES_PATH="$WORK/roles" ansible-playbook "$WORK/case.yml" 2>&1)"; rc=$?
   fi
   if [ "$3" = "fail" ]; then
     if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'Refusing to initialize Vault'; then
