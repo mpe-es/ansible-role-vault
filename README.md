@@ -4,9 +4,15 @@ Install and configure HashiCorp Vault on RHEL systems with DISA STIG compliance,
 in airgap or internet-connected environments.
 
 > **Maturity.** Single-node deployments are the supported, CI-exercised path.
-> **Multi-node Raft HA is developmental** — the role renders cluster
-> configuration but does not yet implement a complete cluster standup. Read
-> [Known Limitations](#known-limitations) before planning a cluster.
+> **Multi-node Raft HA is implemented but not behaviour-tested** — the role renders
+> per-peer `retry_join`, initializes exactly one node, and converges the cluster to the
+> sealed state you asked for — waiting for each follower to join on **both** the Shamir
+> and HSM paths, and unsealing the followers only on the Shamir path, where an HSM node
+> unseals itself. **CI verifies configuration presence only**: no test exercises
+> cluster formation. Day-2 cluster operations are
+> out of scope. Read [Known Limitations](#known-limitations) and
+> [`docs/runbooks/cluster-bringup.md`](docs/runbooks/cluster-bringup.md) before
+> planning a cluster.
 
 ## Requirements
 
@@ -123,7 +129,13 @@ certificate is not invalid — it is unusable by this role.
 
 This contract covers `vault_tls_source: file` (the default). The
 `vault_pki` source cannot satisfy it until [#63](https://github.com/mpe-es/ansible-role-vault/issues/63) lands, and multi-node
-HA adds the cluster-leader name — see [#44](https://github.com/mpe-es/ansible-role-vault/issues/44).
+HA adds **every peer name**: each entry in `vault_cluster_members` must be a SAN on
+that peer's listener certificate, and all peers must chain to the CA in
+`vault_tls_ca_file`. A name that is not a SAN fails the join with
+`x509: certificate is valid for …, not …` **after** the role has configured the host.
+`tasks/preflight/san.yml` deliberately checks only what the role itself depends on, so
+peer SANs are the operator's to verify — see
+[`docs/runbooks/cluster-bringup.md`](docs/runbooks/cluster-bringup.md).
 
 #### Migrating from `vault_manage_repo: false`
 
@@ -678,7 +690,9 @@ See the initialization warning at the top of this section before enabling
 | `vault_raft_node_id` | `{{ inventory_hostname_short }}` | Raft node identifier |
 | `vault_api_addr` | `https://{{ ansible_facts['fqdn'] }}:8200` | Advertised API address |
 | `vault_cluster_addr` | `https://{{ ansible_facts['fqdn'] }}:8201` | Cluster replication address |
-| `vault_cluster_leader_addr` | `""` | LB/leader address for HA retry_join |
+| `vault_cluster_members` | `[]` | Raft peers, one `retry_join` stanza each. **Bare host or IP** — no scheme, no port, no CIDR prefix; the template adds both and brackets IPv6, including ULA (`fd00::/8`). Validated with `ansible.utils.ipaddr` plus a DNS-label pattern; a **zone-indexed** link-local such as `fe80::1%eth0` is rejected, so link-local peers are not usable in practice. An all-numeric name such as `123` is rejected too — legal DNS syntax, but here it is a mistyped address. Every entry must be a SAN on that peer's listener certificate. Empty means single-node |
+| `vault_init_host` | `""` | The one node that runs `operator init`. **Required** when `vault_cluster_members` is set. Empty means this host (single-node). Must be in the play |
+| `vault_cluster_leader_addr` | `""` | **Deprecated for HA** — renders a single `retry_join` stanza, which is not the Raft join contract. Mutually exclusive with `vault_cluster_members`, and **rejected outright with `vault_initialize: true`** (see Known Limitations). Its supported use is configuring a node to **join** a cluster initialized elsewhere. The HA VIP belongs on client traffic, not here. Same **bare host or IP** shape as `vault_cluster_members`, validated by the same gate, and its stanza carries the same IPv6 bracketing and mTLS client identity |
 
 ### TLS Certificate Deployment
 
@@ -879,17 +893,18 @@ resolved target. A `--tags system` run performs this repair, since [#28](https:/
 include apply its own tags to the tasks it includes; on revisions before that
 fix, only a full role run did.
 
-### HA Cluster (3-Node with Load Balancer) — developmental
+### HA Cluster (3-Node with a client-facing VIP)
 
-> **This example configures nodes; it does not stand up a working cluster.**
-> The role renders a single `retry_join` block pointing at
-> `vault_cluster_leader_addr`, and stops there. It performs no leader election
-> ordering, no per-peer join, and no follower unseal. Running this playbook
-> across three hosts unchanged will **initialize each node as its own
-> independent Vault**, not form one Raft cluster. See
-> [Known Limitations](#known-limitations) and
-> [#44](https://github.com/mpe-es/ansible-role-vault/issues/44) for the full
-> gap analysis and the manual steps currently required.
+> **Set `vault_cluster_members` and `vault_init_host`, not
+> `vault_cluster_leader_addr`.** The scalar renders one stanza, which is not the Raft
+> join contract, and preflight rejects the two together. **The HA VIP is for client
+> traffic, not for joining** — an operator ruling. (`/v1/sys/health`'s status codes are
+> overridable, so this is a decision rather than an impossibility.)
+>
+> Cluster formation is **not** behaviour-tested. Follow
+> [`docs/runbooks/cluster-bringup.md`](docs/runbooks/cluster-bringup.md), which
+> includes taking custody of the key material — there is **one** key set for the whole
+> cluster, not one per node.
 
 ```yaml
 - hosts: vault_cluster
@@ -897,8 +912,17 @@ fix, only a full role run did.
   roles:
     - role: mpe-es.vault
       vars:
-        # Renders exactly one retry_join block. Raft expects one per peer.
-        vault_cluster_leader_addr: "vault-lb.closednetwork.local"
+        vault_cluster_members:
+          - vault-01.closednetwork.local
+          - vault-02.closednetwork.local
+          - vault-03.closednetwork.local
+        # members are peer ADDRESSES (certificate SANs); vault_init_host is an
+        # INVENTORY hostname checked against the play. They match here; with
+        # short-name inventory they would not.
+        vault_init_host: vault-01.closednetwork.local
+        vault_initialize: true
+        vault_init_unseal: true
+        vault_init_capture_dir: /srv/vault-init-capture
         vault_manage_tls: true
         vault_tls_src_cert: "files/{{ inventory_hostname }}-tls.crt"
         vault_tls_src_key: "files/{{ inventory_hostname }}-tls.key"
@@ -1244,21 +1268,64 @@ scope for this backup job.
 Current, deliberate gaps. Each is tracked; none is a surprise. Read this before
 committing the role to a production design.
 
-### Multi-node Raft HA is developmental ([#44](https://github.com/mpe-es/ansible-role-vault/issues/44))
+### Multi-node Raft HA is implemented but not behaviour-tested ([#44](https://github.com/mpe-es/ansible-role-vault/issues/44))
 
-The role configures a node; it does not orchestrate a cluster.
+The role now orchestrates standup: `vault_cluster_members` renders one `retry_join`
+stanza per peer, `vault_init_host` names the single node that initializes, followers
+are waited for and then unsealed, and the audit devices are enabled once. What remains
+limited:
 
-- `vault_cluster_leader_addr` is a **single scalar** and renders exactly **one**
-  `retry_join` block. Raft expects a `retry_join` per peer, so a joining node
-  has one fixed contact point and no fallback.
-- There is **no init orchestration**. With `vault_initialize: true` across a
-  play, every host initializes itself — you get N independent single-node
-  Vaults, each with its own root token and key shares, not one cluster.
-- There is **no follower unseal step** after join.
+- **No automated behaviour test.** CI proves the rendered configuration and the task
+  structure. Cluster formation, leader election, follower join and unseal convergence
+  are **not** exercised by any test — by decision, not oversight.
+- **No day-2 cluster operations.** No autopilot tuning, no peer add or remove, no
+  cluster snapshot restore, no quorum-loss recovery.
+- **A re-run does not unseal.** Initialization is skipped on an initialized cluster, so
+  every unseal step is skipped with it. A Shamir cluster that reboots with
+  `vault_auto_unseal_enabled: false` comes back **sealed and stays sealed**, and the
+  play **reports success**. Use an HSM seal, or accept the boot-time auto-unseal
+  service's key-at-rest posture, or unseal by hand.
+- **Peer names are a TLS contract the role cannot check.** Every entry in
+  `vault_cluster_members` must be a SAN on that peer's listener certificate; a mismatch
+  fails the join after the host is already configured.
+- **`vault_cluster_leader_addr` cannot drive an HA bring-up.** It renders a `retry_join`
+  but names no initializer, and every orchestration gate scopes on `vault_cluster_members`
+  — so pairing it with `vault_initialize: true` ran `vault operator init` on **every**
+  host, producing one independent Vault per node, each with its own root token and key
+  shares, under a green play. Preflight now **rejects that pairing**. Its supported use is
+  unchanged: `vault_initialize: false`, configuring a node to join a cluster that was
+  initialized elsewhere. To have the role stand a cluster up, use `vault_cluster_members`
+  with `vault_init_host`.
+- **`strategy: free` is not supported for an HA bring-up.** The default `linear`
+  strategy's task barrier is what guarantees a follower reads a populated init register.
+  Under `free` a follower can run ahead of the initialization host; the role detects the
+  empty register and **fails the play** rather than skipping to a green result, but it
+  cannot make `free` work.
+- **mTLS uses the node's own listener identity everywhere.** When
+  `vault_tls_require_client_cert` is `true` the listener demands a client certificate
+  from **every** caller, not only from `retry_join` — so `retry_join` sends
+  `leader_client_cert_file`/`leader_client_key_file`, every `uri` call sends
+  `client_cert`/`client_key`, and every CLI call sets `VAULT_CLIENT_CERT`/
+  `VAULT_CLIENT_KEY`, all from `vault_tls_cert_file` and `vault_tls_key_file`. That
+  certificate therefore needs **`clientAuth` in its extended key usage**; a server-only
+  certificate fails both the join and `vault status`. The role cannot inspect the EKU.
+- **A cluster left sealed is not identity-checked.** The cross-node `cluster_id`
+  comparison that catches N-independent-clusters reads `seal-status`, which carries
+  `cluster_id` only while a node is **unsealed**. With `vault_init_unseal: false`, or on
+  a node whose batch excludes the initialization host, the comparison is skipped — but
+  it now **says so in the job log** rather than passing silently, and names
+  `vault operator raft list-peers` as the manual confirmation. Failing closed was
+  rejected deliberately: a sealed cluster is a stated desired state, and failing it
+  would make `vault_init_unseal: false` unusable on a cluster.
+- **`--check` cannot confirm an HA bring-up, only that nothing is destructive.**
+  `operator init` does not run under `--check`, so no register exists and every unseal
+  and join step is skipped. The read-only probes — `vault status` and the cluster
+  identity read — *do* run, because they carry `check_mode: false`, so on an
+  **already-converged** cluster a dry run still reports identity truthfully. On a
+  greenfield one it reports nothing about convergence, because there is nothing yet.
 
-Until #44 lands, treat cluster standup as a manual runbook: run the role for
-configuration, then initialize exactly one node, join and unseal followers by
-hand.
+[`docs/runbooks/cluster-bringup.md`](docs/runbooks/cluster-bringup.md) carries the
+bring-up sequence, the custody step and the failure table.
 
 ### Tag-scoped runs
 

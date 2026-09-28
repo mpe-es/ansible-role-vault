@@ -13,8 +13,9 @@ galaxy_info:
   author: Alex Ackerman
   description: >-
     Install and configure HashiCorp Vault on RHEL with STIG compliance in
-    airgap or internet-connected environments. Single-node deployments are
-    fully supported; multi-node Raft HA is developmental (see README).
+    airgap or internet-connected environments. Single-node deployments are the
+    CI-exercised path; multi-node Raft HA is implemented, with configuration
+    verified by CI and cluster formation not behaviour-tested (see README).
   license: Apache-2.0
   # ADVISORY ONLY -- ansible-core does not enforce this; verified with a probe
   # role declaring '99.0', which ran normally. CI's tested floor is the pin in

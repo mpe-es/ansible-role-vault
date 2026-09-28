@@ -5,11 +5,45 @@
 # Classification: UNCLASSIFIED
 ###############################################################################
 
+{#- HCL BOOLEANS, normalized in one place. `{{ x | lower }}` renders the STRING "yes"
+    as `= yes`, which is not an HCL boolean literal, so an input the argument spec
+    accepts produced invalid configuration. This was never only the mTLS flag: ui,
+    disable_mlock, disable_performance_standby, generate_key and tls_disable_client_certs
+    were all the same defect. The accepted set is what ansible-core 2.21.4's `bool`
+    filter accepts, MEASURED -- true/yes/on/1, with "t"/"y" FALSE there, so they must be
+    false here or the rendered config disagrees with every task-side cast. #}
+{%- macro hcl_bool(v) -%}
+{{ 'true' if ((v | default(false) | string | lower) in ['true', 'yes', 'on', '1']
+              or v | default(false) == 1) else 'false' }}
+{%- endmacro -%}
+{#- ONE retry_join definition, used by the peer loop AND by the legacy scalar. They were
+    separate copies, and the legacy one silently missed BOTH the IPv6 bracketing and the
+    mTLS client credentials the peer loop had gained. mtls is passed in rather than read
+    from the enclosing scope, so the macro does not depend on Jinja namespace rules. #}
+{%- macro retry_join(peer, mtls) %}
+  retry_join {
+    leader_api_addr     = "https://{{ '[' ~ peer ~ ']' if ':' in peer else peer }}:{{ vault_listener_port }}"
+    leader_ca_cert_file = "{{ vault_tls_ca_file }}"
+{% if mtls %}    leader_client_cert_file = "{{ vault_tls_cert_file }}"
+    leader_client_key_file  = "{{ vault_tls_key_file }}"
+{% endif %}  }
+{%- endmacro %}
+{#- mTLS, resolved ONCE. `| bool` is an Ansible filter and is unavailable here:
+    tests/render-hsm-pin-test.sh renders this template under plain Jinja with no Ansible
+    scope, so only Jinja builtins may be used. The set matches what ansible-core 2.21.4's
+    `bool` filter actually accepts -- MEASURED: true/yes/on/1 are true, and "t"/"y" are
+    FALSE with a deprecation warning, so including them here would make the rendered
+    config disagree with every task-side `| bool`. #}
+{%- set __vault_mtls = hcl_bool(vault_tls_require_client_cert) == 'true' %}
+{#- Same class, and worse: bare Jinja truthiness on the HSM flag would render a pkcs11
+    seal stanza onto a node with no HSM whenever the value arrived as the string
+    "false". #}
+{%- set __vault_hsm = hcl_bool(vault_hsm_enabled) == 'true' %}
 ###############################################################################
 # Server Parameters
 ###############################################################################
-ui            = {{ vault_ui_enabled | lower }}
-disable_mlock = {{ vault_disable_mlock | lower }}
+ui            = {{ hcl_bool(vault_ui_enabled) }}
+disable_mlock = {{ hcl_bool(vault_disable_mlock) }}
 log_level     = "{{ vault_log_level }}"
 
 {# Inline edition test, NOT __vault_is_enterprise, deliberately. This template
@@ -21,7 +55,7 @@ log_level     = "{{ vault_log_level }}"
    the role is a template its cheapest test cannot reach. #}
 {% if vault_edition is match('vault-enterprise') %}
 # Enterprise-only parameters
-disable_performance_standby = {{ vault_disable_performance_standby | lower }}
+disable_performance_standby = {{ hcl_bool(vault_disable_performance_standby) }}
 # Autoloaded license (#42), referenced unconditionally for Enterprise.
 # VAULT_LICENSE and VAULT_LICENSE_PATH take precedence over this path.
 license_path                = "{{ vault_config_dir }}/vault.hclic"
@@ -35,12 +69,11 @@ license_path                = "{{ vault_config_dir }}/vault.hclic"
 storage "raft" {
   path    = "{{ vault_data_dir }}"
   node_id = "{{ vault_raft_node_id }}"
+{% for peer in vault_cluster_members | default([]) %}
+{{ retry_join(peer, __vault_mtls) }}
+{% endfor %}
 {% if vault_cluster_leader_addr | default('') | length > 0 %}
-
-  retry_join {
-    leader_api_addr     = "https://{{ vault_cluster_leader_addr }}:{{ vault_listener_port }}"
-    leader_ca_cert_file = "{{ vault_tls_ca_file }}"
-  }
+{{ retry_join(vault_cluster_leader_addr, __vault_mtls) }}
 {% endif %}
 }
 
@@ -72,11 +105,11 @@ listener "tcp" {
 {% endif %}
 
   # Client certificate handling
-  tls_require_and_verify_client_cert = {{ vault_tls_require_client_cert | lower }}
-  tls_disable_client_certs           = {{ vault_tls_disable_client_certs | lower }}
+  tls_require_and_verify_client_cert = {{ hcl_bool(vault_tls_require_client_cert) }}
+  tls_disable_client_certs           = {{ hcl_bool(vault_tls_disable_client_certs) }}
 }
 
-{% if vault_hsm_enabled %}
+{% if __vault_hsm %}
 ###############################################################################
 # PKCS#11 HSM Seal (Enterprise Only)
 # NIST 800-53: SC-13 (Cryptographic Protection)
@@ -97,7 +130,7 @@ seal "pkcs11" {
   mechanism      = "{{ vault_hsm_mechanism }}"
 {% endif %}
   hmac_mechanism = "{{ vault_hsm_hmac_mechanism }}"
-  generate_key   = "{{ vault_hsm_generate_key | lower }}"
+  generate_key   = "{{ hcl_bool(vault_hsm_generate_key) }}"
   max_parallel   = {{ vault_hsm_max_parallel }}
 }
 {% endif %}

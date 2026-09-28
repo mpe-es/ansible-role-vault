@@ -179,6 +179,53 @@ __vault_license_desired_state: >-
      else ('absent' if (vault_license_manage_state | bool) else 'unmanaged') }}
 
 ###############################################################################
+# Init Host and Init Register (derived -- never set these directly)
+###############################################################################
+# Empty vault_init_host means THIS host, which is the single-node case. Without
+# the fallback, hostvars[''] is undefined, | default({}) yields {}, and the
+# post-init unseal and tokens.env both skip -- leaving a single node initialized
+# and sealed (#44).
+__vault_init_host_effective: >-
+  {{ vault_init_host if (vault_init_host | default('') | length > 0)
+     else inventory_hostname }}
+
+# Is this an HA deployment? Defined ONCE. Six orchestration gates each carried their
+# own copy of this predicate, so the legacy join scalar -- which renders a retry_join but
+# names no initializer -- was invisible to all six at the same time, and `vault_initialize`
+# ran `operator init` on every host. tasks/preflight/cluster.yml now refuses that
+# combination outright, and this single definition is what a future join source has to be
+# added to, rather than six `when:` clauses nobody greps for.
+__vault_ha_cluster: "{{ vault_cluster_members | default([]) | length > 0 }}"
+
+# The per-host controller capture directory, defined ONCE. Five sites built this path
+# and one of them had drifted to inventory_hostname, which on a FOLLOWER failure named a
+# directory that was never created -- during an incident, for the root token. The capture
+# tasks run on the init host only, where __vault_init_host_effective equals
+# inventory_hostname, so this one expression is correct at every site including the
+# rescue, which runs on any host.
+__vault_capture_host_dir: "{{ vault_init_capture_dir }}/{{ __vault_init_host_effective }}"
+
+# mTLS client credentials for the Vault CLI (#44, codex round 2). When the listener
+# is configured with tls_require_and_verify_client_cert, EVERY local call must present
+# a client certificate -- not just retry_join. Without these, `vault status` fails TLS
+# before initialization even begins, so the whole init flow was unreachable under the
+# role's own mTLS setting. The documented default for both is the empty string, which
+# is why the non-mTLS case sets them empty rather than trying to unset them.
+# The uri tasks use `omit` inline instead; the module's default is None, not ''.
+__vault_client_cert: "{{ vault_tls_cert_file if (vault_tls_require_client_cert | bool) else '' }}"
+__vault_client_key: "{{ vault_tls_key_file if (vault_tls_require_client_cert | bool) else '' }}"
+
+# Peer-name syntax for tasks/preflight/cluster.yml: DNS labels of 1-63 chars,
+# no leading or trailing hyphen, optional trailing root dot. Deliberately rejects
+# underscores, a colon (a port), a slash (a prefix) and any whitespace.
+__vault_peer_name_re: '^(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))*\.?$'
+
+# The init register, readable from followers. `operator init` runs on one host,
+# so every follower-side consumer reads it through hostvars. Tasks that
+# dereference .stdout carry their own no_log.
+__vault_init_source: "{{ hostvars[__vault_init_host_effective]['__vault_init_output'] | default({}) }}"
+
+###############################################################################
 # Ephemeral Filesystem Types (#94)
 ###############################################################################
 # A capture destination on one of these does not survive the controller. Under

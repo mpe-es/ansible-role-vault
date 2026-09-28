@@ -26,6 +26,15 @@ ExecStart=/bin/bash /usr/local/bin/vault-unseal.sh
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 Environment=VAULT_CACERT={{ vault_tls_ca_file }}
 Environment=VAULT_ADDR=https://127.0.0.1:{{ vault_listener_port }}
+{#- vault-unseal.sh runs `vault status` and `vault operator unseal`. On a listener with
+    tls_require_and_verify_client_cert both fail TLS without a client certificate, so the
+    unit would time out at every boot and the cluster would stay sealed -- the exact
+    failure the auto-unseal service exists to prevent. Runs as root, which is what can
+    read the 0640 vault:vault private key. #}
+{% if vault_tls_require_client_cert | default(false) | bool %}
+Environment=VAULT_CLIENT_CERT={{ vault_tls_cert_file }}
+Environment=VAULT_CLIENT_KEY={{ vault_tls_key_file }}
+{% endif %}
 # Runs as root by design: the unseal keys in /etc/vault.d/tokens.env are
 # root:root 0600 inside a root-owned directory, so the vault service
 # account can never read or replace its own unseal keys. Do NOT add a

@@ -28,8 +28,11 @@ orch = os.path.join(root, "tasks", "preflight.yml")
 # managed_tls when it is TRUE (the role will place it). Adjacency keeps the
 # inverted-polarity pair readable, and an operator reading the output sees the
 # TLS question answered in one place whichever mode they are in (#80).
+# cluster sits immediately after edition because both validate INPUTS and probe
+# nothing -- no command, no stat, no network. Input validation belongs ahead of the
+# host-probing gates so a typo fails before anything is measured (#44).
 EXPECTED = [
-    "os_family", "os_version", "fips", "edition", "selinux", "chrony", "firewalld",
+    "os_family", "os_version", "fips", "edition", "cluster", "selinux", "chrony", "firewalld",
     "rhsm", "repo_source", "tls", "managed_tls", "san", "port", "dns",
 ]
 # A dynamic include does not propagate its own tags. With only apply: the

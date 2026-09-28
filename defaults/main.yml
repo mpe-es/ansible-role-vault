@@ -133,13 +133,10 @@ vault_raft_node_id: "{{ inventory_hostname_short }}"
 
 ###############################################################################
 # Cluster / HA Configuration
-# Single-node: leave vault_cluster_leader_addr empty (the default). No
-#   retry_join stanza is rendered and the node stands alone.
-# Multi-node: set vault_cluster_leader_addr to the address a joining node
-#   should contact. NOTE: the template renders exactly ONE retry_join block
-#   from this single scalar, which is not a complete Raft HA join contract
-#   (Raft expects a retry_join per peer). Multi-node HA is developmental --
-#   see "Known Limitations" in the README and issue #44.
+# Single-node: leave both vault_cluster_members and vault_cluster_leader_addr
+#   empty (the defaults). No retry_join stanza is rendered.
+# Multi-node: set vault_cluster_members to every peer, one retry_join stanza
+#   each, and vault_init_host to the node that runs `operator init`.
 ###############################################################################
 # API address advertised to clients
 # Format: https://<fqdn_or_ip>:8200
@@ -148,9 +145,20 @@ vault_api_addr: "https://{{ ansible_facts['fqdn'] }}:{{ vault_listener_port }}"
 # Cluster address for Raft replication between nodes
 vault_cluster_addr: "https://{{ ansible_facts['fqdn'] }}:8201"
 
-# Load balancer or leader address for HA retry_join
-# Set this for HA clusters; leave empty/null for single-node
+# DEPRECATED for HA: renders a single retry_join stanza from one scalar, which
+# is not the Raft join contract. Mutually exclusive with vault_cluster_members,
+# asserted in preflight. The HA VIP belongs on client traffic, not here (#44).
 vault_cluster_leader_addr: ""
+
+# Raft peers, one retry_join stanza each. Bare host or IP -- no scheme, no
+# port; the template adds both and brackets an IPv6 literal. Empty means
+# single-node and renders no retry_join.
+vault_cluster_members: []
+
+# The one node that runs `operator init`. REQUIRED when vault_cluster_members
+# is set; empty means this host, which is the single-node case. Must be a name
+# in the play's inventory, asserted in preflight.
+vault_init_host: ""
 
 ###############################################################################
 # Firewall Configuration

@@ -80,6 +80,10 @@ RUNTIME_RENDERED = {
     "not the vault-shared service": ("preflight/port.yml",
                                      ["{{ vault_service_name }} service"],
                                      "sibling of the above"),
+    "is a dict": ("preflight/cluster.yml",
+                  ["{{ vault_cluster_members | type_debug }}", "not a\n      list"],
+                  "type_debug renders the actual type, so the case proves the "
+                  "message names dict rather than only rejecting it"),
 }
 
 

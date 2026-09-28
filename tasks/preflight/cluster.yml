@@ -1,0 +1,131 @@
+---
+###############################################################################
+# Filename: tasks/preflight/cluster.yml
+# Role: ansible-role-vault
+# Summary: Preflight gate - cluster inputs (peer shape, join source, init host)
+# Last Updated: 28 Sep 2026
+# Classification: UNCLASSIFIED
+###############################################################################
+# Placed adjacent to edition because both validate INPUTS and probe nothing.
+# Gate order is failure order (tests/assert-preflight-gate-order.sh).
+- name: "Preflight | cluster | peer list and leader address are mutually exclusive"
+  ansible.builtin.assert:
+    that:
+      - not ((vault_cluster_members | default([]) | length > 0)
+             and (vault_cluster_leader_addr | default('') | length > 0))
+    fail_msg: >-
+      vault_cluster_members and vault_cluster_leader_addr are both set. The
+      scalar renders one retry_join stanza, which is not the Raft join contract,
+      and it is where an HA VIP is usually put. The VIP is for client traffic,
+      not for joining (operator ruling). Use vault_cluster_members alone.
+    success_msg: "Exactly one retry_join source is configured"
+
+- name: "Preflight | cluster | the legacy join scalar never drives initialization"
+  ansible.builtin.assert:
+    that:
+      - not ((vault_cluster_leader_addr | default('') | length > 0)
+             and (vault_initialize | default(false) | bool))
+    fail_msg: >-
+      vault_cluster_leader_addr is set with vault_initialize true. The scalar
+      renders a retry_join but is NOT an HA orchestration source: it names no
+      initializer, so every host would run `vault operator init` locally and you
+      would get one independent Vault per node, each with its own root token and
+      key shares, while the play reported success -- the precise failure this role
+      now exists to prevent. The scalar remains supported for its back-compat use,
+      configuring a node to JOIN a cluster initialized elsewhere, which is
+      vault_initialize false. To have the role stand a cluster up, use
+      vault_cluster_members with vault_init_host.
+    success_msg: "Legacy join scalar is not driving initialization"
+
+- name: "Preflight | cluster | the peer list is a list"
+  ansible.builtin.assert:
+    that:
+      # `is sequence` alone passes for a MAPPING, which then dies in core's loop
+      # with the unhelpful message this assert exists to replace.
+      # Bare 'list' is safe: measured on core 2.21.4 and 2.19.6, a literal, a
+      # templated expression, groups[...], | split() and -e JSON all report 'list'.
+      - vault_cluster_members | type_debug == 'list'
+    fail_msg: >-
+      vault_cluster_members is a {{ vault_cluster_members | type_debug }}, not a
+      list. A string would be iterated per character, rendering one retry_join
+      stanza per letter -- valid HCL that joins nothing. Use a YAML list.
+    success_msg: "Peer list is a list"
+
+- name: "Preflight | cluster | peers are bare host or IP, no scheme and no port"
+  ansible.builtin.assert:
+    that:
+      - __vault_peer_is_ip or __vault_peer_is_name
+    fail_msg: >-
+      Join address '{{ item }}' is not a bare host or IP. The template adds
+      https:// and vault_listener_port and brackets IPv6 itself, so a join address
+      carries neither. The sibling variables vault_api_addr and
+      vault_cluster_addr ARE full URLs, so copying their form here renders
+      https://https://host:8200:8200.
+    success_msg: "Join address '{{ item }}' is a bare host or IP"
+    quiet: true
+  vars:
+    # NOT urlsplit('scheme'). That test was measured wrong in BOTH directions on
+    # core 2.21.4: a scheme may begin with any letter, so the DoD ULA range
+    # fd00::10 parses as scheme=fd00 and every letter-leading IPv6 (fe80::1,
+    # abcd::1) was REJECTED; and 10.0.0.1:8200 begins with a digit, yields no
+    # scheme, PASSED, and rendered https://[10.0.0.1:8200]:8200. Empty strings,
+    # whitespace, paths, queries and 999.999.999.999 passed too.
+    #
+    # ipaddr needs netaddr on the CONTROLLER. That is a task-side filter only --
+    # templates/vault.hcl.j2 must stay filter-free because
+    # tests/render-hsm-pin-test.sh renders it under plain Jinja with no Ansible
+    # scope. tasks/preflight/dns.yml already depends on this same filter.
+    # `item is string` LEADS both expressions and Jinja's `and` short-circuits, so a
+    # non-string element never reaches a membership test. Measured: an integer element
+    # raised "argument of type 'int' is not iterable" from `'/' not in item` -- the
+    # unhelpful-error class the type_debug gate above exists to replace -- and a YAML
+    # null was ACCEPTED, because the `match` test coerces None to the string "None",
+    # which is a legal hostname, rendering https://None:8200. ipaddr also accepts a
+    # LIST and returns a non-empty list, so a nested list satisfied the IP arm.
+    #
+    # The dot-or-colon test is what stops netaddr reading an integer-like string as an
+    # IPv4 integer: measured, "10" resolved to 0.0.0.10 and passed.
+    #
+    # 253 is the DNS name limit; the per-label 63 lives in the pattern.
+    __vault_peer_is_ip: >-
+      {{ item is string and item | length > 0 and item | length <= 253
+         and ('.' in item or ':' in item) and '/' not in item
+         and (item | ansible.utils.ipaddr | ternary(true, false)) }}
+    # DELIBERATE, DOCUMENTED TRADE-OFF: an all-digits-and-dots label sequence is a
+    # SYNTACTICALLY legal hostname, so 999.999.999.999 and `123` both satisfy the
+    # pattern. Rejecting them costs the vanishingly rare host literally named `123`
+    # and buys rejection of every mistyped IP address, which is what an operator
+    # actually types here. Stated in README rather than presented as invalid syntax.
+    __vault_peer_is_name: >-
+      {{ item is string and item | length > 0 and item | length <= 253
+         and (item is match(__vault_peer_name_re))
+         and not (item is match('^[0-9.]+$')) }}
+  loop: >-
+    {{ (vault_cluster_members | default([]))
+       + ([vault_cluster_leader_addr]
+          if (vault_cluster_leader_addr | default('') | length > 0) else []) }}
+
+- name: "Preflight | cluster | an HA cluster names its init host"
+  ansible.builtin.assert:
+    that:
+      - vault_init_host | default('') | length > 0
+    fail_msg: >-
+      vault_cluster_members is set but vault_init_host is empty. Exactly one
+      node runs `vault operator init`; with no init host every node initializes
+      itself, producing one independent Vault per node, each with its own root
+      token and unseal shares, and the play still reports success.
+    success_msg: "Init host is named: {{ vault_init_host }}"
+  when: vault_cluster_members | default([]) | length > 0
+
+- name: "Preflight | cluster | the init host is in the play"
+  ansible.builtin.assert:
+    that:
+      - vault_init_host in ansible_play_hosts_all
+    fail_msg: >-
+      vault_init_host is '{{ vault_init_host }}', which is not in this play
+      ({{ ansible_play_hosts_all | join(', ') }}). The init register would then
+      be empty on every host: the capture, the unseal and the init-capture
+      durability gate would all skip and the play would report success having
+      initialized nothing. A --limit that excludes the init host fails here.
+    success_msg: "Init host {{ vault_init_host }} is in the play"
+  when: vault_init_host | default('') | length > 0

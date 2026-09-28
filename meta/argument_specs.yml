@@ -16,8 +16,10 @@ argument_specs:
         Installs HashiCorp Vault from RPM, configures the server with
         STIG-compliant settings, and manages the systemd service.
       - >-
-        Supports single-node and HA (3/5-node) Raft clusters in airgap
-        or internet-connected environments.
+        Supports single-node and multi-node Raft clusters in airgap or
+        internet-connected environments. Cluster configuration is verified by CI;
+        cluster formation is not behaviour-tested, and day-2 cluster operations
+        are out of scope.
       - >-
         Requires ansible-core >= 2.21.0, Python >= 3.12 on the controller, and
         the hvac Python library. That is the mpe-ee-rhel9 runtime and the pair CI
@@ -257,8 +259,46 @@ argument_specs:
 
       vault_cluster_leader_addr:
         description:
-          - Load balancer or leader API address for HA retry_join.
-          - Set this for HA clusters (3 or 5 node). Leave empty for single-node deployments.
+          - DEPRECATED for HA. Renders a single retry_join stanza from one scalar,
+          - Same bare host or IP shape as vault_cluster_members, validated by the same
+          - Rejected together with vault_initialize true. It names no initializer, so
+            that pairing would run `vault operator init` on every host and produce one
+            independent Vault per node. Use it only with vault_initialize false, to
+            configure a node that joins a cluster initialized elsewhere.
+            preflight gate - no scheme, no port, no CIDR prefix, and IPv6 written bare.
+            An all-numeric name such as 123 is rejected as a mistyped address.
+            which is not the Raft join contract - Raft expects one stanza per peer.
+            Use vault_cluster_members.
+          - Mutually exclusive with vault_cluster_members, asserted in preflight.
+          - The HA VIP belongs on client traffic, not here. A VIP that health-checks
+            for the active node has no healthy backend during bootstrap.
+        type: str
+        default: ""
+
+      vault_cluster_members:
+        description:
+          - Raft peers, rendered as one retry_join stanza each.
+          - Bare host or IP - no scheme, no port, no CIDR prefix. The template adds
+            the scheme and port and brackets an IPv6 literal, so write IPv6 bare
+            (fd00::10, not [fd00::10]). Following the full-URL form of
+            vault_api_addr here renders https://https://host:8200:8200.
+          - Empty means single-node and renders no retry_join.
+          - Every entry must be a SAN on that peer's listener certificate, and all
+            peers must chain to the CA in vault_tls_ca_file, or the join fails
+            x509 verification after the role has already configured the host.
+        type: list
+        elements: str
+        default: []
+
+      vault_init_host:
+        description:
+          - The one node that runs `vault operator init`. REQUIRED when
+            vault_cluster_members is set; asserted in preflight.
+          - Empty means this host, which is the single-node case.
+          - Must name a host in the play. A value absent from inventory yields an
+            empty init register on every host, which would skip the capture, the
+            unseal and the init-capture durability gate while the play reported
+            success, so preflight fails closed on it.
         type: str
         default: ""
 

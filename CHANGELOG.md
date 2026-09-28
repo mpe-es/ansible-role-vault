@@ -9,6 +9,210 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Vault Raft HA: the role now stands a cluster up, where before it configured nodes
+  and stopped.** `README.md` documented the old behaviour accurately — *"every host
+  initializes itself — you get N independent single-node Vaults, each with its own root
+  token and key shares"* — with a **green play**. That was the production blocker.
+
+  **New `vault_cluster_members`** renders one `retry_join` stanza per peer, which is the
+  Raft join contract; HashiCorp's own example shows four stanzas, and the docs state
+  *"There can be one or more retry_join stanzas."* Entries are **bare host or IP** — the
+  template adds the scheme and port and brackets an IPv6 literal, because
+  `https://2001:db8::10:8200` does not parse. `vault_cluster_leader_addr` remains for
+  back-compat, is deprecated for HA, and is now **mutually exclusive** with the peer
+  list: it is where an HA VIP usually goes, and the VIP is client-only.
+  The VIP is for client traffic, not for joining — an operator ruling, not a derived
+  impossibility: `/v1/sys/health`'s status codes are overridable.
+
+  **New `vault_init_host`** names the one node that runs `operator init`. Empty means
+  this host, which is the single-node case. `run_once` was rejected for this after
+  measurement: it **propagates the registered result to every host**, and under `serial`
+  it runs **once per batch** — so it is not a split-brain guard at all.
+
+  **Followers read the init register through `hostvars`**, which is what makes cluster
+  unseal possible: `operator init` runs on one node, and the shares live only in that
+  node's register. One key set exists per **cluster**, applied to each node
+  individually — *"When you use the Shamir seal with multiple nodes, you must unseal
+  each node with the required threshold of shares."*
+
+  **The order is leader, wait, followers.** A Shamir `operator init` leaves the node
+  **sealed**, and a sealed node cannot serve the raft bootstrap challenge — so no
+  follower can join until the leader is unsealed, and a join wait placed before that
+  unseal deadlocks and fails every follower after its retries. The role unseals the
+  init host, waits for each other node to report `initialized`, then unseals them.
+
+  **Follower unseal is gated on `vault_init_unseal`, not inferred from the seal type** —
+  desired state is stated. Both `audit enable` tasks and all four capture tasks are
+  init-host-scoped: audit devices are cluster-wide, so an unscoped second node returns
+  *"path already in use"* with no `failed_when` and the rescue fails the play; and
+  unscoped capture would write the same root token and the same shares into N
+  controller directories. `Warn left sealed` now fires per node, so a node the operator
+  chose to leave sealed says so rather than being silent.
+
+  **New preflight gate `tasks/preflight/cluster.yml`**, placed beside `edition` because
+  both validate inputs and probe nothing. It rejects two simultaneous join sources, a
+  malformed peer, a member list with no named init host, and an init
+  host absent from the play — that last one **fails closed**, because an absent init
+  host yields an empty register on every host and the capture, the unseal and the
+  init-capture durability gate would all skip while the play reported success.
+
+  **New `docs/runbooks/cluster-bringup.md`** carries the bring-up sequence, the custody
+  step, the encrypted-volume requirement (V-256898 CAT I, V-263600 CAT II), and a
+  failure table.
+
+  **Stated limits, not implied capability.** CI verifies **configuration presence, not
+  behaviour** — cluster formation, leader election, follower join and unseal convergence
+  are exercised by no test, by decision. There are **no day-2 cluster operations**. And
+  **a re-run does not unseal**: initialization is skipped on an initialized cluster, so
+  a Shamir cluster that reboots with the default `vault_auto_unseal_enabled: false`
+  comes back sealed, stays sealed, and the play reports success. Every HA claim surface
+  moved together — `README.md` (maturity banner, HA example, variable table, Known
+  Limitations), `meta/main.yml` and `meta/argument_specs.yml`, which feeds `ansible-doc`
+  and AAP surveys.
+
+  **Peer validation is `ansible.utils.ipaddr` plus a DNS-label pattern, not
+  `urlsplit('scheme')`.** The first version was measured wrong in **both** directions on
+  core 2.21.4. A URI scheme may begin with any letter, so `fd00::10` — the ULA range an
+  airgapped enclave actually numbers with — parsed as `scheme=fd00` and every
+  letter-leading IPv6 (`fe80::1`, `abcd::1`) was **rejected**; while `10.0.0.1:8200`
+  begins with a digit, yielded no scheme, **passed**, and rendered
+  `https://[10.0.0.1:8200]:8200` into `vault.hcl`. Empty strings, whitespace, paths,
+  queries, CIDR prefixes and `999.999.999.999` passed too. The replacement is verified
+  by `tests/peer-shape-table-test.sh`, a 37-case truth table that LOADS the real
+  expressions out of `tasks/preflight/cluster.yml` and `vars/main.yml` rather than
+  transcribing them, and that proves itself able to fail on six clause-level mutations. `ipaddr` is task-side only: the template stays
+  filter-free because `tests/render-hsm-pin-test.sh` renders it under plain Jinja.
+
+  **mTLS reaches every Vault call, not just `retry_join`.** With
+  `vault_tls_require_client_cert: true` the listener demands a client certificate from
+  **every** caller. The role sent only `VAULT_CACERT` on the CLI and only `ca_path` on the
+  API, so the first `vault status` failed TLS **before initialization began** — and so did
+  unseal, the join wait, identity, verification, audit and the rescue. The boot auto-unseal
+  unit was the same: it runs `vault status` and `vault operator unseal`, so it would have
+  timed out at every reboot and left the cluster sealed, which is the precise failure that
+  service exists to prevent. `VAULT_CLIENT_CERT`/`VAULT_CLIENT_KEY` now go on all five CLI
+  environment blocks, `templates/vault-unseal.service.j2` and `templates/vault.env.j2`;
+  `client_cert`/`client_key` on all five `uri` calls. New
+  `tests/assert-vault-calls-carry-client-certs.sh` sweeps **every** surface rather than one
+  file — the omission above was missed precisely because the first guard was scoped to
+  `tasks/service.yml` — and requires **both** halves, because a certificate without its key
+  is not an identity. Its meta-gate `tests/assert-mtls-reachability-mutations.sh` kills
+  seven omissions; it caught that the guard was ignoring its root argument and silently
+  re-checking the real tree, which would have made every mutation claim false.
+
+  **Every boolean rendered into `vault.hcl` is normalized, not just the mTLS one.** This
+  was never one line. `{{ x | lower }}` renders the **string** `"yes"` as `= yes`, which is
+  not an HCL boolean literal, so an input `meta/argument_specs.yml` declares `type: bool`
+  produced invalid configuration — and it applied to `ui`, `disable_mlock` (which keeps
+  secrets out of swap), `disable_performance_standby`, `generate_key` and
+  `tls_disable_client_certs`. A bare `{% if vault_hsm_enabled %}` was the same defect in
+  its other form: the string `"false"` is truthy to Jinja, so it would have rendered a
+  `pkcs11` seal stanza onto a node with no HSM. One `hcl_bool()` macro now normalizes all
+  of them.
+
+  **`vault_cluster_leader_addr` can no longer drive initialization.** The scalar renders a
+  `retry_join` but names no initializer, and all six orchestration gates scoped on
+  `vault_cluster_members` — so a host configured with only the scalar and
+  `vault_initialize: true` ran `vault operator init` **locally**, creating a second Raft
+  cluster with a different root token and key set, while every HA identity check sat behind
+  a member-list gate and never ran. That is the precise independent-cluster green-success
+  failure this work exists to eliminate, surviving on the deprecated path. Preflight now
+  rejects the pairing; the scalar's supported use — `vault_initialize: false`, configuring a
+  node to join a cluster initialized elsewhere — is unchanged. The HA predicate itself is now
+  **one** `__vault_ha_cluster` definition rather than six inline copies, because six copies
+  are how a join source stayed invisible to all six gates simultaneously.
+
+  **Behaviour change for existing consumers of `vault_cluster_leader_addr`.** It is now
+  validated to the same bare host-or-IP shape as `vault_cluster_members`. That shape was
+  already the documented one — the README example on `main` is a bare hostname — but a
+  consumer who happened to pass `https://host` or `host:8200` previously got a silently
+  malformed `leader_api_addr` and a green play; they now get a loud preflight failure
+  naming the value. That is the intended trade: the previous behaviour was a broken
+  cluster reported as success. **It also inherits the peer gate's deliberate rejection of
+  an all-numeric name** such as `123` — legal DNS syntax, but here it is a mistyped
+  address — so a consumer using one must rename the host or supply its IP.
+
+  **`retry_join` has ONE definition.** The legacy `vault_cluster_leader_addr` scalar
+  rendered its own copy of the stanza, so it silently missed **both** the IPv6 bracketing
+  and the mTLS client credentials the peer loop had gained — `fd00::99` rendered as
+  `https://fd00::99:8200`, unbracketed and invalid, and the stanza had no client identity
+  at all. It also had **no shape validation whatever**: every rejection class built for
+  `vault_cluster_members` simply did not apply to it. Both paths now render through one
+  Jinja macro and are validated by one gate, which makes the divergence unrepresentable
+  rather than merely fixed.
+
+  **`tests/render-retry-join-test.sh` now checks HCL STRUCTURE, not only field names.**
+  The first version of that shared macro used `{%- if %}`, which strips the preceding
+  newline and rendered two attributes on one line with `}` on the end of another — invalid
+  HCL that every name-based check passed. The structural assertion (one assignment per
+  line, no assignment sharing a line with a brace) was verified to fail on exactly that
+  malformation.
+
+  **The rendered condition matches Ansible's own boolean set.** `{% if x | default(false) %}`
+  rendered credentials for the **string** `"false"`; a first correction to
+  `| lower == 'true'` then read `1` and `"yes"` as false, although
+  `meta/argument_specs.yml` types the variable `bool` and every task-side `| bool` reads
+  them as true — so mTLS was on everywhere except the rendered files. It is now
+  `['true', 'yes', 'on', '1']` **plus a numeric arm**, matching what ansible-core 2.21.4's
+  `bool` filter actually accepts — measured across 20 forms with zero disagreements,
+  including the float `1.0`, which `| bool` reads as **true** via its `value == 1` fallback
+  while every string comparison sees `"1.0"`. Argument-spec validation does **not** write a
+  coerced value back, so that float genuinely reaches the template. The predicate is
+  Jinja-builtin only in `vault.hcl.j2`, which alone must render under plain Jinja;
+  `vault.env.j2` and `vault-unseal.service.j2` are always Ansible-rendered and simply use
+  `| bool`, which agrees by construction. `tests/render-mtls-env-test.sh` renders all three
+  templates across sixteen boolean forms each and checks each pattern is non-vacuous — its own first version matched
+  the listener's `tls_require_and_verify_client_cert` line instead of the `retry_join`
+  fields, so every case had been passing or failing for the wrong reason.
+
+  **`retry_join` now carries client credentials when the listener demands them.** With
+  `vault_tls_require_client_cert: true` the stanza sent only the CA, so a follower could
+  not authenticate to the leader and never joined — HA was silently incompatible with the
+  role's own mTLS setting. `leader_client_cert_file` and `leader_client_key_file` are
+  rendered from the node's own listener identity, which therefore needs `clientAuth` in
+  its extended key usage.
+
+  **The join wait covers an HSM cluster.** Those nodes unseal themselves, but they still
+  have to **join**; excluding them meant a follower with broken `retry_join` TLS or
+  unreachable peers stayed uninitialized under a green play, so "HSM support" meant
+  configuration only, not a cluster that stood up.
+
+  **New cross-node cluster-identity assert.** Every other gate keys on a node's **own**
+  `initialized` flag, so N nodes each initialized separately — N independent Vaults with
+  N key sets — all report initialized, every gate skips, and the play is green over a
+  split cluster. That is the precise failure this work exists to prevent. Each node's
+  `cluster_id` is now compared with the init host's. Limit: `seal-status` carries
+  `cluster_id` only while a node is **unsealed**, so a cluster deliberately left sealed
+  is not checked.
+
+  **`strategy: free` now fails loudly instead of skipping silently.** Under the default
+  `linear` strategy the task barrier guarantees a follower reads a populated register;
+  `free` removes it, so a follower could run ahead of the init host, read an empty
+  register, skip the unseal, the join wait and every verification, and leave a sealed
+  unjoined node under a green play.
+
+  **`--check` no longer reports a false initialization failure.** `vault status` lacked
+  `check_mode: false`; measured on core 2.21.4, a skipped command still carries `rc=0`
+  with an **empty** `stdout`, so the parse passed its rc gate, `from_json('')` raised, and
+  the rescue reported an initialization failure that never happened.
+
+  Covered by `tests/render-retry-join-test.sh`, which renders the **real**
+  `templates/vault.hcl.j2` across thirteen cases (deleting the `retry_join` loop fails
+  ten of them), by `tests/assert-ha-init-orchestration.sh`, which locks the gates
+  **and** the data expressions, and by its meta-gate
+  `tests/assert-ha-init-mutations.sh` — **37 mutations, all killed, every one
+  asserting it applied** so a stale anchor cannot fake a pass. The `no_log` sweep is
+  **positive and data-keyed**: it stringifies the whole task, covers the `rescue`, and
+  names the register variables as well as the JSON field names, because
+  `debug: var=__vault_init_source` dumps the root token while naming no field at all.
+  The **lint job now installs `requirements.txt`** as well, because that is the job which
+  runs the behavioural suites and `peer-shape-table-test.sh` evaluates the role's real
+  `ansible.utils.ipaddr` expressions, which need `netaddr` on the controller;
+  `tests/assert-lint-job-can-run-the-tests.sh` keeps the two in step.
+  Plus fourteen behavioural cases in `molecule/preflight/verify.yml`. Three parallel guard surfaces moved with the new
+  gate: both preflight locks' gate lists and the `ALLOW` set in
+  `assert-facts-via-ansible-facts.sh`. (#44)
+
 - **Vault Enterprise license deployment.** `vault_edition` accepted Enterprise
   builds and `tasks/install.yml` installed the RPM, but the role had no license
   handling at all — no `vault.hclic`, no `license_path`, and no acknowledgement

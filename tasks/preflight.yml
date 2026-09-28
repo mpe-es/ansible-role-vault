@@ -65,6 +65,16 @@
     - vault
     - preflight
 
+- name: Include preflight gate - cluster
+  ansible.builtin.include_tasks:
+    file: preflight/cluster.yml
+    apply:
+      tags:
+        - preflight
+  tags:
+    - vault
+    - preflight
+
 - name: Include preflight gate - selinux
   ansible.builtin.include_tasks:
     file: preflight/selinux.yml

@@ -1543,3 +1543,341 @@
         that:
           - "'seal \"pkcs11\"' not in __rendered_noseal"
         fail_msg: "pkcs11 seal rendered with vault_hsm_enabled false"
+
+    # --- cluster gate (#44) -----------------------------------------------
+    # Scaffold fail messages deliberately avoid the strings the rescues assert
+    # on; assert-verify-rescues-discriminate.sh fails any rescue whose pattern
+    # also matches its own scaffold.
+    - name: "PASSES - single node: no members, no leader address, no init host"
+      ansible.builtin.include_role:
+        name: ansible-role-vault
+        tasks_from: preflight/cluster.yml
+      vars:
+        vault_cluster_members: []
+        vault_cluster_leader_addr: ""
+        vault_init_host: ""
+
+    - name: "PASSES - a three-peer cluster naming an init host in the play"
+      ansible.builtin.include_role:
+        name: ansible-role-vault
+        tasks_from: preflight/cluster.yml
+      vars:
+        vault_cluster_members: ["{{ inventory_hostname }}", vault-02.mpe.mil, "2001:db8::10"]
+        vault_init_host: "{{ inventory_hostname }}"
+
+    # The ULA range is what an airgapped enclave actually numbers with, and the
+    # first version of this gate REJECTED it: urlsplit read fd00 as a scheme, so
+    # every letter-leading IPv6 was a false rejection. Locked as a PASSES case.
+    - name: "PASSES - ULA and link-local IPv6 peers"
+      ansible.builtin.include_role:
+        name: ansible-role-vault
+        tasks_from: preflight/cluster.yml
+      vars:
+        vault_cluster_members: ["fd00::10", "fe80::1", "abcd::1"]
+        vault_init_host: "{{ inventory_hostname }}"
+
+    # Every case below PASSED the first version of this gate. The IPv4-with-port
+    # one rendered https://[10.0.0.1:8200]:8200 into vault.hcl.
+    - name: "FIRES - an IPv4 peer carrying a port"
+      block:
+        - name: Run cluster with an IPv4 host:port peer
+          ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/cluster.yml
+          vars:
+            vault_cluster_members: ["10.0.0.1:8200"]
+            vault_init_host: "{{ inventory_hostname }}"
+        - name: A ported IPv4 peer should not have passed
+          ansible.builtin.fail:
+            msg: "the gate accepted a numeric peer with an explicit listener port"
+      rescue:
+        - name: Assert the message names the bare-host rejection
+          vars:
+            __looped_msgs: "{{ ansible_failed_result.results | default([]) | map(attribute='msg') | join(' ') }}"
+          ansible.builtin.assert:
+            that:
+              - __looped_msgs is search('not a bare host or IP')
+            fail_msg: "wrong cause: {{ ansible_failed_result.msg | default('') }}"
+
+    - name: "FIRES - an empty string as a peer"
+      block:
+        - name: Run cluster with an empty peer
+          ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/cluster.yml
+          vars:
+            vault_cluster_members: ["vault-02.mpe.mil", ""]
+            vault_init_host: "{{ inventory_hostname }}"
+        - name: An empty peer should not have passed
+          ansible.builtin.fail:
+            msg: "the gate accepted a peer with no value at all"
+      rescue:
+        - name: Assert the message names the bare-host rejection
+          vars:
+            __looped_msgs: "{{ ansible_failed_result.results | default([]) | map(attribute='msg') | join(' ') }}"
+          ansible.builtin.assert:
+            that:
+              - __looped_msgs is search('not a bare host or IP')
+            fail_msg: "wrong cause: {{ ansible_failed_result.msg | default('') }}"
+
+    - name: "FIRES - a CIDR prefix as a peer"
+      block:
+        - name: Run cluster with a prefix where a host belongs
+          ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/cluster.yml
+          vars:
+            vault_cluster_members: ["10.0.0.0/24"]
+            vault_init_host: "{{ inventory_hostname }}"
+        - name: A prefix should not have passed
+          ansible.builtin.fail:
+            msg: "the gate accepted a network range in place of a single peer"
+      rescue:
+        - name: Assert the message names the bare-host rejection
+          vars:
+            __looped_msgs: "{{ ansible_failed_result.results | default([]) | map(attribute='msg') | join(' ') }}"
+          ansible.builtin.assert:
+            that:
+              - __looped_msgs is search('not a bare host or IP')
+            fail_msg: "wrong cause: {{ ansible_failed_result.msg | default('') }}"
+
+    - name: "FIRES - an all-numeric peer that is not a valid IPv4"
+      block:
+        - name: Run cluster with an out-of-range dotted quad
+          ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/cluster.yml
+          vars:
+            vault_cluster_members: ["999.999.999.999"]
+            vault_init_host: "{{ inventory_hostname }}"
+        - name: An invalid dotted quad should not have passed
+          ansible.builtin.fail:
+            msg: "the gate accepted a numeric peer outside the IPv4 range"
+      rescue:
+        - name: Assert the message names the bare-host rejection
+          vars:
+            __looped_msgs: "{{ ansible_failed_result.results | default([]) | map(attribute='msg') | join(' ') }}"
+          ansible.builtin.assert:
+            that:
+              - __looped_msgs is search('not a bare host or IP')
+            fail_msg: "wrong cause: {{ ansible_failed_result.msg | default('') }}"
+
+    # HOBI REVIEW, PR #102. The scalar renders a retry_join but names no initializer,
+    # and every orchestration gate keyed on vault_cluster_members -- so this pairing ran
+    # `operator init` on EVERY host: one independent Vault per node, each with its own
+    # root token and key set, under a green play. The render-only scalar test could not
+    # see it, because the defect was in the ORCHESTRATION, not the render.
+    - name: "FIRES - the legacy join scalar with initialization enabled"
+      block:
+        - name: Run cluster with the legacy scalar driving initialization
+          ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/cluster.yml
+          vars:
+            vault_cluster_members: []
+            vault_cluster_leader_addr: leader.mpe.mil
+            vault_init_host: ""
+            vault_initialize: true
+        - name: The scalar should not be able to drive initialization
+          ansible.builtin.fail:
+            msg: "the gate allowed a deprecated join scalar to trigger a local initialization"
+      rescue:
+        - name: Assert the message names the independent-Vault outcome
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg is search('one independent Vault per node')
+              - ansible_failed_result.msg is search('vault_cluster_members with vault_init_host')
+            fail_msg: "wrong cause: {{ ansible_failed_result.msg | default('') }}"
+
+    # The scalar's LEGITIMATE back-compat use survives: configuring a node to join a
+    # cluster that was initialized elsewhere. That is vault_initialize false, and it must
+    # keep working or this becomes a breaking change for every pre-#44 consumer.
+    - name: "PASSES - the legacy join scalar without initialization"
+      ansible.builtin.include_role:
+        name: ansible-role-vault
+        tasks_from: preflight/cluster.yml
+      vars:
+        vault_cluster_members: []
+        vault_cluster_leader_addr: leader.mpe.mil
+        vault_init_host: ""
+        vault_initialize: false
+
+    # The LEGACY scalar goes through the identical leader_api_addr expression in the
+    # template, so it is validated by the same gate -- it previously had none at all.
+    - name: "FIRES - a legacy leader address carrying a scheme"
+      block:
+        - name: Run cluster with a URL as the legacy leader address
+          ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/cluster.yml
+          vars:
+            vault_cluster_members: []
+            vault_cluster_leader_addr: "https://vault-vip.mpe.mil"
+            vault_init_host: ""
+        - name: A legacy leader address with a scheme should not have passed
+          ansible.builtin.fail:
+            msg: "the gate accepted a legacy join address carrying a URL scheme"
+      rescue:
+        - name: Assert the message names the bare-host rejection
+          vars:
+            __looped_msgs: "{{ ansible_failed_result.results | default([]) | map(attribute='msg') | join(' ') }}"
+          ansible.builtin.assert:
+            that:
+              - __looped_msgs is search('not a bare host or IP')
+            fail_msg: "wrong cause: {{ ansible_failed_result.msg | default('') }}"
+
+    - name: "PASSES - a bare legacy leader address"
+      ansible.builtin.include_role:
+        name: ansible-role-vault
+        tasks_from: preflight/cluster.yml
+      vars:
+        vault_cluster_members: []
+        vault_cluster_leader_addr: vault-vip.mpe.mil
+        vault_init_host: ""
+
+    - name: "FIRES - a peer list given as a string"
+      block:
+        - name: Run cluster with a string where a list belongs
+          ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/cluster.yml
+          vars:
+            vault_cluster_members: "vault-el,vault-02.mpe.mil"
+            vault_init_host: "{{ inventory_hostname }}"
+        - name: A non-list peer collection should not have passed
+          ansible.builtin.fail:
+            msg: "the gate accepted a peer collection of the wrong data type"
+      rescue:
+        - name: Assert the message names the type and the per-character render
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg is search('not a')
+              - ansible_failed_result.msg is search('per letter')
+            fail_msg: "wrong cause: {{ ansible_failed_result.msg | default('') }}"
+
+    - name: "FIRES - a peer list given as a mapping"
+      block:
+        - name: Run cluster with a dict where a list belongs
+          ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/cluster.yml
+          vars:
+            vault_cluster_members:
+              vault-el: 1
+              vault-02.mpe.mil: 2
+            vault_init_host: "{{ inventory_hostname }}"
+        - name: A mapping peer collection should not have passed
+          ansible.builtin.fail:
+            msg: "the gate accepted a keyed peer collection"
+      rescue:
+        - name: Assert the mapping is named as the wrong type
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg is search('is a dict')
+            fail_msg: "wrong cause: {{ ansible_failed_result.msg | default('') }}"
+
+    - name: "FIRES - both a peer list and a leader address"
+      block:
+        - name: Run cluster with both join sources set
+          ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/cluster.yml
+          vars:
+            vault_cluster_members: [vault-el]
+            vault_cluster_leader_addr: vault-vip.mpe.mil
+            vault_init_host: "{{ inventory_hostname }}"
+        - name: Two join sources should not have passed
+          ansible.builtin.fail:
+            msg: "the gate accepted two simultaneous join configurations"
+      rescue:
+        - name: Assert the message names the conflict and the bootstrap reason
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg is search('both set')
+              - ansible_failed_result.msg is search('client traffic, not for joining')
+            fail_msg: "wrong cause: {{ ansible_failed_result.msg | default('') }}"
+
+    - name: "FIRES - a peer carrying a scheme"
+      block:
+        - name: Run cluster with a URL as a peer
+          ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/cluster.yml
+          vars:
+            vault_cluster_members: ["https://vault-el"]
+            vault_init_host: "{{ inventory_hostname }}"
+        - name: A schemed peer should not have passed
+          ansible.builtin.fail:
+            msg: "the gate accepted a peer that was not a bare address"
+      rescue:
+        - name: Assert the message names the scheme and the double-render
+          # A LOOPED assert reports "One or more items failed" in
+          # ansible_failed_result.msg; the gate's message is in .results[].msg.
+          vars:
+            __looped_msgs: "{{ ansible_failed_result.results | default([]) | map(attribute='msg') | join(' ') }}"
+          ansible.builtin.assert:
+            that:
+              - __looped_msgs is search('not a bare host or IP')
+              - __looped_msgs is search('https://https://')
+            fail_msg: "wrong cause: {{ ansible_failed_result.msg | default('') }}"
+
+    - name: "FIRES - a peer carrying a port"
+      block:
+        - name: Run cluster with host:port as a peer
+          ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/cluster.yml
+          vars:
+            vault_cluster_members: ["vault-el:8200"]
+            vault_init_host: "{{ inventory_hostname }}"
+        - name: A ported peer should not have passed
+          ansible.builtin.fail:
+            msg: "the gate accepted a peer with an explicit listener port"
+      rescue:
+        - name: Assert the message names the scheme-or-port rejection
+          vars:
+            __looped_msgs: "{{ ansible_failed_result.results | default([]) | map(attribute='msg') | join(' ') }}"
+          ansible.builtin.assert:
+            that:
+              - __looped_msgs is search('not a bare host or IP')
+            fail_msg: "wrong cause: {{ ansible_failed_result.msg | default('') }}"
+
+    - name: "FIRES - a cluster with no init host named"
+      block:
+        - name: Run cluster with members but no init host
+          ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/cluster.yml
+          vars:
+            vault_cluster_members: [vault-el, vault-02.mpe.mil]
+            vault_init_host: ""
+        - name: A cluster without a named initializer should not have passed
+          ansible.builtin.fail:
+            msg: "the gate accepted a multi-peer configuration with no designated initializer"
+      rescue:
+        - name: Assert the message names the split-brain outcome
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg is search('vault_init_host is empty')
+              - ansible_failed_result.msg is search('one independent Vault per node')
+            fail_msg: "wrong cause: {{ ansible_failed_result.msg | default('') }}"
+
+    - name: "FIRES - an init host that is not in the play"
+      block:
+        - name: Run cluster with an out-of-inventory init host
+          ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/cluster.yml
+          vars:
+            vault_cluster_members: [vault-el]
+            vault_init_host: vault-typo
+        - name: An absent init host should not have passed
+          ansible.builtin.fail:
+            msg: "the gate accepted an initializer that no host in the run could be"
+      rescue:
+        - name: Assert the message names the empty-register consequence
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg is search('not in this play')
+              - ansible_failed_result.msg is search('initialized nothing')
+            fail_msg: "wrong cause: {{ ansible_failed_result.msg | default('') }}"
