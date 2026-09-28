@@ -179,6 +179,22 @@ __vault_license_desired_state: >-
      else ('absent' if (vault_license_manage_state | bool) else 'unmanaged') }}
 
 ###############################################################################
+# Init Host and Init Register (derived -- never set these directly)
+###############################################################################
+# Empty vault_init_host means THIS host, which is the single-node case. Without
+# the fallback, hostvars[''] is undefined, | default({}) yields {}, and the
+# post-init unseal and tokens.env both skip -- leaving a single node initialized
+# and sealed (#44).
+__vault_init_host_effective: >-
+  {{ vault_init_host if (vault_init_host | default('') | length > 0)
+     else inventory_hostname }}
+
+# The init register, readable from followers. `operator init` runs on one host,
+# so every follower-side consumer reads it through hostvars. Tasks that
+# dereference .stdout carry their own no_log.
+__vault_init_source: "{{ hostvars[__vault_init_host_effective]['__vault_init_output'] | default({}) }}"
+
+###############################################################################
 # Ephemeral Filesystem Types (#94)
 ###############################################################################
 # A capture destination on one of these does not survive the controller. Under

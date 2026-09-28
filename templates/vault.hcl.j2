@@ -35,6 +35,13 @@ license_path                = "{{ vault_config_dir }}/vault.hclic"
 storage "raft" {
   path    = "{{ vault_data_dir }}"
   node_id = "{{ vault_raft_node_id }}"
+{% for peer in vault_cluster_members | default([]) %}
+
+  retry_join {
+    leader_api_addr     = "https://{{ '[' ~ peer ~ ']' if ':' in peer else peer }}:{{ vault_listener_port }}"
+    leader_ca_cert_file = "{{ vault_tls_ca_file }}"
+  }
+{% endfor %}
 {% if vault_cluster_leader_addr | default('') | length > 0 %}
 
   retry_join {
