@@ -438,14 +438,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bind-mounted path reports the backing device and `xfs` and passes.
 
   **Accepted limit** (operator ruling, 28 Sep 2026): the fstype list catches a
-  container whose root filesystem is `overlay` or `tmpfs`, which is what podman and
-  CRI-O use on RHEL. A runtime using the **btrfs, zfs or devicemapper** storage
-  driver presents its *ephemeral* rootfs as a durable fstype, and the gate passes
-  there. Those cannot simply be added to the list — btrfs and zfs are legitimate
-  durable filesystems on a real host. Accepted rather than closed, and no follow-up
-  filed: the Container Platform and Docker STIGs are prescriptive about which
-  filesystems are authorized, so an unauthorized storage driver is out of scope for
-  a compliant enclave.
+  container whose root filesystem is `overlay` or `tmpfs`. A runtime using the
+  **btrfs, zfs or devicemapper** storage driver presents its *ephemeral* rootfs as a
+  durable fstype, and the gate passes there. Those cannot simply be added to the
+  list — btrfs and zfs are legitimate durable filesystems on a real host.
+
+  STIG coverage was **inspected**, not assumed. **V-260926 / CNTR-MK-000600**
+  (CAT II, Mirantis Kubernetes Engine STIG V2R1) checks
+  `docker info | grep "Storage Driver:"` and makes `*aufs` or `*btrfs` a finding — so
+  the baseline forbids this case on **docker**. It does not elsewhere: podman has no
+  published STIG, RGS-RKE2-STIG V2R7 has no storage-driver or snapshotter rule, the
+  RHEL 8/9/10 STIGs prohibit only `cramfs` mounting and the `usb-storage` module, and
+  the Container Platform SRG V2R4 has no storage-driver rule. Acceptance therefore
+  rests on **measurement rather than prohibition**: podman and containerd default to
+  overlay on RHEL, and overlay was measured as `mpe-ee-rhel9`'s root filesystem.
+  Accepted, no follow-up filed.
 
   `findmnt`'s `rc` is tested explicitly, because `failed_when: false` **defines**
   `.failed` as False (#66) — without the `rc` test the gate would pass whenever
@@ -494,9 +501,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   settings file was missing entirely — without it the controller does not know about
   the new path and the job still writes into the EE.
 
-  Also records what the gate does **not** prove: a PVC holding the root token and
-  every unseal share is itself key-custody material on shared cluster storage. The
-  gate proves the material survives, not that it is well guarded. (#94, #93)
+  **Adds the encryption requirement the mount guidance was missing, which is CAT I.**
+  Telling an operator to mount *a* volume without saying it must be encrypted trades
+  an unrecoverable-loss defect for a data-at-rest finding on the most sensitive
+  material in the system. **V-256898 / APAS-AT-000012 (CAT I)**, Ansible Automation
+  Controller App Server STIG, requires the Automation Controller filesystem
+  (`/var/lib/awx`) to reside on a **LUKS-encrypted volume** with FIPS-compliant
+  ciphers, verified by `cryptsetup status`; **V-263600 /
+  SRG-APP-000915-CTR-000310 (CAT II)**, Container Platform SRG, requires protected
+  storage for cryptographic keys. Both are now cited at the mount step.
+
+  Also records what the gate does **not** prove: the volume holding the root token
+  and every unseal share is itself key-custody material. The gate proves the
+  material survives, not that it is well guarded. (#94, #93)
 
 - **`bindep.txt` was missing two hard prerequisites.** `openssl`, which
   `tasks/preflight/san.yml` has shelled out to since #85/PR #90 — so an EE built by

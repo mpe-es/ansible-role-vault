@@ -439,11 +439,23 @@ Three things that bite here:
   custody to whichever node the pod is scheduled on; on a multi-node cluster that
   is not custody.
 
-> **The PVC itself is now key-custody material.** The root token and every unseal
-> share land on cluster storage that other workloads and cluster administrators
-> may be able to reach. Scope the PVC's namespace and access mode deliberately,
-> and treat it as you would an offline key escrow — the gate proves the material
-> *survives*, not that it is *well guarded*.
+> **⚠️ The volume must be ENCRYPTED AT REST, and this is a CAT I requirement —
+> not advice.** Satisfying the durability gate with an *unencrypted* volume trades
+> an unrecoverable-loss defect for a data-at-rest finding on the most sensitive
+> material in the system.
+>
+> - **V-256898 / APAS-AT-000012 (CAT I)** — Ansible Automation Controller App
+>   Server STIG: the Automation Controller filesystem (`/var/lib/awx`) must reside
+>   on a **LUKS-encrypted volume**, using FIPS-compliant ciphers
+>   (`aes-(256|384|512)`), verified with
+>   `cryptsetup status $(df -T /var/lib/awx | tail -1 | cut -d' ' -f1)`.
+> - **V-263600 / SRG-APP-000915-CTR-000310 (CAT II)** — Container Platform SRG: the
+>   platform must provide **protected storage for cryptographic keys** with
+>   organization-defined safeguards and/or a hardware-protected key store.
+>
+> The root token and every unseal share land on this volume. Scope its namespace
+> and access mode deliberately, and treat it as offline key escrow. **The gate
+> proves the material *survives*; it proves nothing about how well it is guarded.**
 
 ##### Option 2 — Execution node, with an exposed path
 

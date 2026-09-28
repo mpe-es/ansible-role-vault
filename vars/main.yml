@@ -188,10 +188,21 @@ __vault_license_desired_state: >-
 # ACCEPTED LIMIT (operator ruling, 28 Sep 2026). A runtime using the btrfs, zfs
 # or devicemapper storage driver presents its EPHEMERAL rootfs as a durable
 # fstype, and this gate passes there. Those cannot be added to the list -- btrfs
-# and zfs are legitimate durable filesystems on a real host. Accepted rather than
-# closed: the Container Platform and Docker STIGs are prescriptive about which
-# filesystems are authorized, so an unauthorized storage driver is out of scope
-# for a compliant enclave.
+# and zfs are legitimate durable filesystems on a real host.
+#
+# STIG coverage, inspected rather than assumed (~/knowledgebase/stigs):
+#   docker  -- COVERED. V-260926 / CNTR-MK-000600 (CAT II, Mirantis Kubernetes
+#              Engine STIG V2R1) checks `docker info | grep "Storage Driver:"` and
+#              makes *aufs or *btrfs a finding.
+#   podman  -- no STIG published.
+#   RKE2    -- RGS-RKE2-STIG V2R7 has no storage-driver or snapshotter rule.
+#   RHEL    -- RHEL 8/9/10 STIGs prohibit only cramfs mounting and the
+#              usb-storage module; no storage-driver rule.
+#   Container Platform SRG V2R4 -- no storage-driver rule.
+#
+# So the baseline forbids the btrfs case on docker ONLY. Acceptance rests on
+# measurement, not on prohibition: podman and containerd both default to overlay
+# on RHEL, and overlay was measured as the root filesystem of mpe-ee-rhel9.
 __vault_ephemeral_fstypes:
   - overlay
   - overlayfs
