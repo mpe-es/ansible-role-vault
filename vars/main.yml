@@ -172,19 +172,28 @@ __vault_package_version_resolved: >-
 # vault_license_manage_state=false withholds only the REMOVAL: 'present' is
 # tested first and ignores it, so the flag can never suppress a deploy.
 # Truth table: tests/license-state-table-test.sh
-###############################################################################
-# Ephemeral Filesystem Types (#94)
-###############################################################################
-# A capture destination on one of these does not survive the controller. Under
-# AAP the controller IS the EE job container, so its root filesystem is overlay.
-__vault_ephemeral_fstypes:
-  - overlay
-  - overlayfs
-  - tmpfs
-  - ramfs
-
 __vault_license_desired_state: >-
   {{ 'present'
      if (vault_license_content | default('', true) | trim | length > 0
          and (__vault_is_enterprise | bool))
      else ('absent' if (vault_license_manage_state | bool) else 'unmanaged') }}
+
+###############################################################################
+# Ephemeral Filesystem Types (#94)
+###############################################################################
+# A capture destination on one of these does not survive the controller. Under
+# AAP the controller IS the EE job container, whose root filesystem is overlay
+# on podman and CRI-O.
+#
+# ACCEPTED LIMIT (operator ruling, 28 Sep 2026). A runtime using the btrfs, zfs
+# or devicemapper storage driver presents its EPHEMERAL rootfs as a durable
+# fstype, and this gate passes there. Those cannot be added to the list -- btrfs
+# and zfs are legitimate durable filesystems on a real host. Accepted rather than
+# closed: the Container Platform and Docker STIGs are prescriptive about which
+# filesystems are authorized, so an unauthorized storage driver is out of scope
+# for a compliant enclave.
+__vault_ephemeral_fstypes:
+  - overlay
+  - overlayfs
+  - tmpfs
+  - ramfs

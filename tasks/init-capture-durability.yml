@@ -9,14 +9,21 @@
 ###############################################################################
 # Included from tasks/service.yml immediately before `vault operator init`, and
 # from tests/init-capture-durability-test.sh. One definition, one message.
-# The assert above checks the path's SHAPE. Under AAP the controller IS the
-# ephemeral EE job container, so an absolute owner-only path can still be
-# destroyed when the pod exits while the job reports success (#94). This
-# checks the destination's DURABILITY, which is the property that matters.
 #
-# Gated on the filesystem, not on container detection: /run/.containerenv is
-# podman-only and /.dockerenv is docker-only, and an AAP container group runs
-# the EE as a CRI-O pod where neither exists. The markers only word the message.
+# service.yml's own assert checks vault_init_capture_dir's SHAPE -- absolute, and
+# an owner-only mode. This checks the destination's DURABILITY: under AAP the
+# controller IS the ephemeral EE job container, so a path that satisfies the
+# shape assert is still destroyed when the pod exits, while the job reports
+# success (#94).
+#
+# Gated on the FILESYSTEM, not on container detection. /run/.containerenv is
+# podman-specific and /.dockerenv is docker-specific, so neither is a reliable
+# signal across runtimes -- measured PRESENT in the MPE EE under podman, and NOT
+# verified under an AAP container group's CRI-O pod, which we have no AAP here to
+# test. The markers only word the message; the fstype decides.
+#
+# Accepted limit on the fstype approach: see __vault_ephemeral_fstypes in
+# vars/main.yml.
 - name: Ensure the controller capture root exists
   ansible.builtin.file:
     path: "{{ vault_init_capture_dir }}"

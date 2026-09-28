@@ -437,6 +437,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   inside a real container: an unmounted path reports `overlay` and is refused, a
   bind-mounted path reports the backing device and `xfs` and passes.
 
+  **Accepted limit** (operator ruling, 28 Sep 2026): the fstype list catches a
+  container whose root filesystem is `overlay` or `tmpfs`, which is what podman and
+  CRI-O use on RHEL. A runtime using the **btrfs, zfs or devicemapper** storage
+  driver presents its *ephemeral* rootfs as a durable fstype, and the gate passes
+  there. Those cannot simply be added to the list — btrfs and zfs are legitimate
+  durable filesystems on a real host. Accepted rather than closed, and no follow-up
+  filed: the Container Platform and Docker STIGs are prescriptive about which
+  filesystems are authorized, so an unauthorized storage driver is out of scope for
+  a compliant enclave.
+
   `findmnt`'s `rc` is tested explicitly, because `failed_when: false` **defines**
   `.failed` as False (#66) — without the `rc` test the gate would pass whenever
   `findmnt` was missing, which is precisely when durability is unproven.
