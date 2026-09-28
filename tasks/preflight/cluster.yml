@@ -58,13 +58,30 @@
     # templates/vault.hcl.j2 must stay filter-free because
     # tests/render-hsm-pin-test.sh renders it under plain Jinja with no Ansible
     # scope. tasks/preflight/dns.yml already depends on this same filter.
+    # `item is string` LEADS both expressions and Jinja's `and` short-circuits, so a
+    # non-string element never reaches a membership test. Measured: an integer element
+    # raised "argument of type 'int' is not iterable" from `'/' not in item` -- the
+    # unhelpful-error class the type_debug gate above exists to replace -- and a YAML
+    # null was ACCEPTED, because the `match` test coerces None to the string "None",
+    # which is a legal hostname, rendering https://None:8200. ipaddr also accepts a
+    # LIST and returns a non-empty list, so a nested list satisfied the IP arm.
+    #
+    # The dot-or-colon test is what stops netaddr reading an integer-like string as an
+    # IPv4 integer: measured, "10" resolved to 0.0.0.10 and passed.
+    #
+    # 253 is the DNS name limit; the per-label 63 lives in the pattern.
     __vault_peer_is_ip: >-
-      {{ (item | ansible.utils.ipaddr | ternary(true, false)) and '/' not in item }}
-    # A prefix is not a peer, hence the '/' test above. And an all-digits-and-dots
-    # label sequence is a SYNTACTICALLY legal hostname, so 999.999.999.999 passes
-    # the name test on its own -- it has to be an IP or nothing.
+      {{ item is string and item | length > 0 and item | length <= 253
+         and ('.' in item or ':' in item) and '/' not in item
+         and (item | ansible.utils.ipaddr | ternary(true, false)) }}
+    # DELIBERATE, DOCUMENTED TRADE-OFF: an all-digits-and-dots label sequence is a
+    # SYNTACTICALLY legal hostname, so 999.999.999.999 and `123` both satisfy the
+    # pattern. Rejecting them costs the vanishingly rare host literally named `123`
+    # and buys rejection of every mistyped IP address, which is what an operator
+    # actually types here. Stated in README rather than presented as invalid syntax.
     __vault_peer_is_name: >-
-      {{ (item is match(__vault_peer_name_re))
+      {{ item is string and item | length > 0 and item | length <= 253
+         and (item is match(__vault_peer_name_re))
          and not (item is match('^[0-9.]+$')) }}
   loop: "{{ vault_cluster_members | default([]) }}"
 

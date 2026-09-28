@@ -218,6 +218,18 @@ for t in inner + rescue:
 # a null key, or a 503 that outlasts the retries. None yields a green play over a wrong
 # cluster, which is why they are not pinned statically here.
 
+# 8c. NAMES. wholetask() excludes `name`, so a name is swept separately rather than
+# ignored: Ansible prints the task heading BEFORE the module runs and no_log does not
+# suppress it, so `- name: init said {{ __vault_init_source }}` leaks the whole result
+# in the heading of an otherwise fully no_log'd task.
+for t in inner + rescue:
+    nm = str(t.get("name", ""))
+    leaked = [k for k in KEY_MATERIAL if k in nm]
+    if leaked:
+        fail.append(f"the task name {nm!r} contains {leaked[0]}. A task NAME is printed in "
+                    f"the play heading before the module runs and no_log does not suppress "
+                    f"it, so key material in a name leaks however the task is guarded.")
+
 # 8b. seal status carries no key material and must NOT be no_log
 for frag in ("Verify Vault is unsealed", "Assert the unseal succeeded",
              "Read this node's cluster identity", "Assert every cluster node reports"):
@@ -282,6 +294,14 @@ else:
                     f"`when`, so it cannot fire on the case it exists for.")
     if "ansible.builtin.fail" not in fr:
         fail.append("the strategy:free guard is not a `fail` task, so it cannot stop the play.")
+    if "inventory_hostname != __vault_init_host_effective" not in w:
+        fail.append("the strategy:free guard is not follower-scoped. Inverted to `==` it only "
+                    "ever tests the INIT host, whose register is never empty after its own "
+                    "init, so it can never fire on the host class it exists for.")
+    if "not ansible_check_mode" not in w:
+        fail.append("the strategy:free guard does not exclude check mode. --check never runs "
+                    "`operator init`, so the empty register is the EXPECTED state of a valid "
+                    "dry run and the guard would fail every greenfield HA --check.")
 
 # 13. Cross-node cluster identity. N independently initialized nodes each report
 # initialized=true, so every gate above skips and the play is green over N
@@ -298,6 +318,15 @@ else:
     if "hostvars[__vault_init_host_effective]" not in d:
         fail.append("the cluster-identity assert no longer compares against the INIT HOST, so "
                     "it compares a node with itself and always passes.")
+    # Substring presence is not enough: `__this == __this` leaves the peer var DEFINED
+    # and still holding the hostvars text, so the text check above passes while the
+    # comparison is a tautology. The `that` must name both sides.
+    thats = " ".join(str(c) for c in (ci.get("ansible.builtin.assert", {}) or {}).get("that", []))
+    if "__vault_this_cluster_id" not in thats or "__vault_peer_cluster_id" not in thats:
+        fail.append("the cluster-identity `that` does not compare __vault_this_cluster_id "
+                    "with __vault_peer_cluster_id. A self-comparison is a tautology that "
+                    "passes on N separate clusters, and the peer var stays defined so a "
+                    "substring check on the task cannot see it.")
 
 # 14. The rescue must name the host that actually holds the capture. Capture runs
 # on the init host alone, so a follower failure that cites inventory_hostname
@@ -317,6 +346,21 @@ for t in _res:
                     "a follower failure this names a directory that does not exist -- during an "
                     "incident, for the root token.")
 
+# 15. mTLS reachability. With tls_require_and_verify_client_cert the listener demands
+# a client certificate from EVERY local caller, not only from retry_join: without it
+# `vault status` fails TLS before initialization begins.
+for t in inner + rescue:
+    nm = str(t.get("name", ""))
+    env = str(t.get("environment", ""))
+    if "VAULT_CACERT" in env and "VAULT_CLIENT_CERT" not in env:
+        fail.append(f"{nm!r} sets VAULT_CACERT without VAULT_CLIENT_CERT. On a listener with "
+                    f"tls_require_and_verify_client_cert the call fails TLS, so the whole init "
+                    f"flow is unreachable under the role's own mTLS setting.")
+    uri = t.get("ansible.builtin.uri")
+    if isinstance(uri, dict) and "ca_path" in uri and "client_cert" not in uri:
+        fail.append(f"{nm!r} sets ca_path without client_cert. Same failure as above, on the "
+                    f"API path.")
+
 if fail:
     print("FAIL: #44 HA init orchestration")
     for f in fail:
@@ -324,5 +368,7 @@ if fail:
     sys.exit(1)
 print("ok: init is host-scoped; tokens.env and unseal read the shared register; capture and "
       "audit do not;\n    leader unseal precedes the wait precedes the follower unseal; both honour "
-      "vault_init_unseal;\n    every key-material task is no_log; seal status stays visible")
+      "vault_init_unseal;\n    every key-material task is no_log, names included; seal status "
+      "stays visible;\n    cluster identity is compared across nodes and every Vault call can "
+      "reach an mTLS listener")
 PYEOF

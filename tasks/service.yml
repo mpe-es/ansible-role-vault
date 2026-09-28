@@ -116,6 +116,8 @@
       environment:
         VAULT_ADDR: "https://127.0.0.1:{{ vault_listener_port }}"
         VAULT_CACERT: "{{ vault_tls_ca_file }}"
+        VAULT_CLIENT_CERT: "{{ __vault_client_cert }}"
+        VAULT_CLIENT_KEY: "{{ __vault_client_key }}"
 
     - name: Parse Vault status
       ansible.builtin.set_fact:
@@ -153,6 +155,8 @@
       environment:
         VAULT_ADDR: "https://127.0.0.1:{{ vault_listener_port }}"
         VAULT_CACERT: "{{ vault_tls_ca_file }}"
+        VAULT_CLIENT_CERT: "{{ __vault_client_cert }}"
+        VAULT_CLIENT_KEY: "{{ __vault_client_key }}"
       no_log: true
       changed_when: __vault_init_output.rc == 0
 
@@ -174,6 +178,10 @@
           peer -- adding a peer to a live cluster is day-2 and out of scope, and
           the existing unseal shares are not available to this run.
       when:
+        # --check never runs `operator init`, so an empty register is the EXPECTED
+        # state of a valid dry run. Without this the guard turns every greenfield
+        # HA --check into a failure.
+        - not ansible_check_mode
         - vault_cluster_members | default([]) | length > 0
         - inventory_hostname != __vault_init_host_effective
         - __vault_initialized is defined
@@ -267,6 +275,8 @@
         body:
           key: "{{ item }}"
         ca_path: "{{ vault_tls_ca_file }}"
+        client_cert: "{{ vault_tls_cert_file if (vault_tls_require_client_cert | bool) else omit }}"
+        client_key: "{{ vault_tls_key_file if (vault_tls_require_client_cert | bool) else omit }}"
         status_code: [200]
       loop: "{{ (__vault_init_source.stdout | from_json).unseal_keys_b64[:vault_key_threshold] }}"
       when:
@@ -289,6 +299,8 @@
         url: "https://127.0.0.1:{{ vault_listener_port }}/v1/sys/seal-status"
         method: GET
         ca_path: "{{ vault_tls_ca_file }}"
+        client_cert: "{{ vault_tls_cert_file if (vault_tls_require_client_cert | bool) else omit }}"
+        client_key: "{{ vault_tls_key_file if (vault_tls_require_client_cert | bool) else omit }}"
         status_code: [200]
       register: __vault_join_status
       until: __vault_join_status.json.initialized | default(false) | bool
@@ -311,6 +323,8 @@
         body:
           key: "{{ item }}"
         ca_path: "{{ vault_tls_ca_file }}"
+        client_cert: "{{ vault_tls_cert_file if (vault_tls_require_client_cert | bool) else omit }}"
+        client_key: "{{ vault_tls_key_file if (vault_tls_require_client_cert | bool) else omit }}"
         status_code: [200]
       loop: "{{ (__vault_init_source.stdout | from_json).unseal_keys_b64[:vault_key_threshold] }}"
       when:
@@ -330,6 +344,8 @@
         url: "https://127.0.0.1:{{ vault_listener_port }}/v1/sys/seal-status"
         method: GET
         ca_path: "{{ vault_tls_ca_file }}"
+        client_cert: "{{ vault_tls_cert_file if (vault_tls_require_client_cert | bool) else omit }}"
+        client_key: "{{ vault_tls_key_file if (vault_tls_require_client_cert | bool) else omit }}"
         status_code: [200]
       register: __vault_seal_status
       when:
@@ -361,6 +377,8 @@
         url: "https://127.0.0.1:{{ vault_listener_port }}/v1/sys/seal-status"
         method: GET
         ca_path: "{{ vault_tls_ca_file }}"
+        client_cert: "{{ vault_tls_cert_file if (vault_tls_require_client_cert | bool) else omit }}"
+        client_key: "{{ vault_tls_key_file if (vault_tls_require_client_cert | bool) else omit }}"
         status_code: [200]
       register: __vault_cluster_identity
       when: vault_cluster_members | default([]) | length > 0
@@ -392,7 +410,32 @@
              | default('') }}
       when:
         - vault_cluster_members | default([]) | length > 0
+        # Under serial, a follower batch processed BEFORE the init host has no
+        # identity in that host's hostvars, and the comparison would fail on a
+        # healthy cluster. ansible_play_batch, not ansible_play_hosts: the latter
+        # is the whole play even under serial.
+        - __vault_init_host_effective in ansible_play_batch
         - not (__vault_cluster_identity.json.sealed | default(true) | bool)
+
+    # The two cases the comparison above cannot cover. They are WARNED, not failed:
+    # a sealed cluster is the operator's stated desired state (vault_init_unseal
+    # false), and failing it would make that option unusable on a cluster. Silence
+    # was the defect -- a skipped check read as a passed one.
+    - name: Warn that cluster identity could not be verified
+      ansible.builtin.debug:
+        msg: >-
+          WARNING: cluster identity was NOT verified on this node
+          ({{ "it is sealed, and seal-status carries cluster_id only while unsealed"
+              if (__vault_cluster_identity.json.sealed | default(true) | bool)
+              else "the initialization host is not in this batch" }}).
+          Independently initialized nodes are indistinguishable from one HA cluster
+          in this state. Confirm with `vault operator raft list-peers` on the
+          initialization host once the cluster is unsealed: it must list every
+          member of vault_cluster_members and nothing else.
+      when:
+        - vault_cluster_members | default([]) | length > 0
+        - (__vault_cluster_identity.json.sealed | default(true) | bool)
+          or (__vault_init_host_effective not in ansible_play_batch)
 
     - name: Enable file audit device
       ansible.builtin.command:
@@ -406,6 +449,8 @@
       environment:
         VAULT_ADDR: "https://127.0.0.1:{{ vault_listener_port }}"
         VAULT_CACERT: "{{ vault_tls_ca_file }}"
+        VAULT_CLIENT_CERT: "{{ __vault_client_cert }}"
+        VAULT_CLIENT_KEY: "{{ __vault_client_key }}"
         VAULT_TOKEN: "{{ (__vault_init_output.stdout | from_json).root_token }}"
       no_log: true
       changed_when: true
@@ -422,6 +467,8 @@
       environment:
         VAULT_ADDR: "https://127.0.0.1:{{ vault_listener_port }}"
         VAULT_CACERT: "{{ vault_tls_ca_file }}"
+        VAULT_CLIENT_CERT: "{{ __vault_client_cert }}"
+        VAULT_CLIENT_KEY: "{{ __vault_client_key }}"
         VAULT_TOKEN: "{{ (__vault_init_output.stdout | from_json).root_token }}"
       no_log: true
       changed_when: true
@@ -453,6 +500,8 @@
       environment:
         VAULT_ADDR: "https://127.0.0.1:{{ vault_listener_port }}"
         VAULT_CACERT: "{{ vault_tls_ca_file }}"
+        VAULT_CLIENT_CERT: "{{ __vault_client_cert }}"
+        VAULT_CLIENT_KEY: "{{ __vault_client_key }}"
 
     - name: Surface Vault initialization failure state
       vars:

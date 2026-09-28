@@ -189,6 +189,16 @@ __vault_init_host_effective: >-
   {{ vault_init_host if (vault_init_host | default('') | length > 0)
      else inventory_hostname }}
 
+# mTLS client credentials for the Vault CLI (#44, codex round 2). When the listener
+# is configured with tls_require_and_verify_client_cert, EVERY local call must present
+# a client certificate -- not just retry_join. Without these, `vault status` fails TLS
+# before initialization even begins, so the whole init flow was unreachable under the
+# role's own mTLS setting. The documented default for both is the empty string, which
+# is why the non-mTLS case sets them empty rather than trying to unset them.
+# The uri tasks use `omit` inline instead; the module's default is None, not ''.
+__vault_client_cert: "{{ vault_tls_cert_file if (vault_tls_require_client_cert | bool) else '' }}"
+__vault_client_key: "{{ vault_tls_key_file if (vault_tls_require_client_cert | bool) else '' }}"
+
 # Peer-name syntax for tasks/preflight/cluster.yml: DNS labels of 1-63 chars,
 # no leading or trailing hyphen, optional trailing root dot. Deliberately rejects
 # underscores, a colon (a port), a slash (a prefix) and any whitespace.

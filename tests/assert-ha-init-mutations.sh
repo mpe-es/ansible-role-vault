@@ -152,6 +152,26 @@ run "the cluster-identity read becomes no_log" \
 run "the rescue points at the failing host, not the capture host" \
   "s = s.replace('}}/{{ __vault_init_host_effective }}', '}}/{{ inventory_hostname }}')"
 
+# --- codex round 2 -----------------------------------------------------------
+
+run "the strategy:free guard is inverted onto the init host" \
+  "i = s.index('    - name: Fail when the init host has produced no key material'); j = s.index('    # root:root 0600 in /etc/vault.d'); seg = s[i:j].replace('inventory_hostname != __vault_init_host_effective', 'inventory_hostname == __vault_init_host_effective'); s = s[:i] + seg + s[j:]"
+
+run "the strategy:free guard stops excluding check mode" \
+  "i = s.index('    - name: Fail when the init host has produced no key material'); j = s.index('    # root:root 0600 in /etc/vault.d'); seg = s[i:j].replace('        - not ansible_check_mode\n', ''); s = s[:i] + seg + s[j:]"
+
+run "the cluster-identity assert becomes a tautology" \
+  "s = s.replace('          - __vault_this_cluster_id == __vault_peer_cluster_id', '          - __vault_this_cluster_id == __vault_this_cluster_id')"
+
+run "a task NAME carries the init register" \
+  "s = s.replace('    - name: Enable file audit device', '    - name: Enable file audit device for {{ __vault_init_source }}')"
+
+run "the status probe loses its client certificate" \
+  "i = s.index('name: Check Vault initialization status'); j = s.index('name: Parse Vault status'); seg = s[i:j].replace('        VAULT_CLIENT_CERT: \"{{ __vault_client_cert }}\"\n', ''); s = s[:i] + seg + s[j:]"
+
+run "the leader unseal loses its client certificate" \
+  "i = s.index('name: Unseal the initialization host'); j = s.index('name: Wait for this node'); seg = s[i:j].replace(\"        client_cert: \\\"{{ vault_tls_cert_file if (vault_tls_require_client_cert | bool) else omit }}\\\"\n\", ''); s = s[:i] + seg + s[j:]"
+
 cp "$WORK/service.yml.orig" "$SRC"
 if ! bash "$LOCK" "$ROOT" >/dev/null 2>&1; then
   echo "FAIL: the lock does not pass on the real tree"; exit 1

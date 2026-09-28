@@ -6,9 +6,9 @@ in airgap or internet-connected environments.
 > **Maturity.** Single-node deployments are the supported, CI-exercised path.
 > **Multi-node Raft HA is implemented but not behaviour-tested** — the role renders
 > per-peer `retry_join`, initializes exactly one node, and converges the cluster to the
-> sealed state you asked for — waiting for each follower to join on the Shamir path,
-> where the role must unseal them; under an HSM seal every node unseals itself and the
-> role waits on nothing. **CI verifies configuration presence only**: no test exercises
+> sealed state you asked for — waiting for each follower to join on **both** the Shamir
+> and HSM paths, and unsealing the followers only on the Shamir path, where an HSM node
+> unseals itself. **CI verifies configuration presence only**: no test exercises
 > cluster formation. Day-2 cluster operations are
 > out of scope. Read [Known Limitations](#known-limitations) and
 > [`docs/runbooks/cluster-bringup.md`](docs/runbooks/cluster-bringup.md) before
@@ -690,7 +690,7 @@ See the initialization warning at the top of this section before enabling
 | `vault_raft_node_id` | `{{ inventory_hostname_short }}` | Raft node identifier |
 | `vault_api_addr` | `https://{{ ansible_facts['fqdn'] }}:8200` | Advertised API address |
 | `vault_cluster_addr` | `https://{{ ansible_facts['fqdn'] }}:8201` | Cluster replication address |
-| `vault_cluster_members` | `[]` | Raft peers, one `retry_join` stanza each. **Bare host or IP** — no scheme, no port, no CIDR prefix; the template adds both and brackets IPv6, including ULA (`fd00::/8`) and link-local. Validated with `ansible.utils.ipaddr` plus a DNS-label pattern. Every entry must be a SAN on that peer's listener certificate. Empty means single-node |
+| `vault_cluster_members` | `[]` | Raft peers, one `retry_join` stanza each. **Bare host or IP** — no scheme, no port, no CIDR prefix; the template adds both and brackets IPv6, including ULA (`fd00::/8`). Validated with `ansible.utils.ipaddr` plus a DNS-label pattern; a **zone-indexed** link-local such as `fe80::1%eth0` is rejected, so link-local peers are not usable in practice. An all-numeric name such as `123` is rejected too — legal DNS syntax, but here it is a mistyped address. Every entry must be a SAN on that peer's listener certificate. Empty means single-node |
 | `vault_init_host` | `""` | The one node that runs `operator init`. **Required** when `vault_cluster_members` is set. Empty means this host (single-node). Must be in the play |
 | `vault_cluster_leader_addr` | `""` | **Deprecated for HA** — renders a single `retry_join` stanza, which is not the Raft join contract. Mutually exclusive with `vault_cluster_members`. The HA VIP belongs on client traffic, not here |
 
@@ -1293,15 +1293,26 @@ limited:
   Under `free` a follower can run ahead of the initialization host; the role detects the
   empty register and **fails the play** rather than skipping to a green result, but it
   cannot make `free` work.
-- **mTLS peers present the node's own listener identity.** When
-  `vault_tls_require_client_cert` is `true`, `retry_join` sends
-  `leader_client_cert_file` and `leader_client_key_file` from `vault_tls_cert_file` and
-  `vault_tls_key_file`. That certificate therefore needs **`clientAuth` in its extended
-  key usage**; a server-only certificate fails the join. The role cannot inspect the EKU.
+- **mTLS uses the node's own listener identity everywhere.** When
+  `vault_tls_require_client_cert` is `true` the listener demands a client certificate
+  from **every** caller, not only from `retry_join` — so `retry_join` sends
+  `leader_client_cert_file`/`leader_client_key_file`, every `uri` call sends
+  `client_cert`/`client_key`, and every CLI call sets `VAULT_CLIENT_CERT`/
+  `VAULT_CLIENT_KEY`, all from `vault_tls_cert_file` and `vault_tls_key_file`. That
+  certificate therefore needs **`clientAuth` in its extended key usage**; a server-only
+  certificate fails both the join and `vault status`. The role cannot inspect the EKU.
 - **A cluster left sealed is not identity-checked.** The cross-node `cluster_id`
   comparison that catches N-independent-clusters reads `seal-status`, which carries
-  `cluster_id` only while a node is **unsealed**. With `vault_init_unseal: false` the
-  check is skipped, so a split cluster left sealed is not detected until it is unsealed.
+  `cluster_id` only while a node is **unsealed**. With `vault_init_unseal: false`, or on
+  a node whose batch excludes the initialization host, the comparison is skipped — but
+  it now **says so in the job log** rather than passing silently, and names
+  `vault operator raft list-peers` as the manual confirmation. Failing closed was
+  rejected deliberately: a sealed cluster is a stated desired state, and failing it
+  would make `vault_init_unseal: false` unusable on a cluster.
+- **`--check` cannot confirm an HA bring-up, only that nothing is destructive.** The
+  read-only probes run under `--check`, but `operator init` does not, so no register
+  exists and every unseal, join and identity step is skipped. A dry run therefore
+  reports no cluster convergence either way.
 
 [`docs/runbooks/cluster-bringup.md`](docs/runbooks/cluster-bringup.md) carries the
 bring-up sequence, the custody step and the failure table.

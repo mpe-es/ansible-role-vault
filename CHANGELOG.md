@@ -78,7 +78,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   begins with a digit, yielded no scheme, **passed**, and rendered
   `https://[10.0.0.1:8200]:8200` into `vault.hcl`. Empty strings, whitespace, paths,
   queries, CIDR prefixes and `999.999.999.999` passed too. The replacement is verified
-  against 26 cases with zero mismatches. `ipaddr` is task-side only: the template stays
+  by `tests/peer-shape-table-test.sh`, a 37-case truth table that LOADS the real
+  expressions out of `tasks/preflight/cluster.yml` and `vars/main.yml` rather than
+  transcribing them, and that proves itself able to fail on six clause-level mutations. `ipaddr` is task-side only: the template stays
   filter-free because `tests/render-hsm-pin-test.sh` renders it under plain Jinja.
 
   **`retry_join` now carries client credentials when the listener demands them.** With
@@ -114,9 +116,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Covered by `tests/render-retry-join-test.sh`, which renders the **real**
   `templates/vault.hcl.j2` across thirteen cases (deleting the `retry_join` loop fails
-  six of them), by `tests/assert-ha-init-orchestration.sh`, which locks the gates
+  ten of them), by `tests/assert-ha-init-orchestration.sh`, which locks the gates
   **and** the data expressions, and by its meta-gate
-  `tests/assert-ha-init-mutations.sh` — **31 mutations, all killed, every one
+  `tests/assert-ha-init-mutations.sh` — **37 mutations, all killed, every one
   asserting it applied** so a stale anchor cannot fake a pass. The `no_log` sweep is
   **positive and data-keyed**: it stringifies the whole task, covers the `rescue`, and
   names the register variables as well as the JSON field names, because

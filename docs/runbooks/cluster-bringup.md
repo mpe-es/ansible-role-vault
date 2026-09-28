@@ -7,10 +7,12 @@ Executable without reading the issue. Every manual step is stated.
 ## What the role does and does not do
 
 **Does:** renders one `retry_join` stanza per peer, runs `operator init` on exactly
-one node, unseals that node, waits for each other node to join **on the Shamir path**,
-unseals them when asked to, captures the key material on the controller, and enables
-the audit devices once. Under an HSM seal each node unseals itself, so the role
-performs no wait and gathers no join evidence.
+one node, unseals that node, waits for each other node to **join** — on the Shamir and
+HSM paths alike — unseals the followers when asked to, compares every node's
+`cluster_id` against the initialization host's, captures the key material on the
+controller, and enables the audit devices once. Under an HSM seal each node unseals
+*itself*, so the role skips only the follower **unseal**, not the join wait: an HSM
+follower that never joins would otherwise pass unnoticed.
 
 **Does not:** any day-2 operation. No autopilot tuning, no peer add or remove, no
 cluster snapshot restore, no quorum-loss recovery, **and no re-unsealing.** A role
