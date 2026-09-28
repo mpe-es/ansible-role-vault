@@ -35,8 +35,15 @@ repos:
   #
   # ansible-core 2.20+ requires Python >= 3.12, so this pin and language_version
   # move together (#91). Both now match the mpe-ee-rhel9 runtime.
+  #
+  # `rev` IS A THIRD COUPLED VERSION. ansible-lint's compatibility with core
+  # moves, so rev must equal the ansible-lint pin in requirements-dev.txt.
+  # Measured on #91: rev v25.1.0 against core 2.21.4 dies at import with
+  # "No module named 'ansible.parsing.yaml.constructor'" -- and CI does NOT catch
+  # it, because the lint job runs ansible-lint from the lock while this hook
+  # resolves its own from rev. Green CI, broken commit gate.
   - repo: https://github.com/ansible/ansible-lint
-    rev: v25.1.0
+    rev: v26.8.0
     hooks:
       - id: ansible-lint
         args: []

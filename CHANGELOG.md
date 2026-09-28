@@ -221,7 +221,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   `min_ansible_version` moves 2.17 → 2.21 but is **advisory** — ansible-core does not
   enforce it, verified with a probe role declaring `99.0` that ran normally — and both
-  it and the README now say so where they state it. (#91)
+  it and the README now say so where they state it.
+
+  **There is a third coupled version site, not two.** `.pre-commit-config.yaml`'s
+  `rev` pins ansible-lint itself, and ansible-lint's compatibility with ansible-core
+  moves. At `rev: v25.1.0` against core 2.21.4 the hook dies at import with
+  `ModuleNotFoundError: No module named 'ansible.parsing.yaml.constructor'`, a module
+  core has removed. **CI does not catch this**: the lint job runs `ansible-lint` from
+  the lock, while the hook resolves its own copy from `rev` — so CI stays green while
+  the commit gate is broken for every contributor, which is the #78 defect this hook's
+  own comments describe. `rev` now tracks the lock's `ansible-lint==26.8.0`, and the
+  coupling is written down beside it. Found by running `pre-commit run --all-files`,
+  which the earlier CI-only evidence could not have surfaced. (#91)
 
 - **The documented lockfile regeneration command failed on an SELinux-enforcing
   host**, which is this role's own target platform. `requirements.in` and
