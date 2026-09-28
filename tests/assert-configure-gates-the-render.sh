@@ -85,17 +85,9 @@ else:
         fail.append("the vault.hclic deploy has no `diff: false`; the licence would "
                     "appear under --diff")
 
-# --- the licence ABSENT state (review of #95) --------------------------------
-# The defect: the deploy task's `when` was (content AND enterprise) and NOTHING
-# covered its complement, so a withdrawn entitlement stayed on disk and stayed
-# referenced by license_path. An Enterprise node kept running on a licence the
-# desired state had retired and the role reported success.
-#
-# Both licence tasks now key off the single derived __vault_license_desired_state.
-# That is what this locks. Re-expressing either condition as a hand-written
-# negation of the other reopens the gap, and no molecule scenario can catch it:
-# every scenario runs exactly ONE licence posture, so no container run ever
-# transitions between them.
+# The licence ABSENT state. Both licence tasks must key off the single derived
+# __vault_license_desired_state -- re-expressing either as a hand-written
+# negation of the other reopens the gap, and no molecule scenario can catch it.
 removal = None
 for i, t in enumerate(tasks):
     fm = t.get("ansible.builtin.file") or t.get("file")
@@ -116,12 +108,8 @@ else:
                     "withdrawal would not take effect until some unrelated future "
                     "restart, decoupling the failure from the run that caused it "
                     "(operator ruling, 28 Sep 2026)")
-    # The ASYMMETRY is deliberate and must stay. no_log/diff:false belong on the
-    # DEPLOY task, whose `content:` carries the entitlement blob. A removal
-    # carries a path. Vault cannot be relied on to raise the alarm -- an expired
-    # licence starts DEGRADED rather than failing, and the absent case has never
-    # been measured against a real Enterprise binary -- so this task's log entry
-    # is the only attributable record that an entitlement was withdrawn.
+    # Asymmetry is deliberate: no_log/diff:false belong on the DEPLOY task, whose
+    # content: carries the blob. The removal is the only attributable record.
     if t.get("no_log") is True:
         fail.append("the vault.hclic REMOVAL sets no_log: true. It carries a path, "
                     "not a licence, and suppressing it erases the only attributable "
