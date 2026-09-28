@@ -335,12 +335,12 @@ the job still reports success.**
 `tasks/service.yml` writes all initialization secrets with
 `delegate_to: localhost`:
 
-| Line | Task | Destination |
-|---|---|---|
-| 141 | Create controller capture directory | `{{ vault_init_capture_dir }}/{{ inventory_hostname }}/` |
-| 150 | Capture **root token** | `…/root-token` |
-| 160 | Capture **Shamir unseal shares** | `…/unseal-key-N` (one per share) |
-| 173 | Capture **HSM recovery keys** | `…/recovery-key-N` (one per key) |
+| Task | Destination |
+|---|---|
+| Create controller capture directory | `{{ vault_init_capture_dir }}/{{ inventory_hostname }}/` |
+| Capture **root token** | `…/root-token` |
+| Capture **Shamir unseal shares** | `…/unseal-key-N` (one per share) |
+| Capture **HSM recovery keys** | `…/recovery-key-N` (one per key) |
 
 This is deliberate and correct on a persistent control node — the design
 guarantees the root token never rests on the Vault node (see *Security Model*
@@ -348,9 +348,24 @@ below). On AAP it inverts: Vault is initialized and unsealed, the job goes
 green, and **nobody holds the root token or a single unseal key.** Recovery is
 not possible.
 
-The preflight check at `tasks/service.yml:46` does not catch this. It asserts
-`vault_init_capture_dir` is set and absolute; a path inside the EE satisfies
-both.
+**The role now refuses this configuration rather than only documenting it (#94).**
+Before `operator init` runs, `tasks/init-capture-durability.yml` resolves the
+backing filesystem of `vault_init_capture_dir` with
+`findmnt -n -o SOURCE,FSTYPE --target`, and fails when it is `overlay`, `tmpfs` or
+`ramfs` — or when `findmnt` cannot answer at all. No proof of durability, no
+initialization.
+
+The gate keys on the **filesystem**, not on container detection:
+`/run/.containerenv` is podman-only and `/.dockerenv` is docker-only, and an AAP
+container group runs the EE as a CRI-O pod where neither exists. Those markers only
+word the failure message. Measured inside a container: an unmounted path reports
+`overlay` and is refused; a bind-mounted path reports the backing device and `xfs`
+and passes.
+
+The older check at `tasks/service.yml:46` does **not** catch this and never could —
+it asserts `vault_init_capture_dir` is set and absolute, and a path inside the EE
+satisfies both. It checks the string's shape; the durability gate checks the
+destination.
 
 > **Choosing an execution node does not fix this.** Mesh execution nodes run
 > jobs through `ansible-runner` under Podman isolation exactly as container
@@ -359,9 +374,10 @@ both.
 > disk is not visible to the container unless a path is explicitly exposed.
 
 **Required mitigation — one of. Options 1 and 2 keep initialization in AAP and
-therefore depend on an explicit host-to-container mount; verify that mount
-exists before the first initializing run, not after. Option 3 avoids the
-mount entirely by moving initialization out of AAP.**
+therefore depend on an explicit host-to-container mount. The durability gate now
+verifies that mount for you and fails the job before `operator init` if it is
+absent, so a missing mount is a refused run rather than a silent loss. Option 3
+avoids the mount entirely by moving initialization out of AAP.**
 
 1. **Container group** — a custom pod spec declaring a volume mounted at
    `vault_init_capture_dir`.

@@ -1,0 +1,108 @@
+---
+###############################################################################
+# Filename: tasks/init-capture-durability.yml
+# Role: ansible-role-vault
+# Summary: Refuse to initialize Vault when the controller capture destination
+#   would not survive the controller (#94)
+# Last Updated: 28 Sep 2026
+# Classification: UNCLASSIFIED
+###############################################################################
+# Included from tasks/service.yml immediately before `vault operator init`, and
+# from tests/init-capture-durability-test.sh. One definition, one message.
+# The assert above checks the path's SHAPE. Under AAP the controller IS the
+# ephemeral EE job container, so an absolute owner-only path can still be
+# destroyed when the pod exits while the job reports success (#94). This
+# checks the destination's DURABILITY, which is the property that matters.
+#
+# Gated on the filesystem, not on container detection: /run/.containerenv is
+# podman-only and /.dockerenv is docker-only, and an AAP container group runs
+# the EE as a CRI-O pod where neither exists. The markers only word the message.
+- name: Ensure the controller capture root exists
+  ansible.builtin.file:
+    path: "{{ vault_init_capture_dir }}"
+    state: directory
+    mode: '0700'
+  delegate_to: localhost
+  become: false
+
+- name: Resolve the backing mount of the capture destination
+  ansible.builtin.command:
+    argv:
+      - findmnt
+      - --noheadings
+      - --output
+      - SOURCE,FSTYPE
+      - --target
+      - "{{ vault_init_capture_dir }}"
+  delegate_to: localhost
+  become: false
+  changed_when: false
+  check_mode: false
+  failed_when: false
+  register: __vault_capture_mount
+
+- name: Stat the controller's containerization markers
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  delegate_to: localhost
+  become: false
+  check_mode: false
+  loop:
+    - /run/.containerenv
+    - /.dockerenv
+  register: __vault_ctrl_markers
+
+# findmnt rc is tested explicitly: failed_when: false DEFINES .failed as
+# False, so only rc discriminates (#66). No findmnt, no proof of durability,
+# no initialization -- fail closed on unseal-key custody.
+- name: Assert the capture destination survives the controller
+  ansible.builtin.assert:
+    that:
+      - __vault_capture_mount.rc == 0
+      - __vault_capture_fstype | length > 0
+      - __vault_capture_fstype not in __vault_ephemeral_fstypes
+    fail_msg: >-
+      Refusing to initialize Vault: the capture destination would not survive
+      this controller. vault_init_capture_dir is
+      '{{ vault_init_capture_dir }}', resolved to filesystem type
+      '{{ __vault_capture_fstype | default('') | ternary(__vault_capture_fstype, 'UNRESOLVED') }}'
+      (findmnt rc={{ __vault_capture_mount.rc | default('n/a') }}).
+      {{ __vault_ctrl_container_msg }}
+      The root token and every unseal/recovery share are written there and
+      NOWHERE else -- the root token is deliberately never stored on the node --
+      so on an ephemeral controller they are destroyed when it exits and the
+      job still reports success. That loss is unrecoverable: a Vault with no
+      unseal shares cannot be unsealed.
+      Fix by mounting persistent storage at that path -- under AAP, a container
+      group pod spec with a volume and a matching volumeMount -- or set
+      vault_initialize false and initialize from a persistent control node.
+    success_msg: >-
+      Capture destination {{ vault_init_capture_dir }} is on
+      '{{ __vault_capture_fstype }}' ({{ __vault_capture_source }}) and
+      survives this controller
+  vars:
+    __vault_capture_fstype: >-
+      {{ (__vault_capture_mount.stdout | default('', true)).split() | last | default('', true) }}
+    __vault_capture_source: >-
+      {{ (__vault_capture_mount.stdout | default('', true)).split() | first | default('unknown', true) }}
+    __vault_ctrl_container_msg: >-
+      {{ 'This controller is a container ('
+         ~ (__vault_ctrl_markers.results | selectattr('stat.exists') | map(attribute='item') | join(', '))
+         ~ ' present), so that path is inside the execution environment.'
+         if (__vault_ctrl_markers.results | selectattr('stat.exists') | list | length > 0)
+         else 'No container marker was found, but the filesystem is ephemeral regardless.' }}
+
+# Option C from #94: make the destination visible in the job log even when it
+# passes, so a later loss is diagnosable.
+- name: Report the resolved capture destination
+  ansible.builtin.debug:
+    msg: >-
+      Vault initialization will capture the root token and all unseal/recovery
+      shares to {{ vault_init_capture_dir }}/{{ inventory_hostname }} on the
+      controller, backed by {{ __vault_capture_source }}
+      ({{ __vault_capture_fstype }}).
+  vars:
+    __vault_capture_fstype: >-
+      {{ (__vault_capture_mount.stdout | default('', true)).split() | last | default('', true) }}
+    __vault_capture_source: >-
+      {{ (__vault_capture_mount.stdout | default('', true)).split() | first | default('unknown', true) }}

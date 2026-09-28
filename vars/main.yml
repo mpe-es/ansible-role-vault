@@ -172,6 +172,17 @@ __vault_package_version_resolved: >-
 # vault_license_manage_state=false withholds only the REMOVAL: 'present' is
 # tested first and ignores it, so the flag can never suppress a deploy.
 # Truth table: tests/license-state-table-test.sh
+###############################################################################
+# Ephemeral Filesystem Types (#94)
+###############################################################################
+# A capture destination on one of these does not survive the controller. Under
+# AAP the controller IS the EE job container, so its root filesystem is overlay.
+__vault_ephemeral_fstypes:
+  - overlay
+  - overlayfs
+  - tmpfs
+  - ramfs
+
 __vault_license_desired_state: >-
   {{ 'present'
      if (vault_license_content | default('', true) | trim | length > 0

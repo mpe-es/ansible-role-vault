@@ -57,6 +57,10 @@
           per-host subdirectory (the root token is NEVER stored on the node).
         success_msg: "Vault initialization capture destination configured"
 
+    - name: Assert the initialization capture destination is durable
+      ansible.builtin.include_tasks:
+        file: init-capture-durability.yml
+
     - name: Validate key shares and threshold
       ansible.builtin.assert:
         that:

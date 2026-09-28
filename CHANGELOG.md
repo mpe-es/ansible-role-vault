@@ -405,6 +405,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`vault_initialize: true` under AAP destroyed the root token and every unseal
+  share, and reported success.** `tasks/service.yml` captures all initialization
+  secrets to the controller with `delegate_to: localhost` — by design, so the root
+  token never rests on the Vault node. Under AAP the controller **is** the ephemeral
+  EE job container, so on a default configuration Vault was initialized and
+  unsealed, the material was written inside the pod, the job went green, and the pod
+  exited. Nobody held a root token or a single unseal key, and a Vault with no
+  unseal shares cannot be unsealed. The loss was unrecoverable and silent. PR #93
+  documented it and three mitigations; a warning in a README is not a guard.
+
+  The existing check asserted `vault_init_capture_dir` was set and absolute — a path
+  inside the EE satisfies both, so **it passed exactly when the failure occurred**.
+  It checked the string's shape, not the destination's durability. Same class as the
+  `failed_when: false` port gate (#36), `restorecon` without `-F` (#83), and the
+  licence gate closed in #95.
+
+  New `tasks/init-capture-durability.yml`, included from `tasks/service.yml` inside
+  the `vault_initialize` block and **before** `operator init`, resolves the backing
+  filesystem with `findmnt -n -o SOURCE,FSTYPE --target` and refuses `overlay`,
+  `tmpfs` and `ramfs` — or any case where `findmnt` cannot answer. Failing after
+  initialization would leave a Vault initialized with keys nobody holds, which is
+  the outcome being prevented, so the ordering is locked by a static guard rather
+  than by task order alone.
+
+  **The gate keys on the filesystem, not on container detection.** The issue proposed
+  "containerized **and** not on a mount", but `/run/.containerenv` is podman-only and
+  `/.dockerenv` is docker-only, and an AAP container group runs the EE as a **CRI-O
+  pod where neither exists** — so that gate could have failed to fire in the one
+  environment it was built for. The markers now only word the message. Measured
+  inside a real container: an unmounted path reports `overlay` and is refused, a
+  bind-mounted path reports the backing device and `xfs` and passes.
+
+  `findmnt`'s `rc` is tested explicitly, because `failed_when: false` **defines**
+  `.failed` as False (#66) — without the `rc` test the gate would pass whenever
+  `findmnt` was missing, which is precisely when durability is unproven.
+
+  Covered by `tests/init-capture-durability-test.sh` (three runtime branches:
+  ephemeral refused, durable accepted, `findmnt` unusable refused) and
+  `tests/assert-init-capture-gate.sh` (six mutants killed: the include removed, the
+  gate moved after `operator init`, the root-token capture losing `no_log`, the
+  assert dropping the `rc` test, the assert dropping the fstype list, and the probe
+  losing `check_mode: false`). No molecule scenario reaches this code — every
+  scenario sets `vault_initialize: false` or skips `service_start`. (#94)
+
+- **`bindep.txt` was missing two hard prerequisites.** `openssl`, which
+  `tasks/preflight/san.yml` has shelled out to since #85/PR #90 — so an EE built by
+  `ansible-builder` from this manifest failed the SAN gate on a valid certificate —
+  and `util-linux`, which provides the `findmnt` the durability gate above needs on
+  the controller. (#94, #85)
+
 - **The Enterprise licence had no absent state, so a withdrawn entitlement stayed
   in force.** `tasks/configure.yml` deployed `vault.hclic` when
   `vault_license_content` was non-empty **and** the edition was Enterprise, and
