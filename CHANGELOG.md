@@ -9,6 +9,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Vault Raft HA: the role now stands a cluster up, where before it configured nodes
+  and stopped.** `README.md` documented the old behaviour accurately — *"every host
+  initializes itself — you get N independent single-node Vaults, each with its own root
+  token and key shares"* — with a **green play**. That was the production blocker.
+
+  **New `vault_cluster_members`** renders one `retry_join` stanza per peer, which is the
+  Raft join contract; HashiCorp's own example shows four stanzas, and the docs state
+  *"There can be one or more retry_join stanzas."* Entries are **bare host or IP** — the
+  template adds the scheme and port and brackets an IPv6 literal, because
+  `https://2001:db8::10:8200` does not parse. `vault_cluster_leader_addr` remains for
+  back-compat, is deprecated for HA, and is now **mutually exclusive** with the peer
+  list: it is where an HA VIP usually goes, and the VIP is client-only.
+  `/v1/sys/health` answers **501** uninitialized and **503** sealed, so a VIP
+  health-checking for the active node has **no healthy backend during bootstrap**.
+
+  **New `vault_init_host`** names the one node that runs `operator init`. Empty means
+  this host, which is the single-node case. `run_once` was rejected for this after
+  measurement: it **propagates the registered result to every host**, and under `serial`
+  it runs **once per batch** — so it is not a split-brain guard at all.
+
+  **Followers read the init register through `hostvars`**, which is what makes cluster
+  unseal possible: `operator init` runs on one node, and the shares live only in that
+  node's register. One key set exists per **cluster**, applied to each node
+  individually — *"When you use the Shamir seal with multiple nodes, you must unseal
+  each node with the required threshold of shares."* A **join wait** precedes the
+  unseal, unconditional across seal types, because a follower's turn arrives before
+  `retry_join` completes and Vault answers **400 "server is not yet initialized"**.
+
+  **Follower unseal is gated on `vault_init_unseal`, not inferred from the seal type** —
+  desired state is stated. Both `audit enable` tasks and all four capture tasks are
+  init-host-scoped: audit devices are cluster-wide, so an unscoped second node returns
+  *"path already in use"* with no `failed_when` and the rescue fails the play; and
+  unscoped capture would write the same root token and the same shares into N
+  controller directories. `Warn left sealed` now fires per node, so a node the operator
+  chose to leave sealed says so rather than being silent.
+
+  **New preflight gate `tasks/preflight/cluster.yml`**, placed beside `edition` because
+  both validate inputs and probe nothing. It rejects two simultaneous join sources, a
+  peer carrying a scheme or a port, a member list with no named init host, and an init
+  host absent from the play — that last one **fails closed**, because an absent init
+  host yields an empty register on every host and the capture, the unseal and the
+  init-capture durability gate would all skip while the play reported success.
+
+  **New `docs/runbooks/cluster-bringup.md`** carries the bring-up sequence, the custody
+  step, the encrypted-volume requirement (V-256898 CAT I, V-263600 CAT II), and a
+  failure table.
+
+  **Stated limits, not implied capability.** CI verifies **configuration presence, not
+  behaviour** — cluster formation, leader election, follower join and unseal convergence
+  are exercised by no test, by decision. There are **no day-2 cluster operations**. And
+  **a re-run does not unseal**: initialization is skipped on an initialized cluster, so
+  a Shamir cluster that reboots with the default `vault_auto_unseal_enabled: false`
+  comes back sealed, stays sealed, and the play reports success. Every HA claim surface
+  moved together — `README.md` (maturity banner, HA example, variable table, Known
+  Limitations), `meta/main.yml` and `meta/argument_specs.yml`, which feeds `ansible-doc`
+  and AAP surveys.
+
+  Covered by `tests/render-retry-join-test.sh` (eight render cases, IPv6 bracketing
+  mutation-verified) and `tests/assert-ha-init-orchestration.sh` (eight locked
+  properties, **nine mutants killed**), plus seven behavioural cases in
+  `molecule/preflight/verify.yml`. Three parallel guard surfaces moved with the new
+  gate: both preflight locks' gate lists and the `ALLOW` set in
+  `assert-facts-via-ansible-facts.sh`. (#44)
+
 - **Vault Enterprise license deployment.** `vault_edition` accepted Enterprise
   builds and `tasks/install.yml` installed the RPM, but the role had no license
   handling at all — no `vault.hclic`, no `license_path`, and no acknowledgement

@@ -16,8 +16,10 @@ argument_specs:
         Installs HashiCorp Vault from RPM, configures the server with
         STIG-compliant settings, and manages the systemd service.
       - >-
-        Supports single-node and HA (3/5-node) Raft clusters in airgap
-        or internet-connected environments.
+        Supports single-node and multi-node Raft clusters in airgap or
+        internet-connected environments. Cluster configuration is verified by CI;
+        cluster formation is not behaviour-tested, and day-2 cluster operations
+        are out of scope.
       - >-
         Requires ansible-core >= 2.21.0, Python >= 3.12 on the controller, and
         the hvac Python library. That is the mpe-ee-rhel9 runtime and the pair CI
