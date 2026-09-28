@@ -116,7 +116,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   consumer who happened to pass `https://host` or `host:8200` previously got a silently
   malformed `leader_api_addr` and a green play; they now get a loud preflight failure
   naming the value. That is the intended trade: the previous behaviour was a broken
-  cluster reported as success.
+  cluster reported as success. **It also inherits the peer gate's deliberate rejection of
+  an all-numeric name** such as `123` — legal DNS syntax, but here it is a mistyped
+  address — so a consumer using one must rename the host or supply its IP.
 
   **`retry_join` has ONE definition.** The legacy `vault_cluster_leader_addr` scalar
   rendered its own copy of the stanza, so it silently missed **both** the IPv6 bracketing
@@ -139,10 +141,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `| lower == 'true'` then read `1` and `"yes"` as false, although
   `meta/argument_specs.yml` types the variable `bool` and every task-side `| bool` reads
   them as true — so mTLS was on everywhere except the rendered files. It is now
-  `(… | default(false) | string | lower) in ['true', 'yes', '1', 'on', 't', 'y']`, which is
-  Jinja-builtin only, because these templates must render under plain Jinja with no
-  Ansible filters. `tests/render-mtls-env-test.sh` renders all three templates across ten
-  boolean forms each and checks each pattern is non-vacuous — its own first version matched
+  `['true', 'yes', 'on', '1']` **plus a numeric arm**, matching what ansible-core 2.21.4's
+  `bool` filter actually accepts — measured across 20 forms with zero disagreements,
+  including the float `1.0`, which `| bool` reads as **true** via its `value == 1` fallback
+  while every string comparison sees `"1.0"`. Argument-spec validation does **not** write a
+  coerced value back, so that float genuinely reaches the template. The predicate is
+  Jinja-builtin only in `vault.hcl.j2`, which alone must render under plain Jinja;
+  `vault.env.j2` and `vault-unseal.service.j2` are always Ansible-rendered and simply use
+  `| bool`, which agrees by construction. `tests/render-mtls-env-test.sh` renders all three
+  templates across sixteen boolean forms each and checks each pattern is non-vacuous — its own first version matched
   the listener's `tls_require_and_verify_client_cert` line instead of the `retry_join`
   fields, so every case had been passing or failing for the wrong reason.
 

@@ -260,6 +260,9 @@ argument_specs:
       vault_cluster_leader_addr:
         description:
           - DEPRECATED for HA. Renders a single retry_join stanza from one scalar,
+          - Same bare host or IP shape as vault_cluster_members, validated by the same
+            preflight gate - no scheme, no port, no CIDR prefix, and IPv6 written bare.
+            An all-numeric name such as 123 is rejected as a mistyped address.
             which is not the Raft join contract - Raft expects one stanza per peer.
             Use vault_cluster_members.
           - Mutually exclusive with vault_cluster_members, asserted in preflight.

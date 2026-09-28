@@ -133,8 +133,13 @@ for js in '{"vault_cluster_members": ["a.mpe.mil","fd00::9"], "vault_cluster_lea
           '{"vault_cluster_members": ["a.mpe.mil"], "vault_cluster_leader_addr": "", "vault_tls_require_client_cert": false}' \
           '{"vault_cluster_members": [], "vault_cluster_leader_addr": "vip.mpe.mil", "vault_tls_require_client_cert": true}' \
           '{"vault_cluster_members": [], "vault_cluster_leader_addr": "fd00::99", "vault_tls_require_client_cert": true}'; do
-  render "$js" >/dev/null
-  bad="$(structure)"
+  if ! render "$js" >/dev/null; then
+    echo "FAIL: render failed for $js"; fail=1; continue
+  fi
+  # awk's own failure must not read as "no malformed lines".
+  if ! bad="$(structure)"; then
+    echo "FAIL: the structure check itself failed for $js"; fail=1; continue
+  fi
   if [ -n "$bad" ]; then
     echo "FAIL: malformed HCL for $js"; printf '%s\n' "$bad"; fail=1
   else

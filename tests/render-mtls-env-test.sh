@@ -118,6 +118,15 @@ for tpl in vault.hcl.j2 vault-unseal.service.j2 vault.env.j2; do
   check "$tpl" '0'       no  'integer 0'
   check "$tpl" '"t"'     no  'string "t"     (a superset read this TRUE; | bool says false)'
   check "$tpl" '"y"'     no  'string "y"     (a superset read this TRUE; | bool says false)'
+  # The FLOAT. `1.0 | bool` is True on core 2.21.4 -- the filter falls back to
+  # `value == 1` -- while any string comparison sees "1.0". Argument-spec validation
+  # does NOT write a coerced value back (measured: inside the role it is still a
+  # float), so this really reaches the template. The STRING "1.0" is False to `| bool`
+  # and must stay false here, which is why both are in the table.
+  check "$tpl" '1.0'     yes 'float 1.0      (| bool is TRUE via value == 1)'
+  check "$tpl" '0.0'     no  'float 0.0'
+  check "$tpl" '"1.0"'   no  'string "1.0"   (| bool is FALSE, unlike the float)'
+  check "$tpl" '1.5'     no  'float 1.5'
 done
 
 # The LISTENER value, not just the retry_join fields. `| lower` on the string "yes"
@@ -127,8 +136,9 @@ listener () {  # $1=json value -> the rendered listener line's value
   render vault.hcl.j2 "{\"vault_tls_require_client_cert\": $1}" || { echo RENDER_FAILED; return; }
   sed -n 's/^  tls_require_and_verify_client_cert = \(.*\)$/\1/p' "$WORK/out"
 }
-for pair in 'true:true' '"true":true' '"yes":true' '1:true' '"on":true' \
-            'false:false' '"false":false' '"no":false' '0:false' '"t":false' '"y":false'; do
+for pair in 'true:true' '"true":true' '"yes":true' '1:true' '"on":true' '1.0:true' \
+            'false:false' '"false":false' '"no":false' '0:false' '"t":false' '"y":false' \
+            '0.0:false' '"1.0":false' '1.5:false'; do
   val="${pair%:*}"; want="${pair##*:}"
   got="$(listener "$val")"
   if [ "$got" = "$want" ]; then

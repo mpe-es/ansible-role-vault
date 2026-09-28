@@ -105,7 +105,7 @@
   ansible.builtin.debug:
     msg: >-
       Vault initialization will capture the root token and all unseal/recovery
-      shares to {{ vault_init_capture_dir }}/{{ inventory_hostname }} on the
+      shares to {{ __vault_capture_host_dir }} on the
       controller, backed by {{ __vault_capture_source }}
       ({{ __vault_capture_fstype }}).
   vars:

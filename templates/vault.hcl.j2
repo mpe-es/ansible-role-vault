@@ -13,7 +13,8 @@
     filter accepts, MEASURED -- true/yes/on/1, with "t"/"y" FALSE there, so they must be
     false here or the rendered config disagrees with every task-side cast. #}
 {%- macro hcl_bool(v) -%}
-{{ 'true' if (v | default(false) | string | lower) in ['true', 'yes', 'on', '1'] else 'false' }}
+{{ 'true' if ((v | default(false) | string | lower) in ['true', 'yes', 'on', '1']
+              or v | default(false) == 1) else 'false' }}
 {%- endmacro -%}
 {#- ONE retry_join definition, used by the peer loop AND by the legacy scalar. They were
     separate copies, and the legacy one silently missed BOTH the IPv6 bracketing and the
@@ -33,11 +34,11 @@
     `bool` filter actually accepts -- MEASURED: true/yes/on/1 are true, and "t"/"y" are
     FALSE with a deprecation warning, so including them here would make the rendered
     config disagree with every task-side `| bool`. #}
-{%- set __vault_mtls = (vault_tls_require_client_cert | default(false) | string | lower) in ['true', 'yes', 'on', '1'] %}
+{%- set __vault_mtls = hcl_bool(vault_tls_require_client_cert) == 'true' %}
 {#- Same class, and worse: bare Jinja truthiness on the HSM flag would render a pkcs11
     seal stanza onto a node with no HSM whenever the value arrived as the string
     "false". #}
-{%- set __vault_hsm = (vault_hsm_enabled | default(false) | string | lower) in ['true', 'yes', 'on', '1'] %}
+{%- set __vault_hsm = hcl_bool(vault_hsm_enabled) == 'true' %}
 ###############################################################################
 # Server Parameters
 ###############################################################################
