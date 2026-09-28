@@ -449,6 +449,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   losing `check_mode: false`). No molecule scenario reaches this code — every
   scenario sets `vault_initialize: false` or skips `service_start`. (#94)
 
+- **Three behavioral tests had never been run by CI.** `ci.yml` globbed
+  `tests/assert-*.sh` — deliberately, with a comment recording that naming guards
+  individually had already caused a new guard to go unrun — but the behavioral tests
+  kept the very pattern that comment describes as the defect. Only
+  `vault-unseal-test.sh` and `vault-audit-backup-test.sh` were named, so
+  `render-hsm-pin-test.sh` (#41 — proves the HSM PIN never reaches `vault.hcl`, and
+  therefore security-relevant), `license-state-table-test.sh` (#42/#95 — the licence
+  desired-state truth table, **cited as evidence in #95 while CI never executed it**)
+  and this PR's `init-capture-durability-test.sh` ran only on developer machines.
+
+  Now globbed as `tests/*-test.sh` with the same vacuous-pass guard the static
+  lineage uses: the step fails if the glob matches nothing. All five pass. Found by
+  checking whether CI actually ran the new test rather than reading 23/23 as an
+  answer to that question. (#94, #41, #95)
+
 - **The AAP mount procedure was one sentence, and an operator could not act on it.**
   The #93 mitigation list said only *"Container group — a custom pod spec declaring a
   volume mounted at `vault_init_capture_dir`"*. Rewritten against the **AAP 2.6**

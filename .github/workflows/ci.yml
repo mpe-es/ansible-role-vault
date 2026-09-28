@@ -112,11 +112,35 @@ jobs:
       - name: Run shellcheck on shipped and test scripts
         run: shellcheck files/*.sh tests/*.sh tests/local-preflight-harness/{getent,command}
 
-      - name: Run vault-unseal behavioral tests
-        run: bash tests/vault-unseal-test.sh
-
-      - name: Run vault-audit-backup behavioral tests
-        run: bash tests/vault-audit-backup-test.sh
+      # Globbed for the SAME reason the static guards below are, and fixing the
+      # same defect one lineage later. Naming these individually meant three
+      # behavioral tests were never run by CI at all:
+      #   render-hsm-pin-test.sh       (#41) -- proves the HSM PIN never reaches
+      #                                        vault.hcl. Security-relevant, and
+      #                                        it had only ever run on developer
+      #                                        machines.
+      #   license-state-table-test.sh  (#42/#95) -- the licence desired-state
+      #                                        truth table, cited as evidence in
+      #                                        #95 while CI never executed it.
+      #   init-capture-durability-test.sh (#94)
+      # Anything matching tests/*-test.sh is a behavioral test, and the loop
+      # fails if it matches nothing.
+      - name: Run behavioral tests (all of them)
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          suites=(tests/*-test.sh)
+          if [ ${#suites[@]} -eq 0 ]; then
+            echo "no behavioral tests found under tests/ -- this step would pass vacuously"
+            exit 1
+          fi
+          rc=0
+          for t in "${suites[@]}"; do
+            echo "::group::$t"
+            bash "$t" || rc=1
+            echo "::endgroup::"
+          done
+          exit "$rc"
 
       # Globbed deliberately. Naming each guard meant a NEW guard was not run
       # by CI at all: assert-preflight-check-mode.sh passed locally while
