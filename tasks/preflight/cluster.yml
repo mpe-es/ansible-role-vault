@@ -23,8 +23,11 @@
 - name: "Preflight | cluster | the peer list is a list"
   ansible.builtin.assert:
     that:
-      - vault_cluster_members is not string
-      - vault_cluster_members is sequence
+      # `is sequence` alone passes for a MAPPING, which then dies in core's loop
+      # with the unhelpful message this assert exists to replace.
+      # Bare 'list' is safe: measured on core 2.21.4 and 2.19.6, a literal, a
+      # templated expression, groups[...], | split() and -e JSON all report 'list'.
+      - vault_cluster_members | type_debug == 'list'
     fail_msg: >-
       vault_cluster_members is a {{ vault_cluster_members | type_debug }}, not a
       list. A string would be iterated per character, rendering one retry_join

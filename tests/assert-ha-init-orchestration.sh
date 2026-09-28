@@ -32,6 +32,9 @@ block = next((t for t in tasks if t.get("name") == "Initialize Vault" and "block
 if block is None:
     sys.exit("FAIL: no 'Initialize Vault' block in tasks/service.yml")
 inner = block["block"]
+# The rescue runs on the failure path, where printing the register for diagnosis is
+# the obvious thing to reach for. Lock 8a sweeps it too. Empty today.
+rescue = block.get("rescue") or []
 
 def find(pred):
     return [(i, t) for i, t in enumerate(inner) if pred(t)]
@@ -162,7 +165,52 @@ for m, label in ((lead, "leader"), (foll, "follower")):
         fail.append(f"the {label} unseal is not gated on vault_init_unseal. Desired state is "
                     f"stated, not inferred from the seal type.")
 
-# 8. seal status carries no key material and must NOT be no_log
+# 8a. POSITIVE no_log lock. Any task whose gate, data or module args touch the root
+# token or the key shares must carry no_log: true. Measured: without it the shares
+# appear in the job output AND under --diff, and on this role that output is an AAP
+# job log. The repo already asserts this for vault.hclic -- a licence file, far less
+# sensitive -- at tests/assert-configure-gates-the-render.sh:81-86; the key-material
+# tasks were never covered.
+# Data expressions only. A task that merely GATES on the register's presence
+# (`stdout | length > 0`) renders nothing and needs no no_log -- Warn left sealed is
+# the case that distinguishes the two.
+# __vault_init_data is how tokens.env.j2 receives the shares -- the literal key
+# names never appear in that task, only in the template it renders.
+# The WHOLE task, not datastr()'s module allow-list. That list names template, copy
+# and uri; it misses a `debug: msg`, a `command: cmd`, an assert `fail_msg` and a
+# `set_fact` -- all four module types already appear in this block, and a debug added
+# during a bring-up incident is the likeliest of them. Measured: this selects the same
+# nine tasks the allow-list did, with no false positives, because a task that only
+# GATES on the register (Warn left sealed) names no key at all.
+# datastr() is left alone: lock 4 asserts the ABSENCE of a register name, where
+# widening the haystack would weaken it.
+def wholetask(t):
+    return str({k: v for k, v in t.items() if k != "name"})
+
+KEY_MATERIAL = ("root_token", "unseal_keys_b64", "recovery_keys_b64", "__vault_init_data")
+for t in inner + rescue:
+    name = str(t.get("name", ""))
+    renders_material = any(k in wholetask(t) for k in KEY_MATERIAL)
+    # `operator init` renders nothing but its REGISTERED OUTPUT is the token and the
+    # shares, so it is the one task that must be no_log for what it returns.
+    registers_material = t.get("register") == "__vault_init_output"
+    if not (renders_material or registers_material):
+        continue
+    if t.get("no_log") is not True:
+        why = ("its registered output is the root token and every share"
+               if registers_material else "it renders key material")
+        fail.append(f"{name!r} has no `no_log: true` and {why}. Measured: without it the shares "
+                    f"appear in the job output and under --diff, and on this role that output is "
+                    f"an AAP job log.")
+
+# WHAT THIS LOCK LEAVES TO RUNTIME, so a reader does not assume wider coverage:
+# swapping /v1/sys/unseal for /v1/sys/seal, truncating the threshold slice, dropping
+# the HSM exclusion from the leader unseal, and pointing the join wait at the wrong
+# endpoint all fail LOUDLY on a real run -- via `Assert the unseal succeeded`, a 400 on
+# a null key, or a 503 that outlasts the retries. None yields a green play over a wrong
+# cluster, which is why they are not pinned statically here.
+
+# 8b. seal status carries no key material and must NOT be no_log
 for frag in ("Verify Vault is unsealed", "Assert the unseal succeeded"):
     t = one(frag)
     if t is None:
@@ -177,6 +225,6 @@ if fail:
         print(f"  - {f}")
     sys.exit(1)
 print("ok: init is host-scoped; tokens.env and unseal read the shared register; capture and "
-      "audit do not;\n    the join wait precedes the unseal; the unseal honours vault_init_unseal; "
-      "seal status stays visible")
+      "audit do not;\n    leader unseal precedes the wait precedes the follower unseal; both honour "
+      "vault_init_unseal;\n    every key-material task is no_log; seal status stays visible")
 PYEOF

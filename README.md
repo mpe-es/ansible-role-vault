@@ -5,9 +5,11 @@ in airgap or internet-connected environments.
 
 > **Maturity.** Single-node deployments are the supported, CI-exercised path.
 > **Multi-node Raft HA is implemented but not behaviour-tested** — the role renders
-> per-peer `retry_join`, initializes exactly one node, waits for joins and converges
-> the cluster to the sealed state you asked for, while **CI verifies configuration
-> presence only**: no test exercises cluster formation. Day-2 cluster operations are
+> per-peer `retry_join`, initializes exactly one node, and converges the cluster to the
+> sealed state you asked for — waiting for each follower to join on the Shamir path,
+> where the role must unseal them; under an HSM seal every node unseals itself and the
+> role waits on nothing. **CI verifies configuration presence only**: no test exercises
+> cluster formation. Day-2 cluster operations are
 > out of scope. Read [Known Limitations](#known-limitations) and
 > [`docs/runbooks/cluster-bringup.md`](docs/runbooks/cluster-bringup.md) before
 > planning a cluster.
@@ -895,9 +897,9 @@ fix, only a full role run did.
 
 > **Set `vault_cluster_members` and `vault_init_host`, not
 > `vault_cluster_leader_addr`.** The scalar renders one stanza, which is not the Raft
-> join contract, and preflight rejects the two together. The HA VIP belongs on client
-> traffic: `/v1/sys/health` answers `501` uninitialized and `503` sealed, so a VIP
-> health-checking the active node has no backend during bootstrap.
+> join contract, and preflight rejects the two together. **The HA VIP is for client
+> traffic, not for joining** — an operator ruling. (`/v1/sys/health`'s status codes are
+> overridable, so this is a decision rather than an impossibility.)
 >
 > Cluster formation is **not** behaviour-tested. Follow
 > [`docs/runbooks/cluster-bringup.md`](docs/runbooks/cluster-bringup.md), which

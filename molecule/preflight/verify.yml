@@ -1565,6 +1565,47 @@
         vault_cluster_members: ["{{ inventory_hostname }}", vault-02.mpe.mil, "2001:db8::10"]
         vault_init_host: "{{ inventory_hostname }}"
 
+    - name: "FIRES - a peer list given as a string"
+      block:
+        - name: Run cluster with a string where a list belongs
+          ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/cluster.yml
+          vars:
+            vault_cluster_members: "vault-el,vault-02.mpe.mil"
+            vault_init_host: "{{ inventory_hostname }}"
+        - name: A non-list peer collection should not have passed
+          ansible.builtin.fail:
+            msg: "the gate accepted a peer collection of the wrong data type"
+      rescue:
+        - name: Assert the message names the type and the per-character render
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg is search('not a')
+              - ansible_failed_result.msg is search('per letter')
+            fail_msg: "wrong cause: {{ ansible_failed_result.msg | default('') }}"
+
+    - name: "FIRES - a peer list given as a mapping"
+      block:
+        - name: Run cluster with a dict where a list belongs
+          ansible.builtin.include_role:
+            name: ansible-role-vault
+            tasks_from: preflight/cluster.yml
+          vars:
+            vault_cluster_members:
+              vault-el: 1
+              vault-02.mpe.mil: 2
+            vault_init_host: "{{ inventory_hostname }}"
+        - name: A mapping peer collection should not have passed
+          ansible.builtin.fail:
+            msg: "the gate accepted a keyed peer collection"
+      rescue:
+        - name: Assert the mapping is named as the wrong type
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg is search('is a dict')
+            fail_msg: "wrong cause: {{ ansible_failed_result.msg | default('') }}"
+
     - name: "FIRES - both a peer list and a leader address"
       block:
         - name: Run cluster with both join sources set

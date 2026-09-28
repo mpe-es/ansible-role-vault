@@ -78,6 +78,16 @@ check "IPv4 peer is not bracketed"               '{"vault_cluster_members": ["10
 check "IPv6 peer IS bracketed"                   '{"vault_cluster_members": ["2001:db8::10"], "vault_cluster_leader_addr": ""}' 1 'https://\[2001:db8::10\]:8200'
 check "mixed v4 and v6 -> two stanzas"           '{"vault_cluster_members": ["10.1.1.5","2001:db8::10"], "vault_cluster_leader_addr": ""}' 2
 check "legacy leader address alone still works"  '{"vault_cluster_members": [], "vault_cluster_leader_addr": "vault-vip.mpe.mil"}' 1 'vault-vip.mpe.mil:8200'
+# The CA pin is part of the join contract the README and CHANGELOG describe, and
+# counting leader_api_addr alone does not notice its removal.
+ca_count () { grep -c 'leader_ca_cert_file' "$WORK/out.hcl" || true; }
+render '{"vault_cluster_members": ["v1.mpe.mil","v2.mpe.mil","v3.mpe.mil"], "vault_cluster_leader_addr": ""}' >/dev/null
+if [ "$(ca_count)" = "3" ]; then
+  echo "ok: every stanza pins leader_ca_cert_file"
+else
+  echo "FAIL: $(ca_count) of 3 stanzas pin leader_ca_cert_file"; fail=1
+fi
+
 check "five peers -> five stanzas"               '{"vault_cluster_members": ["v1","v2","v3","v4","v5"], "vault_cluster_leader_addr": ""}' 5
 
 exit "$fail"

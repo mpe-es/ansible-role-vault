@@ -18,8 +18,15 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 LOCK="$ROOT/tests/assert-ha-init-orchestration.sh"
-SRC="$ROOT/tasks/service.yml"
+# Mutate a COPY of the tree, never the tracked file. An in-place harness whose trap
+# deletes its backup leaves tasks/service.yml corrupted on any interrupt, and this
+# runs in CI. assert-ha-init-orchestration.sh accepts a root argument for exactly
+# this, as the four sibling *-mutations.sh harnesses do.
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
+SANDBOX="$WORK/tree"
+mkdir -p "$SANDBOX"
+cp -a "$ROOT/tasks" "$ROOT/templates" "$ROOT/defaults" "$ROOT/vars" "$SANDBOX/"
+SRC="$SANDBOX/tasks/service.yml"
 cp "$SRC" "$WORK/service.yml.orig"
 killed=0; survived=0; stale=0
 
@@ -41,7 +48,7 @@ run () {  # $1=label  $2=python body
     echo "STALE ANCHOR: $1 -- the mutation applied nothing, so a green lock proves nothing"
     stale=$((stale + 1)); cp "$WORK/service.yml.orig" "$SRC"; return
   fi
-  if bash "$LOCK" >/dev/null 2>&1; then
+  if bash "$LOCK" "$SANDBOX" >/dev/null 2>&1; then
     echo "SURVIVED: $1"; survived=$((survived + 1))
   else
     echo "killed:   $1"; killed=$((killed + 1))
@@ -91,8 +98,27 @@ run "seal-status verify and its assert are deleted" \
 run "validity assert moved after the durability include" \
   "i = s.index('    # State-free, and ahead of the durability include'); j = s.index('    - name: Assert the initialization capture destination is durable'); k = s.index('    - name: Validate key shares'); s = s[:i] + s[j:k] + s[i:j] + s[k:]"
 
+# The highest-value regression on this role: key material into an AAP job log.
+run "operator init loses no_log" \
+  "i = s.index('name: Run vault operator init'); j = s.index('name: Store unseal shares'); seg = s[i:j].replace('      no_log: true\n', ''); s = s[:i] + seg + s[j:]"
+
+run "tokens.env loses no_log" \
+  "i = s.index('name: Store unseal shares'); j = s.index('name: Create controller capture directory'); seg = s[i:j].replace('      no_log: true\n', ''); s = s[:i] + seg + s[j:]"
+
+run "leader unseal loses no_log" \
+  "i = s.index('name: Unseal the initialization host'); j = s.index('name: Wait for this node'); seg = s[i:j].replace('      no_log: true', ''); s = s[:i] + seg + s[j:]"
+
+run "follower unseal loses no_log" \
+  "i = s.index('name: Unseal the remaining cluster nodes'); j = s.index('name: Verify Vault is unsealed'); seg = s[i:j].replace('      no_log: true\n', ''); s = s[:i] + seg + s[j:]"
+
+run "capture root token loses no_log" \
+  "i = s.index('name: Capture root token'); j = s.index('name: Capture Shamir unseal shares'); seg = s[i:j].replace('      no_log: true\n', ''); s = s[:i] + seg + s[j:]"
+
+run "audit enable loses no_log" \
+  "i = s.index('name: Enable file audit device'); j = s.index('name: Enable syslog audit device'); seg = s[i:j].replace('      no_log: true\n', ''); s = s[:i] + seg + s[j:]"
+
 cp "$WORK/service.yml.orig" "$SRC"
-if ! bash "$LOCK" >/dev/null 2>&1; then
+if ! bash "$LOCK" "$ROOT" >/dev/null 2>&1; then
   echo "FAIL: the lock does not pass on the real tree"; exit 1
 fi
 echo "-----"

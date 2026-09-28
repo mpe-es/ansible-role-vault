@@ -7,8 +7,10 @@ Executable without reading the issue. Every manual step is stated.
 ## What the role does and does not do
 
 **Does:** renders one `retry_join` stanza per peer, runs `operator init` on exactly
-one node, waits for each other node to join, unseals every node when asked to,
-captures the key material on the controller, and enables the audit devices once.
+one node, unseals that node, waits for each other node to join **on the Shamir path**,
+unseals them when asked to, captures the key material on the controller, and enables
+the audit devices once. Under an HSM seal each node unseals itself, so the role
+performs no wait and gathers no join evidence.
 
 **Does not:** any day-2 operation. No autopilot tuning, no peer add or remove, no
 cluster snapshot restore, no quorum-loss recovery, **and no re-unsealing.** A role
@@ -26,7 +28,7 @@ are **not** exercised by any test.
 | Peers | Every entry in `vault_cluster_members` must be a **SAN on that peer's listener certificate**, and all peers must chain to the CA in `vault_tls_ca_file`. A name that is not a SAN fails the join with `x509: certificate is valid for …, not …` **after** the role has configured the host. |
 | Peer form | Bare host or IP. No scheme, no port. Preflight rejects `https://host` and `host:8200`. |
 | Init host | `vault_init_host` must name a host in the play. Preflight fails closed otherwise. |
-| VIP | The HA VIP is for **client traffic**. Do not put it in `vault_cluster_members`: `/v1/sys/health` answers `501` uninitialized and `503` sealed, so a VIP that health-checks for the active node has no healthy backend during bootstrap. |
+| VIP | The HA VIP is for **client traffic**, not for joining — an operator ruling. Do not put it in `vault_cluster_members`; preflight rejects it alongside the peer list. |
 | HSM clusters | Every node must reach the **same** HSM partition with the same `vault_hsm_key_label`. Keep `vault_hsm_generate_key: false` and pre-provision the key out of band — that variable is role-wide with no per-node semantics. |
 | Capture volume | **`vault_init_capture_dir` must be on encrypted, persistent storage.** V-256898 / APAS-AT-000012 (CAT I) requires the Automation Controller filesystem on a LUKS volume with FIPS ciphers; V-263600 (CAT II) requires protected storage for cryptographic keys. The role refuses an ephemeral destination but cannot tell whether the volume is encrypted. |
 
@@ -79,8 +81,10 @@ Each node keeps its own `vault_raft_node_id`, `vault_api_addr` and
    ```
    vault operator raft list-peers
    ```
-   Three voters, one leader. If a node is missing, its join failed — check the
-   certificate SAN first.
+   Three peers, one leader. **A freshly joined node shows `Voter false` until
+   autopilot's stabilization window elapses** — that is normal, not a broken join.
+   If a node is *missing* from the list, its join failed; check the certificate SAN
+   first.
 
 5. **Verify seal state per node**, against each node directly rather than the VIP:
    ```
