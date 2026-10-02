@@ -116,10 +116,31 @@ jobs:
       - name: Run ansible-lint
         run: ansible-lint
 
-      # Widened per the #46-era comment now that both script lineages are
-      # in tree; full consolidation + version pinning tracked in issue #47
-      - name: Run shellcheck on shipped and test scripts
-        run: shellcheck files/*.sh tests/*.sh tests/local-preflight-harness/{getent,command}
+      - name: Install shellcheck (pinned)
+        env:
+          SHELLCHECK_VERSION: v0.11.0
+          SHELLCHECK_SHA256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
+        run: |
+          set -euo pipefail
+          tarball="shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+          curl -fsSL -o "$RUNNER_TEMP/$tarball" \
+            "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/${tarball}"
+          echo "${SHELLCHECK_SHA256}  $RUNNER_TEMP/$tarball" | sha256sum -c -
+          tar -xJf "$RUNNER_TEMP/$tarball" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/shellcheck-${SHELLCHECK_VERSION}" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/shellcheck-${SHELLCHECK_VERSION}/shellcheck" --version \
+            | grep -qx "version: ${SHELLCHECK_VERSION#v}"
+
+      - name: Run shellcheck on every shell script in the repository
+        run: |
+          set -euo pipefail
+          mapfile -t scripts < <(bash tests/lib/list-shell-scripts.sh)
+          if [ ${#scripts[@]} -eq 0 ]; then
+            echo "no shell scripts discovered -- this step would pass vacuously"
+            exit 1
+          fi
+          shellcheck --version | sed -n 2p
+          shellcheck "${scripts[@]}"
 
       # Globbed for the SAME reason the static guards below are, and fixing the
       # same defect one lineage later. Naming these individually meant three
