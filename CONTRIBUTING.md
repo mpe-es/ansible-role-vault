@@ -68,9 +68,13 @@ same two files**, which is what keeps your local toolchain and CI's identical �
 `requirements-dev.in`, `.github/workflows/ci.yml` and `.pre-commit-config.yaml`,
 and those three move together or not at all.
 
-> **NOTE**: `shellcheck` is a **system** package, not a Python distribution.
-> Install it from your distribution (`dnf install ShellCheck`) — it is declared
-> in `bindep.txt`, not in either Python manifest.
+> **NOTE**: `shellcheck` is not a Python distribution, and it is not in
+> `bindep.txt` either — that file feeds the Execution Environment build, and
+> shellcheck is a development tool, not a runtime dependency. CI installs
+> **v0.11.0** from the upstream release, verified against its SHA-256 digest
+> (`.github/workflows/ci.yml`, "Install shellcheck (pinned)"). Install the same
+> version locally: versions disagree on findings (v0.11.0 does not report SC2015
+> where older builds do), so a pass on a different version is not CI evidence.
 
 Choose **one** of the following installation methods:
 
@@ -156,11 +160,12 @@ The following hooks are configured:
 ### Shell Script Testing
 
 `files/vault-audit-backup.sh` has a behavioral test harness at
-`tests/vault-audit-backup-test.sh`. The CI lint job runs shellcheck and
-the harness; run them locally before submitting:
+`tests/vault-audit-backup-test.sh`. The CI lint job runs shellcheck over
+every tracked shell script, as listed by `tests/lib/list-shell-scripts.sh`, and
+runs the harness; run them locally before submitting:
 
 ```bash
-shellcheck files/vault-audit-backup.sh tests/vault-audit-backup-test.sh
+bash tests/lib/list-shell-scripts.sh | xargs shellcheck
 bash tests/vault-audit-backup-test.sh
 ```
 
