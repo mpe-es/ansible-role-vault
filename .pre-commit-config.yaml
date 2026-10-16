@@ -43,7 +43,7 @@ repos:
   # it, because the lint job runs ansible-lint from the lock while this hook
   # resolves its own from rev. Green CI, broken commit gate.
   - repo: https://github.com/ansible/ansible-lint
-    rev: v26.8.0
+    rev: v26.9.0
     hooks:
       - id: ansible-lint
         args: []

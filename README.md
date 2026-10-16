@@ -177,7 +177,7 @@ no manual step is required.
 
 ### Ansible
 
-- ansible-core >= **2.21.0** — CI pins **2.21.4**, the version `mpe-ee-rhel9`
+- ansible-core >= **2.21.0** — CI pins **2.21.5**, the version `mpe-ee-rhel9`
   runs. `community.hashi_vault` requires only 2.17, so this floor is CI's, not
   the collection's.
 - Python >= **3.12** on the CONTROLLER — the version CI installs and tests, and
@@ -192,7 +192,7 @@ no manual step is required.
   it produces no error, no warning and no failed job.
 - **Under AAP the controller is the execution environment**, so these are
   properties of the EE rather than of any host. `mpe-ee-rhel9` provides
-  ansible-core 2.21.4 on Python 3.12.13 — **the pair CI now tests**. The stock
+  ansible-core 2.21.5 on Python 3.12.13 — **the pair CI now tests**. The stock
   supported EE provides 2.16.19, which is *below* the floor above. See the AAP
   section.
 - **Pipelining must be enabled** on any target where fapolicyd is enforcing —
@@ -312,7 +312,7 @@ on a built AAP 2.6 image:
 
 | Requirement | Role declares | MPE EE provides |
 |---|---|---|
-| `ansible-core` | >= 2.21.0 | **2.21.4** |
+| `ansible-core` | >= 2.21.0 | **2.21.5** |
 | Python (controller) | >= 3.12 | **3.12.13** |
 | `ansible.posix` | >= 1.6.0 | 2.1.0 |
 | `ansible.utils` | >= 6.0.0 | 6.0.3 |
@@ -330,7 +330,7 @@ root token and every unseal share without an explicit mount.
 
 **CI now tests the core the EE runs.** Since
 [#91](https://github.com/mpe-es/ansible-role-vault/issues/91), CI verifies Python
-3.12 / ansible-core **2.21.4** — the MPE EE's core exactly, on 3.12 against its
+3.12 / ansible-core **2.21.5** — the MPE EE's core exactly, on 3.12 against its
 3.12.13. Every "verified" claim in this repository is measured on that pair.
 
 **One gap remains:** CI tests a single pair, so a *different* EE — the stock
@@ -568,7 +568,7 @@ CI now matches `mpe-ee-rhel9` (#91). The **default supported EE** still does not
 | | Default supported EE (2.7) | `mpe-ee-rhel9` | What CI verifies |
 |---|---|---|---|
 | Python | **3.12.14** | 3.12.13 | 3.12 |
-| ansible-core | **2.16.19** | 2.21.4 | **2.21.4** |
+| ansible-core | **2.16.19** | 2.21.5 | **2.21.5** |
 
 `meta/main.yml` declares `min_ansible_version: '2.21'` and this README's Ansible
 section states `>= 2.21.0`. The default EE is **below** that floor. **`min_ansible_version`

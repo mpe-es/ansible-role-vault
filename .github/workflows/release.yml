@@ -43,11 +43,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install Ansible
-        run: |
-          python -m pip install --upgrade pip
-          # Consume the same hash-pinned Ansible Core toolchain as CI and
-          # contributors; do not resolve an unrelated latest release here.
-          pip install --require-hashes -r requirements-dev.txt
+        run: pip install --require-hashes -r requirements-release.txt
 
       - name: Extract version from tag
         id: version

@@ -53,20 +53,23 @@ python --version    # Should show Python 3.12.x
 
 #### Installing Development Dependencies
 
-This repository keeps **two** pinned manifests, and you need both. They are not
+This repository keeps **three** pinned manifests. Contributors need the first
+two; the release workflow uses the third. They are not
 interchangeable:
 
 | File | Contains | Who needs it |
 |------|----------|--------------|
 | `requirements.txt` | The **runtime** dependency chain only — `hvac` (for `community.hashi_vault` on the target) and `netaddr` (for `ansible.utils.ipaddr` on the controller) | The role at run time |
 | `requirements-dev.txt` | The **development toolchain** — `ansible-core`, `ansible-lint`, `yamllint`, `molecule`, `molecule-plugins[podman]`, `pre-commit` | You, to run the gates below |
+| `requirements-release.txt` | The **minimal release toolchain** — `ansible-core` and only its closure | The Galaxy publication job while it holds `GALAXY_API_KEY` |
 
 Both are compiled with `pip-compile --generate-hashes` from their `.in` source
 files, so installs are reproducible and hash-verified. **CI installs from the
 same two files**, which is what keeps your local toolchain and CI's identical —
-`ansible-core` in particular is pinned to one version across
-`requirements-dev.in`, `.github/workflows/ci.yml` and `.pre-commit-config.yaml`,
-and those three move together or not at all.
+`ansible-core` in particular is pinned to one version across the development
+and release source/lock pairs, `.github/workflows/ci.yml`,
+`.github/workflows/release.yml`, and `.pre-commit-config.yaml`.
+`tests/assert-core-pin-coupling.sh` makes a partial update fail closed.
 
 > **NOTE**: `shellcheck` is not a Python distribution, and it is not in
 > `bindep.txt` either — that file feeds the Execution Environment build, and

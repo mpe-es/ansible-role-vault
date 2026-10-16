@@ -27,10 +27,6 @@ updates:
   # Dependabot regenerates the --hash entries in the same PR.
   - package-ecosystem: pip
     directory: /
-    # ansible-core is coupled to the dev lock, pre-commit hook, and supported
-    # Python/tooling matrix; update it only in a coordinated maintainer PR.
-    ignore:
-      - dependency-name: "ansible-core"
     schedule:
       interval: daily
       time: "06:00"
@@ -53,11 +49,19 @@ updates:
       - dependency-type: direct
       - dependency-type: indirect
     groups:
+      ansible-core:
+        patterns:
+          - "ansible-core"
+        update-types:
+          - minor
+          - patch
       # Collapse the hvac stack into one PR for patch + minor bumps. Major
       # bumps stay individual for deliberate review.
       python-deps:
         patterns:
           - "*"
+        exclude-patterns:
+          - "ansible-core"
         update-types:
           - minor
           - patch

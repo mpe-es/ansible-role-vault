@@ -9,13 +9,17 @@
 #
 # Source file for pip-compile. DO NOT edit requirements-dev.txt directly.
 #
-# Dependabot maintains ordinary dependency updates. ansible-core is deliberately
-# excluded: its source pin, generated lock, independently resolved pre-commit
-# hook, and supported Python/tooling matrix must move together in a reviewed
-# maintainer PR.
+# Dependabot maintains ordinary dependency updates, including ansible-core.
+# A Core update is accepted only when its source pin, generated dev and release
+# locks, independently resolved pre-commit hook, and Python consumers agree;
+# tests/assert-core-pin-coupling.sh makes a partial bot or maintainer change
+# fail closed instead of hiding security updates with a Dependabot ignore.
 #
-# This file is edited only to ADD or REMOVE a dependency, which Dependabot does
-# not do. After editing, regenerate the lock on the platform CI installs it on:
+# This file is normally edited only to ADD or REMOVE a dependency. A deliberate
+# ansible-core update is the exception: update the coupled sites enforced by
+# tests/assert-core-pin-coupling.sh, regenerate both locks on the platform CI
+# installs them on, then run that guard (including its negative controls).
+# Regenerate the dev lock on the CI platform with:
 #
 #   podman run --rm --platform linux/amd64 -v "$PWD:/w:z" -w /w python:3.12-slim \
 #     sh -c 'pip install -q pip-tools && \
@@ -38,10 +42,8 @@
 # had an ANSIBLE_CORE_VERSION env var until #65 removed it, precisely so this value
 # lives in one place.
 #
-# Two things elsewhere stay coupled to it and CANNOT read it:
-#   .pre-commit-config.yaml  ansible-lint additional_dependencies (pre-commit
-#                            resolves those itself) -- keep it equal to this pin
-#   .github/workflows/ci.yml PYTHON_VERSION (see below)
+# The complete coupled-site inventory is enforced by
+# tests/assert-core-pin-coupling.sh; update that guard with any new consumer.
 #
 # Gotcha 3 from the #78 lessons: pinning a toolchain version pins TWO things.
 # ansible-core 2.20+ requires Python >= 3.12, so this pin and ci.yml's PYTHON_VERSION
