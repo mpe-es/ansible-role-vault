@@ -1,0 +1,15 @@
+# Minimal release-only dependency set for ansible-role-vault.
+#
+# The release job receives GALAXY_API_KEY.  It only invokes ansible-galaxy, so
+# it must not install the contributor toolchain from requirements-dev.txt.
+# Keep this source and requirements-release.txt coupled to the ansible-core pin
+# in requirements-dev.in; tests/assert-core-pin-coupling.sh enforces that.
+#
+# Regenerate on the CI platform with pip-tools==7.6.1:
+#
+#   podman run --rm --platform linux/amd64 -v "$PWD:/w:z" -w /w python:3.12-slim \
+#     sh -c 'pip install -q pip-tools==7.6.1 && \
+#            pip-compile --generate-hashes --output-file=requirements-release.txt requirements-release.in'
+#
+# Classification: UNCLASSIFIED
+ansible-core==2.21.5

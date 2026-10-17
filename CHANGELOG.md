@@ -391,6 +391,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Coordinated the Ansible Core 2.21.5 toolchain pin across CI, the contributor
+  lock, the pre-commit hook, and the minimal hash-pinned release environment.
+  The independently resolved pre-commit linter now also uses `ansible-lint`
+  26.9.0. Dependabot isolates `ansible-core` updates from the remaining Python
+  dependency group so a coupled Core update cannot hold unrelated security
+  updates.
+  The release job now installs only the dependency closure required for
+  `ansible-galaxy`, rather than the full contributor toolchain while holding the
+  Galaxy publication credential. `tests/assert-core-pin-coupling.sh` rejects
+  incomplete version updates while preserving Dependabot security visibility.
+
 - **CI tested a Python / ansible-core pair nothing ran.** CI verified Python 3.11 /
   ansible-core 2.19.13; `mpe-ee-rhel9` — the EE this role executes in under AAP —
   runs 3.12.13 / 2.21.4. Zero of the 23 CI jobs exercised the combination in the

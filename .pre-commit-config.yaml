@@ -43,13 +43,13 @@ repos:
   # it, because the lint job runs ansible-lint from the lock while this hook
   # resolves its own from rev. Green CI, broken commit gate.
   - repo: https://github.com/ansible/ansible-lint
-    rev: v26.8.0
+    rev: v26.9.0
     hooks:
       - id: ansible-lint
         args: []
         language_version: python3.12
         additional_dependencies:
-          - ansible-core==2.21.4
+          - ansible-core==2.21.5
 
   # General file hygiene
   - repo: https://github.com/pre-commit/pre-commit-hooks

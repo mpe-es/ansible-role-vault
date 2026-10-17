@@ -49,11 +49,19 @@ updates:
       - dependency-type: direct
       - dependency-type: indirect
     groups:
+      ansible-core:
+        patterns:
+          - "ansible-core"
+        update-types:
+          - minor
+          - patch
       # Collapse the hvac stack into one PR for patch + minor bumps. Major
       # bumps stay individual for deliberate review.
       python-deps:
         patterns:
           - "*"
+        exclude-patterns:
+          - "ansible-core"
         update-types:
           - minor
           - patch
