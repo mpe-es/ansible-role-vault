@@ -1,21 +1,106 @@
-# Ansible Role: ansible-role-vault
-# gitignore tailored for community-published Ansible roles
+###############################################################################
+# Filename: .gitignore
+# Summary: OS, editor, Ansible, Python and secret-material exclusions for
+#          ansible-role-vault.
+# Classification: UNCLASSIFIED
+###############################################################################
 
-# macOS artifacts
+# Recommended macOS gitignore Includes:
+# Source: https://github.com/github/gitignore/blob/main/Global/macOS.gitignore
+
+# General
 .DS_Store
 .AppleDouble
 .LSOverride
+
+# Icon must end with two \r
+Icon
+
+# Thumbnails
 ._*
 
+# Files that might appear in the root of a volume
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+
+# Directories potentially created on remote AFP share
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+
+# Recommended Linux gitignore Includes:
+# Source: https://github.com/github/gitignore/blob/main/Global/Linux.gitignore
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+.nfs*
+
+# Recommended VS Code gitignore Includes:
+# Source: https://github.com/github/gitignore/blob/main/Global/VisualStudioCode.gitignore
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.history/
+*.vsix
+
+# Ansible
+*.retry
+**/.ansible
+
+# Recommended Python gitignore Includes:
+# Source: https://github.com/github/gitignore/blob/main/Python.gitignore
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.coverage
+
+# Secrets and key material
+# Vault token files, as a backstop
+**/.vault-token
+
+# TLS private keys, requests and bundles; PEM is ignored because it can hold
+# a private key
+**/*.key
+**/*.pem
+**/*.csr
+**/*.p12
+**/*.pfx
+
+# Local environment files
+.env
+.env.*
+!.env.example
+
+# Vault Raft snapshots (vault operator raft snapshot save)
+*.snap
+
+# AI assistant local settings
+**/.claude
+**/.codex
+**/.gemini
+**/.opencode
+
+# ansible-role-vault additions
+# Ansible Role: ansible-role-vault
+# gitignore tailored for community-published Ansible roles
+
 # Claude Code local settings and memory
-.claude/
 CLAUDE.md
 
 # Session memory (remember plugin)
 .remember/
-
-# Ansible-lint local cache
-.ansible/
 
 # Reference STIG files (local analysis only)
 stigs/
@@ -30,19 +115,11 @@ docs/*
 **/*.png
 **/*.jpg
 
-# Python virtual environments
-.venv/
-venv/
-__pycache__/
-*.pyc
-
 # Molecule ephemeral data
 molecule/*/ephemeral/
 
 # Sensitive files
 sensitive.txt
-*.key
-*.pem
 
 # IDE
 .vscode/
