@@ -4,8 +4,8 @@
 # Role: ansible-role-vault
 # Summary: Ansible collection dependencies for this role. Install with:
 #   ansible-galaxy collection install -r requirements.yml
-# For EE builds, ansible-builder reads this automatically.
-# Last Updated: 28 Sep 2026
+# For EE builds, point the EE definition's dependencies.galaxy at this file.
+# Last Updated: 16 Nov 2026
 # Classification: UNCLASSIFIED
 ###############################################################################
 collections:
@@ -17,22 +17,22 @@ collections:
   # controller-side, so the managed host needs nothing.
   # Required for: tasks/preflight/dns.yml
   - name: ansible.utils
-    version: ">=6.0.0"
+    version: "6.1.1"
 
   # Firewalld module (ansible.posix.firewalld)
   # Required for: tasks/firewall.yml
   # Min ansible-core: 2.16.0
   - name: ansible.posix
-    version: ">=1.6.0"
+    version: "2.2.2"
 
   # SELinux file context management (community.general.sefcontext)
   # Required for: tasks/system.yml
   - name: community.general
-    version: ">=9.0.0"
+    version: "14.0.1"
 
   # HashiCorp Vault modules and lookup plugins
   # Required for: post-install Vault initialization and configuration
   # (vault_init, vault_write, vault_read, hashi_vault lookup)
   # Min ansible-core: 2.21.0 (the pair CI tests and mpe-ee-rhel9 runs, #91)
   - name: community.hashi_vault
-    version: ">=7.0.0"
+    version: "7.1.0"

@@ -11,9 +11,9 @@
 #
 # Dependabot maintains ordinary dependency updates, including ansible-core.
 # A Core update is accepted only when its source pin, generated dev and release
-# locks, independently resolved pre-commit hook, and Python consumers agree;
-# tests/assert-core-pin-coupling.sh makes a partial bot or maintainer change
-# fail closed instead of hiding security updates with a Dependabot ignore.
+# locks, and Python consumers agree; tests/assert-core-pin-coupling.sh makes a
+# partial bot or maintainer change fail closed instead of hiding security
+# updates with a Dependabot ignore.
 #
 # This file is normally edited only to ADD or REMOVE a dependency. A deliberate
 # ansible-core update is the exception: update the coupled sites enforced by
@@ -61,10 +61,10 @@
 # Before #91 CI tested 3.11 / 2.19.13, which no execution path used.
 ansible-core==2.21.5
 
-# Ansible playbook/role linter. Gate: `ansible-lint` in the ci.yml lint job.
+# Ansible playbook/role linter. Runs as the ansible-lint pre-commit hook.
 ansible-lint
 
-# YAML linter, driven by .yamllint. Gate: `yamllint .` in the ci.yml lint job.
+# YAML linter, driven by .yamllint. Runs as the yamllint pre-commit hook.
 yamllint
 
 ###############################################################################
@@ -85,6 +85,10 @@ molecule-plugins[podman]
 # Runs .pre-commit-config.yaml. Also the delivery mechanism for #61's opt-in
 # pre-push stage, which cannot work until this file exists.
 pre-commit
+
+# Commands behind the local hygiene hooks; their definitions in
+# .pre-commit-config.yaml copy this version's .pre-commit-hooks.yaml.
+pre-commit-hooks==5.0.0
 
 ###############################################################################
 # NOT here, deliberately

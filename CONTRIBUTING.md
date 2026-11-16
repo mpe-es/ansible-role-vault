@@ -60,16 +60,20 @@ interchangeable:
 | File | Contains | Who needs it |
 |------|----------|--------------|
 | `requirements.txt` | The **runtime** dependency chain only — `hvac` (for `community.hashi_vault` on the target) and `netaddr` (for `ansible.utils.ipaddr` on the controller) | The role at run time |
-| `requirements-dev.txt` | The **development toolchain** — `ansible-core`, `ansible-lint`, `yamllint`, `molecule`, `molecule-plugins[podman]`, `pre-commit` | You, to run the gates below |
+| `requirements-dev.txt` | The **development toolchain** — `ansible-core`, `ansible-lint`, `yamllint`, `molecule`, `molecule-plugins[podman]`, `pre-commit`, `pre-commit-hooks` | You, to run the gates below |
 | `requirements-release.txt` | The **minimal release toolchain** — `ansible-core` and only its closure | The Galaxy publication job while it holds `GALAXY_API_KEY` |
 
 Both are compiled with `pip-compile --generate-hashes` from their `.in` source
 files, so installs are reproducible and hash-verified. **CI installs from the
 same two files**, which is what keeps your local toolchain and CI's identical —
 `ansible-core` in particular is pinned to one version across the development
-and release source/lock pairs, `.github/workflows/ci.yml`,
-`.github/workflows/release.yml`, and `.pre-commit-config.yaml`.
-`tests/assert-core-pin-coupling.sh` makes a partial update fail closed.
+and release source/lock pairs, `.github/workflows/ci.yml`, and
+`.github/workflows/release.yml`. The pre-commit hooks run from
+`requirements-dev.txt` and carry no versions of their own.
+`tests/assert-core-pin-coupling.sh` makes a partial update fail closed and
+enforces that every hook stays local. Dependabot keeps the pip locks and the
+GitHub Actions current; Renovate keeps the exact Galaxy collection pins in
+`requirements.yml` current.
 
 > **NOTE**: `shellcheck` is not a Python distribution, and it is not in
 > `bindep.txt` either — that file feeds the Execution Environment build, and
@@ -90,10 +94,13 @@ Install tools directly using the `python` (3.12) command:
 python -m pip install --upgrade pip
 
 # Install the development toolchain (linters, molecule, pre-commit)
-python -m pip install -r requirements-dev.txt
+python -m pip install --require-hashes -r requirements-dev.txt
 
 # Install the runtime dependency chain
-python -m pip install -r requirements.txt
+python -m pip install --require-hashes -r requirements.txt
+
+# Install the Ansible collections the role and its lint run need
+ansible-galaxy collection install -r requirements.yml
 ```
 
 ##### Option B: Virtual Environment (Isolated)
@@ -114,8 +121,11 @@ source ~/.venv/ansible-dev/bin/activate
 
 # Install dependencies inside the venv -- both manifests
 pip install --upgrade pip
-pip install -r requirements-dev.txt
-pip install -r requirements.txt
+pip install --require-hashes -r requirements-dev.txt
+pip install --require-hashes -r requirements.txt
+
+# Install the Ansible collections the role and its lint run need
+ansible-galaxy collection install -r requirements.yml
 
 # Deactivate when done
 deactivate
@@ -141,8 +151,8 @@ molecule --version
 This repository uses pre-commit hooks to ensure code quality before commits:
 
 ```bash
-# Install hooks (one-time setup)
-pre-commit install
+# Install hooks with the requirements-dev.txt toolchain (see below)
+python -m pre_commit install
 
 # Run manually on all files
 pre-commit run --all-files
@@ -156,9 +166,83 @@ The following hooks are configured:
 - **trailing-whitespace** - Remove trailing whitespace
 - **end-of-file-fixer** - Ensure files end with newline
 - **check-yaml** - Validate YAML syntax
-- **check-added-large-files** - Prevent large files (>500KB)
-- **check-merge-conflict** - Detect merge conflict markers
+- **check-added-large-files** - Reject any file over 500 KB, new or
+  existing (`--enforce-all`)
+- **check-merge-conflict** - Reject conflict markers in any file, even
+  outside a merge (`--assume-in-merge`; it matches the standard Git marker
+  lines, so a Markdown heading underlined with exactly `=======` is also
+  rejected)
 - **detect-private-key** - Prevent accidental key commits
+
+The CI lint job runs these hooks with `pre-commit run --all-files`, plus
+actionlint on the workflows, shellcheck, the behavioral suites
+(`tests/*-test.sh`), and the static guards (`tests/assert-*.sh`). At commit
+time ansible-lint scans the whole project, but the other hooks check only the
+files the commit stages, so run `pre-commit run --all-files` before pushing.
+
+#### Every hook uses your installed toolchain
+
+Every hook is a `repo: local` hook. pre-commit does not build an environment or
+download anything for them (ansible-lint runs `offline` and uses the collections
+installed from `requirements.yml`); each runs the matching command (`yamllint`,
+`ansible-lint`, `trailing-whitespace-fixer`, and the other `pre-commit-hooks`
+commands) that is first on your `PATH`. Those are the versions you installed
+from the hash-pinned `requirements-dev.txt`, which are the same versions CI
+runs, so a rule that fails in CI also fails your commit for the files it stages,
+and there is no second copy of any version in `.pre-commit-config.yaml` to keep
+in sync. For Python tooling, Dependabot updates `requirements-dev.in` and
+`requirements-dev.txt` only. The ansible-lint hook runs on every commit,
+including commits that only change the lock.
+
+This means:
+
+- **Install the dependencies before running pre-commit.** Use Option A or Option
+  B above, including the `ansible-galaxy collection install` step. With a venv,
+  activate it before `git commit`. Commits made from an IDE or GUI Git client
+  use that tool's environment, which may not include the venv.
+- **Run `pre-commit install` with the locked pre-commit.** The config requires
+  pre-commit 4.5.0 or later. `pre-commit install` records the Python
+  interpreter that ran it, and every later `git commit` uses that interpreter's
+  pre-commit, even with the venv active. Run `python -m pre_commit install`
+  (with the venv active, for Option B) so the locked pre-commit is recorded.
+  If you installed the hooks earlier with a distro or pipx pre-commit, run it
+  again.
+- **Reinstall after the lock changes.** When you pull a change to
+  `requirements-dev.txt` or `requirements.txt`, such as a merged Dependabot
+  update, rerun:
+
+  ```bash
+  python -m pip install --require-hashes -r requirements-dev.txt -r requirements.txt
+  ```
+
+  When `requirements.yml` changes, also rerun
+  `ansible-galaxy collection install -r requirements.yml`. Until you do, the
+  hooks run the previous versions and can disagree with CI.
+- **Check the versions match.** `ansible-lint --version` reports the
+  ansible-lint and ansible-core versions in use, `yamllint --version` the
+  yamllint version, and `python -m pip show pre-commit-hooks` the hygiene
+  hooks' version. They should equal the pins in `requirements-dev.txt`.
+- **When `pre-commit-hooks` is bumped,** the local hook definitions in
+  `.pre-commit-config.yaml` are a copy of upstream's `.pre-commit-hooks.yaml`
+  for the pinned version. Compare them with the new version's file in the same
+  pull request and carry over any changed `entry`, `types`, or `stages`.
+
+Troubleshooting:
+
+- ``Executable `<command>` not found``: the dependencies are not installed or
+  the venv is not active.
+- ``jinja[invalid]: ... No filter named 'ansible.utils.ipaddr' found``, or
+  ansible-lint warnings about `resolved_fqcn`: the `requirements.yml`
+  collections are not installed. Run the `ansible-galaxy collection install`
+  step above.
+- `pre-commit version 4.5.0 is required but version X is installed`: the git
+  hook was installed by an older pre-commit. Rerun `pre-commit install` as
+  described above.
+- A traceback, or results that differ from CI: another copy of the tool
+  earlier on your `PATH` (for example a pipx or distro copy) is being used.
+  Check that `command -v ansible-lint` (or the failing command) points into
+  your venv or Option A install, and that the version check above matches
+  `requirements-dev.txt`.
 
 ### Shell Script Testing
 
@@ -218,8 +302,7 @@ molecule destroy    # Clean up
    - Include STIG/NIST comment blocks for all compliance tasks
 4. **Test your changes**:
    ```bash
-   yamllint .
-   ansible-lint
+   pre-commit run --all-files
    molecule test
    ```
 5. **Commit** with a descriptive message:

@@ -1,0 +1,30 @@
+// ###########################################################################
+// Filename: .github/renovate.json5
+// Role: ansible-role-vault
+// Summary: Renovate configuration, Ansible Galaxy collection pins ONLY
+// Last Updated: 16 Nov 2026
+// Classification: UNCLASSIFIED
+// ###########################################################################
+// Scope: Galaxy collections only; Dependabot owns pip and github-actions.
+{
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+  extends: ["config:recommended"],
+
+  enabledManagers: ["ansible-galaxy"],
+
+  semanticCommits: "enabled",
+
+  packageRules: [
+    {
+      matchManagers: ["ansible-galaxy"],
+      minimumReleaseAge: "7 days",
+      commitMessagePrefix: "deps:",
+      labels: ["dependencies", "ansible"],
+    },
+    {
+      matchManagers: ["ansible-galaxy"],
+      matchUpdateTypes: ["major"],
+      minimumReleaseAge: "10 days",
+    },
+  ],
+}
