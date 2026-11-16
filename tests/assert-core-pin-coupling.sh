@@ -3,7 +3,8 @@
 # Filename: tests/assert-core-pin-coupling.sh
 # Role: ansible-role-vault
 # Summary: Fail closed when a coupled Ansible Core update leaves any consumer
-#          or the secret-bearing release job on a different toolchain.
+#          or the secret-bearing release job on a different toolchain, or when
+#          a pre-commit hook stops running from the hash-pinned dev lock.
 # Usage: bash tests/assert-core-pin-coupling.sh [--check-root <repository>]
 # Classification: UNCLASSIFIED
 ###############################################################################
@@ -66,7 +67,6 @@ core = exact_pin(dev_in, "requirements-dev.in")
 release_source = exact_pin(release_in, "requirements-release.in")
 dev_core = lock_pin(dev_lock, "requirements-dev.txt", "ansible-core")
 release_core = lock_pin(release_lock, "requirements-release.txt", "ansible-core")
-lint_lock = lock_pin(dev_lock, "requirements-dev.txt", "ansible-lint")
 
 values = {
     "requirements-release.in": release_source,
@@ -83,22 +83,64 @@ except yaml.YAMLError as exc:
     fail.append(f"cannot parse .pre-commit-config.yaml: {exc}")
     pre_commit = {}
 
-hooks = []
-for repo in pre_commit.get("repos", []) or []:
-    if str(repo.get("repo", "")).rstrip("/").endswith("ansible-lint"):
-        hooks.extend(repo.get("hooks") or [])
-if len(hooks) != 1:
-    fail.append(f"expected exactly one ansible-lint pre-commit hook, found {len(hooks)}")
-else:
-    hook = hooks[0]
-    deps = hook.get("additional_dependencies") or []
-    expected = f"ansible-core=={core}" if core else None
-    if expected not in deps:
-        fail.append(f"pre-commit additional_dependencies must contain {expected!r}; found {deps!r}")
-    repo = next(r for r in pre_commit["repos"] if str(r.get("repo", "")).rstrip("/").endswith("ansible-lint"))
-    expected_rev = f"v{lint_lock}" if lint_lock else None
-    if repo.get("rev") != expected_rev:
-        fail.append(f"pre-commit ansible-lint rev must be {expected_rev!r}; found {repo.get('rev')!r}")
+floor = pre_commit.get("minimum_pre_commit_version")
+if not isinstance(floor, str) or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", floor):
+    fail.append(f"minimum_pre_commit_version must be an X.Y.Z string; found {floor!r}")
+elif tuple(int(part) for part in floor.split(".")) < (4, 5, 0):
+    fail.append(f"minimum_pre_commit_version must be >= 4.5.0; found {floor!r}")
+
+for key in ("default_stages", "files", "exclude"):
+    if key in pre_commit:
+        fail.append(f"top-level {key} must not narrow which hooks or files run; found {pre_commit.get(key)!r}")
+
+repos = pre_commit.get("repos", []) or []
+for repo in repos:
+    if repo.get("repo") != "local":
+        fail.append(f"only repo: local is allowed; found {repo.get('repo')!r}")
+    elif "rev" in repo:
+        fail.append(f"local hook repo must not carry rev; found {repo.get('rev')!r}")
+
+for repo in repos:
+    for hook in repo.get("hooks") or []:
+        hook_id = hook.get("id")
+        if hook.get("language") != "unsupported":
+            fail.append(f"{hook_id} language must be unsupported; found {hook.get('language')!r}")
+        if "additional_dependencies" in hook:
+            fail.append(f"{hook_id} hook must not carry additional_dependencies")
+
+for hook_id in ("ansible-lint", "yamllint"):
+    found = [(repo, hook) for repo in repos for hook in (repo.get("hooks") or [])
+             if hook.get("id") == hook_id]
+    if len(found) != 1:
+        fail.append(f"expected exactly one {hook_id} hook, found {len(found)}")
+        continue
+    repo, hook = found[0]
+    if repo.get("repo") != "local":
+        fail.append(f"{hook_id} hook must be in a repo: local block")
+    if hook.get("entry") != hook_id:
+        fail.append(f"{hook_id} entry must be {hook_id!r}; found {hook.get('entry')!r}")
+    for key in ("stages", "files", "exclude", "types_or", "exclude_types"):
+        if key in hook:
+            fail.append(f"{hook_id} hook must not narrow when it runs ({key}: {hook.get(key)!r})")
+    expected_shape = {
+        "yamllint": {"args": ["-c", ".yamllint"], "types": ["yaml"]},
+        "ansible-lint": {"args": None, "types": None},
+    }[hook_id]
+    for key, expected in expected_shape.items():
+        if hook.get(key) != expected:
+            fail.append(f"{hook_id} {key} must be {expected!r}; found {hook.get(key)!r}")
+    if hook_id == "ansible-lint":
+        if hook.get("pass_filenames") is not False:
+            fail.append("ansible-lint pass_filenames must be false")
+        if hook.get("always_run") is not True:
+            fail.append("ansible-lint always_run must be true")
+
+hooks_source = re.findall(r"(?m)^pre-commit-hooks==([0-9]+(?:\.[0-9]+){2})\s*$", dev_in)
+hooks_lock = lock_pin(dev_lock, "requirements-dev.txt", "pre-commit-hooks")
+if len(hooks_source) != 1:
+    fail.append(f"pre-commit-hooks must be pinned in requirements-dev.in exactly once; found {hooks_source}")
+elif hooks_lock and hooks_source[0] != hooks_lock:
+    fail.append(f"pre-commit-hooks drift: requirements-dev.in is {hooks_source[0]}, requirements-dev.txt is {hooks_lock}")
 
 try:
     ci = yaml.safe_load(ci_text) or {}
@@ -117,11 +159,6 @@ else:
     release_python = str((setup[0].get("with") or {}).get("python-version", ""))
     if not ci_python or release_python != ci_python:
         fail.append(f"Python drift: CI uses {ci_python!r}; release uses {release_python!r}")
-
-if len(hooks) == 1 and ci_python and hooks[0].get("language_version") != f"python{ci_python}":
-    fail.append(
-        f"Python drift: CI uses {ci_python!r}; ansible-lint pre-commit uses "
-        f"{hooks[0].get('language_version')!r}")
 
 release_runs = "\n".join(str(step.get("run", "")) for step in release_steps)
 if not re.search(r"pip\s+install\s+--require-hashes\s+-r\s+requirements-release\.txt\b", release_runs):
@@ -155,7 +192,8 @@ if fail:
     for item in fail:
         print(f"  - {item}")
     raise SystemExit(1)
-print(f"ok - Ansible Core {core} is coupled across development, release, CI, and pre-commit")
+print(f"ok - Ansible Core {core} is coupled across development, release, and CI; "
+      "every pre-commit hook runs from the dev lock")
 PYEOF
 }
 
@@ -168,7 +206,8 @@ fi
 # Negative controls: every parsed coupling surface must prove that it can make
 # the same guard fail. A fresh fixture per case preserves one-to-one evidence.
 current_core="$(awk -F== '/^ansible-core==/ {print $2}' "$ROOT/requirements-dev.in")"
-current_lint="$(awk -F'[ =\\\\]+' '/^ansible-lint==/ {print $2}' "$ROOT/requirements-dev.txt")"
+current_hooks="$(awk -F== '/^pre-commit-hooks==/ {print $2}' "$ROOT/requirements-dev.in")"
+current_floor="$(awk '/^minimum_pre_commit_version:/ {print $2}' "$ROOT/.pre-commit-config.yaml")"
 fixture=""
 
 cleanup_fixture() {
@@ -234,18 +273,90 @@ negative_control "development lock pin" "requirements-dev.txt" \
     "ansible-core==${current_core}" "ansible-core==0.0.0" "ansible-core drift:"
 negative_control "release lock pin" "requirements-release.txt" \
     "ansible-core==${current_core}" "ansible-core==0.0.0" "ansible-core drift:"
-negative_control "pre-commit Core pin" ".pre-commit-config.yaml" \
-    "ansible-core==${current_core}" "ansible-core==0.0.0" "pre-commit additional_dependencies"
-negative_control "ansible-lint lock pin" "requirements-dev.txt" \
-    "ansible-lint==${current_lint}" "ansible-lint==0.0.0" "pre-commit ansible-lint rev"
-negative_control "pre-commit ansible-lint revision" ".pre-commit-config.yaml" \
-    "rev: v${current_lint}" "rev: v0.0.0" "pre-commit ansible-lint rev"
 negative_control "CI Python version" ".github/workflows/ci.yml" \
     'PYTHON_VERSION: "3.12"' 'PYTHON_VERSION: "3.13"' "Python drift:"
 negative_control "release Python version" ".github/workflows/release.yml" \
     "python-version: '3.12'" "python-version: '3.13'" "Python drift:"
-negative_control "pre-commit Python version" ".pre-commit-config.yaml" \
-    "language_version: python3.12" "language_version: python3.13" "Python drift:"
+negative_control "ansible-lint hook removed" ".pre-commit-config.yaml" \
+    $'      - id: ansible-lint\n        name: ansible-lint\n' \
+    $'      - id: ansible-lint-disabled\n        name: ansible-lint\n' \
+    "exactly one ansible-lint hook"
+negative_control "yamllint hook removed" ".pre-commit-config.yaml" \
+    $'      - id: yamllint\n        name: yamllint\n' \
+    $'      - id: yamllint-disabled\n        name: yamllint\n' \
+    "exactly one yamllint hook"
+negative_control "hooks moved to an upstream repo" ".pre-commit-config.yaml" \
+    "  - repo: local" "  - repo: https://github.com/ansible/ansible-lint" \
+    "must be in a repo: local block"
+negative_control "ansible-lint hook language" ".pre-commit-config.yaml" \
+    $'        entry: ansible-lint\n        language: unsupported' \
+    $'        entry: ansible-lint\n        language: python' \
+    "language must be unsupported"
+negative_control "local repo revision" ".pre-commit-config.yaml" \
+    "  - repo: local" $'  - repo: local\n    rev: v26.10.1' \
+    "local hook repo must not carry rev"
+negative_control "ansible-lint additional_dependencies" ".pre-commit-config.yaml" \
+    "        pass_filenames: false" \
+    $'        additional_dependencies: [ansible-core==2.21.5]\n        pass_filenames: false' \
+    "must not carry additional_dependencies"
+negative_control "ansible-lint pass_filenames" ".pre-commit-config.yaml" \
+    "        pass_filenames: false" "        pass_filenames: true" \
+    "pass_filenames must be false"
+negative_control "ansible-lint always_run" ".pre-commit-config.yaml" \
+    $'        always_run: true\n' "" \
+    "always_run must be true"
+negative_control "pre-commit floor removed" ".pre-commit-config.yaml" \
+    "minimum_pre_commit_version: ${current_floor}" "" \
+    "minimum_pre_commit_version must be an X.Y.Z string"
+negative_control "pre-commit floor lowered" ".pre-commit-config.yaml" \
+    "minimum_pre_commit_version: ${current_floor}" "minimum_pre_commit_version: '4.4.0'" \
+    "minimum_pre_commit_version must be >= 4.5.0"
+negative_control "remote hook repo appended" ".pre-commit-config.yaml" \
+    $'        entry: detect-private-key\n        language: unsupported\n        types: [text]\n' \
+    $'        entry: detect-private-key\n        language: unsupported\n        types: [text]\n\n  - repo: https://github.com/pre-commit/pre-commit-hooks\n    rev: v5.0.0\n    hooks:\n      - id: check-json\n' \
+    "only repo: local is allowed"
+negative_control "pre-commit-hooks source pin" "requirements-dev.in" \
+    "pre-commit-hooks==${current_hooks}" "pre-commit-hooks" \
+    "pre-commit-hooks must be pinned in requirements-dev.in"
+negative_control "pre-commit-hooks lock drift" "requirements-dev.txt" \
+    "pre-commit-hooks==${current_hooks} \\" "pre-commit-hooks==0.0.0 \\" \
+    "pre-commit-hooks drift"
+negative_control "hygiene hook downloads its own environment" ".pre-commit-config.yaml" \
+    $'        entry: detect-private-key\n        language: unsupported' \
+    $'        entry: detect-private-key\n        language: python\n        additional_dependencies: [pre-commit-hooks==4.0.0]' \
+    "detect-private-key language must be unsupported"
+negative_control "yamllint hook language" ".pre-commit-config.yaml" \
+    $'        args: [-c, .yamllint]\n        language: unsupported' \
+    $'        args: [-c, .yamllint]\n        language: python' \
+    "yamllint language must be unsupported"
+negative_control "ansible-lint entry replaced" ".pre-commit-config.yaml" \
+    "        entry: ansible-lint" "        entry: \"true\"" \
+    "ansible-lint entry must be 'ansible-lint'"
+negative_control "ansible-lint limited to a manual stage" ".pre-commit-config.yaml" \
+    "        always_run: true" $'        always_run: true\n        stages: [manual]' \
+    "ansible-lint hook must not narrow when it runs"
+negative_control "top-level default_stages" ".pre-commit-config.yaml" \
+    "minimum_pre_commit_version: ${current_floor}" "minimum_pre_commit_version: ${current_floor}"$'\ndefault_stages: [manual]' \
+    "top-level default_stages must not narrow"
+negative_control "top-level exclude" ".pre-commit-config.yaml" \
+    "minimum_pre_commit_version: ${current_floor}" "minimum_pre_commit_version: ${current_floor}"$'\nexclude: "."' \
+    "top-level exclude must not narrow"
+negative_control "yamllint entry replaced" ".pre-commit-config.yaml" \
+    "        entry: yamllint" "        entry: \"true\"" \
+    "yamllint entry must be 'yamllint'"
+negative_control "yamllint types narrowed" ".pre-commit-config.yaml" \
+    $'        language: unsupported\n        types: [yaml]\n\n      - id: ansible-lint' \
+    $'        language: unsupported\n        types: [json]\n\n      - id: ansible-lint' \
+    "yamllint types must be ['yaml']"
+negative_control "yamllint rules disabled by args" ".pre-commit-config.yaml" \
+    "        args: [-c, .yamllint]" "        args: [-d, '{rules: {}}']" \
+    "yamllint args must be ['-c', '.yamllint']"
+negative_control "ansible-lint args exclude everything" ".pre-commit-config.yaml" \
+    $'        entry: ansible-lint\n' $'        entry: ansible-lint\n        args: [--exclude, .]\n' \
+    "ansible-lint args must be None"
+negative_control "yamllint excluding every file" ".pre-commit-config.yaml" \
+    $'        args: [-c, .yamllint]\n' $'        args: [-c, .yamllint]\n        exclude: "."\n' \
+    "yamllint hook must not narrow when it runs"
 negative_control "Dependabot Core group" ".github/dependabot.yml" \
     $'ansible-core:\n        patterns:\n          - "ansible-core"' \
     $'ansible-core-disabled:\n        patterns:\n          - "ansible-core"' \

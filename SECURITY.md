@@ -100,10 +100,14 @@ reflect the supported version policy.
 This project follows these supply chain and code security practices:
 
 - **Dependency monitoring:** Dependabot maintains the Python toolchain (pip)
-  and the GitHub Actions used in CI.
+  and the GitHub Actions used in CI; Renovate maintains the Ansible Galaxy
+  collections, which Dependabot cannot track. Both hold a new release for 7
+  days before proposing it (10 days for pip and collection majors).
 - **Pinned dependencies:** the Python toolchain is hash-pinned
-  (`pip-compile --generate-hashes`, installed with `--require-hashes`), and all
-  GitHub Actions are pinned to full commit SHAs rather than tags.
+  (`pip-compile --generate-hashes`, installed with `--require-hashes`), every
+  pre-commit hook runs from that lock, Galaxy collections are pinned to exact
+  versions (Galaxy offers no hash pinning), and all GitHub Actions are pinned
+  to full commit SHAs rather than tags.
 - **Vulnerability scanning:** Trivy scans run in CI, with results published as
   SARIF to GitHub code scanning.
 - **Static analysis:** CodeQL analyzes the GitHub Actions workflows for script

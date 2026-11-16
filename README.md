@@ -265,14 +265,17 @@ mutated.
 
 ### Collections
 
-Install via `ansible-galaxy collection install -r requirements.yml`:
+Install via `ansible-galaxy collection install -r requirements.yml`.
+`requirements.yml` pins the exact versions CI tests; Renovate keeps those pins
+current (7-day release age, 10 days for majors), so install these versions
+rather than older ones:
 
-| Collection | Min Version | Purpose |
-|------------|-------------|---------|
-| `ansible.posix` | 1.6.0 | `firewalld` module for port management |
-| `ansible.utils` | 6.0.0 | `ipaddr` filters — address classification in the DNS and SAN preflight gates |
-| `community.general` | 9.0.0 | `sefcontext` module — SELinux file contexts (`tasks/system.yml`), on by default via `vault_manage_selinux` |
-| `community.hashi_vault` | 7.0.0 | `vault_pki_generate_certificate` — used **only** when `vault_tls_source: vault_pki` |
+| Collection | Pinned Version | Purpose |
+|------------|----------------|---------|
+| `ansible.posix` | 2.2.2 | `firewalld` module for port management |
+| `ansible.utils` | 6.1.1 | `ipaddr` filters — address classification in the DNS and SAN preflight gates |
+| `community.general` | 14.0.1 | `sefcontext` module — SELinux file contexts (`tasks/system.yml`), on by default via `vault_manage_selinux` |
+| `community.hashi_vault` | 7.1.0 | `vault_pki_generate_certificate` — used **only** when `vault_tls_source: vault_pki` |
 
 ### Python Libraries
 
@@ -307,17 +310,20 @@ given so you can.
 
 #### The MPE execution environment
 
-**`mpe-ee-rhel9` satisfies every collection requirement in this role.** Measured
-on a built AAP 2.6 image:
+**`mpe-ee-rhel9`, as measured on a built AAP 2.6 image, predates the role's
+exact collection pins:** it carries older `ansible.posix`, `ansible.utils`, and
+`community.general` releases than `requirements.yml` pins. Rebuild the EE from
+`requirements.yml` (point the EE definition's `dependencies.galaxy` at it) to
+run the tested versions.
 
-| Requirement | Role declares | MPE EE provides |
+| Requirement | Role requires | MPE EE provides |
 |---|---|---|
 | `ansible-core` | >= 2.21.0 | **2.21.5** |
 | Python (controller) | >= 3.12 | **3.12.13** |
-| `ansible.posix` | >= 1.6.0 | 2.1.0 |
-| `ansible.utils` | >= 6.0.0 | 6.0.3 |
-| `community.general` | >= 9.0.0 | **13.2.0** |
-| `community.hashi_vault` | >= 7.0.0 | **7.1.0** |
+| `ansible.posix` | 2.2.2 | 2.1.0 |
+| `ansible.utils` | 6.1.1 | 6.0.3 |
+| `community.general` | 14.0.1 | 13.2.0 |
+| `community.hashi_vault` | 7.1.0 | **7.1.0** |
 | `openssl` (SAN gate) | any with `-checkhost`/`-checkip` | 3.5.5 |
 | `netaddr` (for `ansible.utils.ipaddr`) | >= 0.10.1 | 1.3.0 |
 
@@ -503,12 +509,12 @@ whole section is about.
 Non-initializing runs (`vault_initialize: false`, the default) are unaffected —
 no secrets are captured and every item below still applies normally.
 
-#### Already provided — no action required
+#### Collections and tools in the default EE
 
-| Requirement | Declared minimum | In the default EE | Used by |
+| Requirement | Role requires | In the default EE | Used by |
 |---|---|---|---|
-| `ansible.posix` | 1.6.0 | **2.2.2** | `firewalld` (`tasks/firewall.yml`) |
-| `ansible.utils` | 6.0.0 | **6.1.0** | `ipaddr` filter (DNS + SAN gates) |
+| `ansible.posix` | 2.2.2 (pinned) | **2.2.2**, matches | `firewalld` (`tasks/firewall.yml`) |
+| `ansible.utils` | 6.1.1 (pinned) | 6.1.0, **below the pin**: deliver 6.1.1 with the other collections | `ipaddr` filter (DNS + SAN gates) |
 | `netaddr` (controller Python) | 0.10.1 | **1.3.0** | backs `ansible.utils.ipaddr` |
 | `openssl` CLI (controller) | any with `-checkhost`/`-checkip` | **3.5.5** | certificate SAN gate, managed TLS path |
 
@@ -517,17 +523,19 @@ constructing a custom EE; on a default EE nothing reads it.
 
 #### Must be added to AAP
 
-**Not required when running `mpe-ee-rhel9`** — it carries items 1–3 already. This
-is the checklist for the stock supported EE.
+**`mpe-ee-rhel9` carries item 2; item 1 needs the EE rebuilt at the pinned
+version, and item 3 is a managed-host prerequisite no EE can carry.** This is
+the checklist for the stock supported EE.
 
 | # | Item | Why | Scope |
 |---|---|---|---|
-| 1 | **`community.general` >= 9.0.0** | `community.general.sefcontext` (`tasks/system.yml`) sets the SELinux file contexts for every Vault path. On by default (`vault_manage_selinux: true`). The default EE ships **46 collections and none in the `community` namespace**, so this resolves nowhere. | **Required.** Blocks Phase 4 on a default install. |
-| 2 | **`community.hashi_vault` >= 7.0.0** | `vault_pki_generate_certificate` (`tasks/tls.yml`). | **Conditional** — only when `vault_tls_source: vault_pki`. Not needed for the default `file` / operator-staged paths. |
+| 1 | **`community.general` 14.0.1** (the `requirements.yml` pin) | `community.general.sefcontext` (`tasks/system.yml`) sets the SELinux file contexts for every Vault path. On by default (`vault_manage_selinux: true`). The default EE ships **46 collections and none in the `community` namespace**, so this resolves nowhere. | **Required.** Blocks Phase 4 on a default install. |
+| 2 | **`community.hashi_vault` 7.1.0** (the `requirements.yml` pin) | `vault_pki_generate_certificate` (`tasks/tls.yml`). | **Conditional** — only when `vault_tls_source: vault_pki`. Not needed for the default `file` / operator-staged paths. |
 | 3 | **`hvac` >= 2.0.0 on the managed host** | Required by `community.hashi_vault`, which is **not** delegated and therefore executes on the target, not in the EE. A STIG-hardened EL host has no `pip` and no repo carrying it. | **Conditional**, same trigger as item 2. |
-| 4 | **A `collections/requirements.yml` in the consuming AAP project** | Automation controller discovers collection dependencies for SCM projects **only** at `collections/requirements.yml`. This role ships a top-level `requirements.yml`, which the controller does **not** read — so project sync installs nothing from it and `community.general.sefcontext` is still unresolvable at Phase 4. See below. | **Required** if items 1–2 are delivered by project sync. |
+| 4 | **A `collections/requirements.yml` in the consuming AAP project** | Automation controller discovers collection dependencies for SCM projects **only** at `collections/requirements.yml`. This role ships a top-level `requirements.yml`, which the controller does **not** read — so project sync installs nothing from it and `community.general.sefcontext` is still unresolvable at Phase 4. See below. | **Required** if items 1, 2, or 7 are delivered by project sync. |
 | 5 | **A Galaxy credential at the Organization level** | With item 4 in place, the controller runs `ansible-galaxy collection install` during project sync and needs a `kind=galaxy` credential naming the content source — your private automation hub in a darksite. Without it the install resolves nothing. A credential **without** item 4 changes nothing at all. | **Required** alongside item 4. |
 | 6 | **`policycoreutils-python-utils` on the managed host** | `sefcontext` needs the `seobject` Python bindings on the target. Satellite can supply it; this is a target prerequisite, not an EE one. | **Required** whenever `vault_manage_selinux: true`. |
+| 7 | **`ansible.utils` 6.1.1** (the `requirements.yml` pin) | The default EE ships 6.1.0, below the pin. `ansible.utils.ipaddr` drives the DNS and SAN preflight gates (`tasks/preflight/`). | **Required.** Deliver with items 1–2. |
 
 ##### Where the collection manifest has to live
 

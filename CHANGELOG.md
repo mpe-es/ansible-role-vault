@@ -391,15 +391,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Every pre-commit hook now runs from the hash-pinned dev lock.** yamllint,
+  ansible-lint, and the `pre-commit-hooks` hygiene hooks are `repo: local`,
+  `language: unsupported` hooks, and `pre-commit-hooks==5.0.0` is pinned in
+  `requirements-dev.in`. The hook config no longer carries its own ansible-lint
+  `rev`, ansible-core `additional_dependencies`, or `language_version`, so the
+  three coupled hook versions the old comments warned about no longer exist and
+  Dependabot's bumps to `requirements-dev.txt` cannot be blocked by a stale hook
+  (#141, #145). The yamllint hook ran v1.35.1 against 1.38.0 in the lock. The
+  config requires pre-commit 4.5.0 or later (`minimum_pre_commit_version`).
+  This supersedes the entries below that describe `.pre-commit-config.yaml` as
+  a coupled ansible-core, ansible-lint, or Python pin site (#65, #91): that
+  site no longer exists.
+- **`tests/assert-core-pin-coupling.sh` enforces the new hook shape.** Every
+  hook must be `language: unsupported` with no `additional_dependencies`, and
+  every `repos` entry must be `repo: local` with no `rev`. The ansible-lint and
+  yamllint hooks must each exist exactly once, run their own `entry`, and carry
+  nothing that narrows when or on what they run (`stages`, `files`,
+  `exclude`, `types_or`, `exclude_types`; yamllint keeps exactly
+  `args: [-c, .yamllint]` and `types: [yaml]`, ansible-lint no `args` or
+  `types`); the config may not set top-level `default_stages`, `files`, or
+  `exclude`. ansible-lint also needs `pass_filenames: false` and
+  `always_run: true`. `minimum_pre_commit_version`
+  must be `>= 4.5.0` (compared numerically), and `pre-commit-hooks` must be
+  pinned once in `requirements-dev.in` and agree with the lock. Twenty-four new
+  negative controls prove each check fails for its stated reason; the four
+  controls and the `language_version` Python check tied to the removed hook
+  pins are gone. The development, release, CI, and Dependabot coupling checks
+  are unchanged.
+- **CI lint runs `pre-commit run --all-files`** in place of separate yamllint
+  and ansible-lint steps; shellcheck, the behavioral suites, and the static
+  guards are unchanged, and CI gains actionlint (SHA-pinned v1.83.0), which the
+  sibling roles already run. Every CI install uses `--require-hashes`.
+  `check-added-large-files` runs with `--enforce-all` and
+  `check-merge-conflict` with `--assume-in-merge`, so both act in CI instead of
+  passing every file.
+- **Collections are pinned exactly and kept current by Renovate.**
+  `requirements.yml` pins `ansible.utils` 6.1.1, `ansible.posix` 2.2.2,
+  `community.general` 14.0.1, and `community.hashi_vault` 7.1.0 (the versions
+  the old `>=` ranges already resolved to). Galaxy has no Dependabot ecosystem,
+  so `.github/renovate.json5` enables only Renovate's `ansible-galaxy` manager,
+  with a 7-day minimum release age (10 for majors) matching this repo's
+  Dependabot cooldown.
+  `.ansible-lint` runs `offline: true`, so ansible-lint uses the collections CI
+  installs instead of resolving its own at lint time. Consumers who install
+  from `requirements.yml` now get exactly the tested versions; the README's
+  collection tables, MPE EE comparison, and AAP checklist use the pins, and the
+  EE as last measured predates them.
+- CONTRIBUTING installs both manifests with `--require-hashes` and the
+  collections with `ansible-galaxy`, and its pre-commit section documents the
+  local-hook contract.
+
 - Coordinated the Ansible Core 2.21.5 toolchain pin across CI, the contributor
-  lock, the pre-commit hook, and the minimal hash-pinned release environment.
-  The independently resolved pre-commit linter now also uses `ansible-lint`
-  26.9.0. Dependabot isolates `ansible-core` updates from the remaining Python
-  dependency group so a coupled Core update cannot hold unrelated security
-  updates.
-  The release job now installs only the dependency closure required for
-  `ansible-galaxy`, rather than the full contributor toolchain while holding the
-  Galaxy publication credential. `tests/assert-core-pin-coupling.sh` rejects
+  lock, and the minimal hash-pinned release environment. Dependabot isolates
+  `ansible-core` updates from the remaining Python dependency group so a
+  coupled Core update cannot hold unrelated security updates. The release job
+  now installs only the dependency closure required for `ansible-galaxy`,
+  rather than the full contributor toolchain while holding the Galaxy
+  publication credential. `tests/assert-core-pin-coupling.sh` rejects
   incomplete version updates while preserving Dependabot security visibility.
 
 - **CI tested a Python / ansible-core pair nothing ran.** CI verified Python 3.11 /
@@ -1087,6 +1136,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   any task or template. (#37)
 
 ### Security
+- **Release workflow: no expression is interpolated into a shell script.**
+  `release.yml` interpolated `${{ github.event.inputs.tag || github.ref_name }}`
+  directly into a `run:` script in the job that holds `GALAXY_API_KEY`, so a
+  crafted tag value from anyone able to dispatch the workflow (write access)
+  would execute as shell. Every value now reaches the scripts through `env:`
+  and is quoted, including the Galaxy API key, which is no longer written into
+  the generated script; it still reaches `ansible-galaxy` on argv because
+  `role import` only accepts `--api-key`. The job also validates the tag as
+  `vX.Y.Z` before checkout and checks out `refs/tags/<tag>` for a dispatch,
+  so the input cannot select an arbitrary branch or commit while the secret is
+  in scope. Found by adopting actionlint.
 - **Shamir unseal shares moved off the command-line argument vector.** Both
   unseal paths passed each share as a CLI argument, which `auditd` records in
   `execve` argv on any STIG-baseline RHEL host; `no_log` suppresses Ansible's

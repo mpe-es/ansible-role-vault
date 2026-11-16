@@ -4,7 +4,7 @@
 # Role: ansible-role-vault
 # Summary: Dependabot configuration for automated dependency updates.
 #          Conventions are shared across the MPE-ES Ansible role family.
-# Last Updated: 20 Aug 2026
+# Last Updated: 16 Nov 2026
 # Classification: UNCLASSIFIED
 ###############################################################################
 # Ecosystems monitored:
@@ -12,7 +12,8 @@
 #   2. github-actions - .github/workflows/ (SHA-pinned to full commit hashes)
 #
 # NOT monitored: requirements.yml (Ansible Galaxy collections). Dependabot has
-# no Galaxy ecosystem; those collection versions are bumped by hand.
+# no Galaxy ecosystem; Renovate keeps those exact pins current
+# (.github/renovate.json5), with the same 7/10-day release-age floor.
 ###############################################################################
 version: 2
 

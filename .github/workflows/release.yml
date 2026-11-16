@@ -3,7 +3,7 @@
 # Filename: .github/workflows/release.yml
 # Role: ansible-role-vault
 # Summary: Publish role to Ansible Galaxy on release
-# Last Updated: 28 Sep 2026
+# Last Updated: 16 Nov 2026
 # Classification: UNCLASSIFIED
 ###############################################################################
 name: Release to Galaxy
@@ -32,10 +32,20 @@ jobs:
     name: Publish to Galaxy
     runs-on: ubuntu-latest
     steps:
+      - name: Validate the release tag
+        env:
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          if [[ ! "$TAG" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::release tag must be vX.Y.Z; got: $TAG"
+            exit 1
+          fi
+
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          # refs/tags/ keeps a dispatch input from selecting a branch.
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', github.event.inputs.tag) || github.ref }}
 
       - name: Set up Python
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
@@ -47,10 +57,11 @@ jobs:
 
       - name: Extract version from tag
         id: version
+        env:
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
-          TAG="${{ github.event.inputs.tag || github.ref_name }}"
           VERSION="${TAG#v}"
-          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "Releasing version: ${VERSION}"
 
       - name: Validate role metadata
@@ -61,17 +72,25 @@ jobs:
       - name: Import role to Ansible Galaxy
         run: |
           ansible-galaxy role import \
-            --api-key "${{ secrets.GALAXY_API_KEY }}" \
+            --api-key "$GALAXY_API_KEY" \
             --role-name vault \
-            ${{ github.repository_owner }} \
-            ${{ github.event.repository.name }}
+            "$OWNER" \
+            "$REPO"
         env:
           ANSIBLE_GALAXY_SERVER: https://galaxy.ansible.com
+          GALAXY_API_KEY: ${{ secrets.GALAXY_API_KEY }}
+          OWNER: ${{ github.repository_owner }}
+          REPO: ${{ github.event.repository.name }}
 
       - name: Create release summary
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          OWNER: ${{ github.repository_owner }}
         run: |
-          echo "## Release Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- **Version:** ${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Role:** vault" >> $GITHUB_STEP_SUMMARY
-          echo "- **Galaxy:** https://galaxy.ansible.com/${{ github.repository_owner }}/vault" >> $GITHUB_STEP_SUMMARY
+          {
+            echo "## Release Summary"
+            echo ""
+            echo "- **Version:** ${VERSION}"
+            echo "- **Role:** vault"
+            echo "- **Galaxy:** https://galaxy.ansible.com/${OWNER}/vault"
+          } >> "$GITHUB_STEP_SUMMARY"

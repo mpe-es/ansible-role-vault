@@ -38,8 +38,7 @@
 -->
 
 ```
-yamllint .
-ansible-lint
+pre-commit run --all-files
 ansible-playbook tests/test.yml --syntax-check
 molecule test -s default    # and/or -s init, -s hsm
 ```
@@ -47,8 +46,7 @@ molecule test -s default    # and/or -s init, -s hsm
 ## Checklist
 
 - [ ] Commits follow Conventional Commits (`feat:`, `fix:`, `docs:`, `ci:`, `deps:`, `chore:`)
-- [ ] `yamllint` passes locally
-- [ ] `ansible-lint` passes locally
+- [ ] `pre-commit run --all-files` passes locally (includes yamllint and ansible-lint)
 - [ ] Playbook `--syntax-check` passes
 - [ ] Molecule passes for every scenario affected by this change
 - [ ] Every new or modified YAML file carries the UNCLASSIFIED classification banner
